@@ -1,0 +1,57 @@
+{
+  "id": "rel-failover",
+  "topicId": "reliability",
+  "topicTitle": "Reliability",
+  "topicNumber": 8,
+  "subtopicNumber": "8.6",
+  "title": "Failover",
+  "subtitle": "Automated traffic shifting across Active-Passive and Active-Active nodes, AZs, and regions.",
+  "readingTime": "6 min read",
+  "difficulty": "Advanced",
+  "keyTakeaways": [
+    "Failover efficacy is measured by **RTO** (Recovery Time Objective: downtime duration) and **RPO** (Recovery Point Objective: maximum data lost).",
+    "Split-brain occurs when an isolated primary continues accepting writes after a standby is promoted; prevent it using Fencing Tokens and Quorum Leases.",
+    "A standby cluster that sits at 0% traffic (cold cache, unscaled pools) often crashes immediately under 100% failover load unless capacity is pre-warmed."
+  ],
+  "architectureDiagram": "Split-Brain Prevention via Monotonic Fencing Tokens:\n[Primary 1 (Lease Expired, GC Pause)] --- Write (Token = 33) ---> +-------------------+\n                                                                  | Storage / DB      |\n[Coordinator / Raft] -- Elects (Token = 34) --> [Primary 2]       | (Max Token = 34)  |\n                                                     |            | Rejects Token 33! |\n                                                     +- Write 34->+-------------------+",
+  "sections": [
+    {
+      "heading": "Active-Passive vs Active-Active Topologies",
+      "body": "Failover is the operational mechanism of detecting a failed component and redirecting traffic to a healthy redundant instance. In **Active-Passive** failover, a primary node serves writes while one or more standby replicas receive synchronous or asynchronous replication. In **Active-Active** failover, multiple nodes or regions actively serve traffic simultaneously; if Region US-East-1 fails, global routing (Route 53 / BGP Anycast) drains traffic to US-West-2.",
+      "bullets": [
+        "**RTO (Recovery Time Objective)**: How long it takes to detect failure, promote the standby, and reroute traffic (e.g., DNS TTL + health check interval).",
+        "**RPO (Recovery Point Objective)**: How many seconds of committed writes can be lost during an unplanned failover (`RPO = 0` requires synchronous or quorum replication).",
+        "**DNS Caching Hazard**: Relying purely on DNS failover can take minutes because rogue ISP/JVM resolvers ignore low DNS TTLs; prefer VIP/Anycast or load balancer health draining inside a region."
+      ],
+      "codeSnippet": {
+        "title": "Storage Layer Enforcing Monotonic Fencing Tokens Against Split-Brain",
+        "code": "let highestFencingTokenSeen = 0;\n\nexport async function applyReplicatedWrite(fencingToken: number, mutation: Mutation) {\n  if (fencingToken < highestFencingTokenSeen) {\n    throw new Error(\n      `StaleLeaderFencedError: Token ${fencingToken} < current epoch ${highestFencingTokenSeen}`\n    );\n  }\n  highestFencingTokenSeen = fencingToken;\n  await storageEngine.commit(mutation);\n}"
+      }
+    },
+    {
+      "heading": "Split-Brain & Cold-Standby Failover Cascades",
+      "body": "Two classic failure modes derail automated failovers in production. First is **Split-Brain**: a network partition isolates the old Primary, the cluster elects a new Primary, and both accept conflicting writes. To guarantee safety, promotion requires a consensus quorum (Raft/Paxos) and a monotonically increasing **Fencing Token** (epoch number) checked by the storage layer on every write. Second is the **Cold Failover Cascade**: when a passive region or standby node with an empty Redis/OS page cache suddenly receives 100% of production traffic, every request misses cache and slams the database, immediately crashing the surviving region.",
+      "bullets": [
+        "**Pre-Warm Standbys**: Continuously replay read shadow traffic or replicate cache invalidations/updates to the standby region so caches stay warm.",
+        "**Over-Provision Surviving Zones**: In a 3-AZ deployment, each AZ must be provisioned at $\\le 66\\%$ peak utilization so losing 1 AZ brings the remaining 2 AZs to $\\sim 100\\%$ rather than overloading them.",
+        "**Chaos GameDays**: Regularly test automated failover in production during low-traffic windows; untested failover scripts almost always fail during real incidents."
+      ]
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Active-Passive Multi-Region (Hot Standby)",
+      "pros": "Avoids cross-region multi-master write conflicts; straightforward single-writer consistency.",
+      "cons": "Passive region compute sits partially idle; nonzero RTO (seconds to minutes) and potential RPO > 0 if replication is async.",
+      "bestFor": "Relational financial databases, transactional core ledgers, and compliance-bound workloads."
+    },
+    {
+      "option": "Active-Active Multi-Region",
+      "pros": "Near-zero RTO (instant traffic shift), lower user latency via geo-proximity routing, and active validation of all regions.",
+      "cons": "Requires conflict-free data models (CRDTs, Last-Write-Wins, or home-region user pinning) and complex cross-region replication.",
+      "bestFor": "Global Tier-0 consumer apps (каталог browsing, messaging, ride-hailing, social feeds)."
+    }
+  ],
+  "interviewTip": "When proposing a multi-AZ or multi-region failover in an interview, always state the **headroom math** (e.g., 3 AZs running at $\\le 60\\%$ CPU so any 2 AZs can absorb 100% of traffic) and how you prevent **Split-Brain (Fencing Tokens)**.",
+  "jsonUrl": "/api/subtopics/reliability/rel-failover.json"
+}

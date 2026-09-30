@@ -1,0 +1,57 @@
+{
+  "id": "latency-vs-throughput",
+  "topicId": "core-fundamentals",
+  "topicTitle": "Core Fundamentals",
+  "topicNumber": 1,
+  "subtopicNumber": "1.4",
+  "title": "Latency vs Throughput",
+  "subtitle": "Understanding Little's Law, tail latency amplification (p95/p99), queuing theory, and the tension between batching and responsiveness.",
+  "readingTime": "7 min read",
+  "difficulty": "Foundational",
+  "keyTakeaways": [
+    "Latency is the time to complete a single operation (ms), whereas Throughput is the number of operations completed per unit of time (QPS / MB/s).",
+    "Average latency is a lie: p99 and p99.9 tail latencies dictate real user experience, especially in microservice fan-out trees where slow tails compound.",
+    "By Little's Law (`L = λW`) and queuing theory, as resource utilization approaches 80-90%, queuing delay causes latency to spike exponentially even while throughput plateaus."
+  ],
+  "architectureDiagram": "LATENCY vs UTILIZATION (Queuing Knee)      TAIL LATENCY FAN-OUT AMPLIFICATION\nLatency (ms)                               [ API Gateway ] (p99 = 1 - 0.99^10 = 9.6% slow!)\n  ^                  /                           |\n  |                 /                   +--------+--------+--------+\n  |                /  <- 85% Knee       |        |        |        |\n  |              /                      v        v        v        v\n  |____________/                     [Svc 1]  [Svc 2]  ...     [Svc 10]\n  +--------------------->            (Each service has 1% chance of p99 spike)\n  0%        50%       100% CPU",
+  "sections": [
+    {
+      "heading": "Little's Law, Queuing Theory, and Tail Latency Amplification",
+      "body": "Latency measures how long a single request takes from client dispatch to response receipt. Throughput measures how many requests a system processes per second. Little's Law states `L = λ × W` (Concurrent requests in system = Arrival rate × Mean response time). When arrival rate approaches the system's maximum processing rate, requests sit in queues, causing latency to skyrocket non-linearly. Worse yet, in a microservice architecture where 1 user request fans out to 20 parallel backend services, even if each service has a 99% chance of responding fast (<10ms), the probability that ALL 20 respond fast is `0.99^20 = 81.8%`—meaning nearly 20% of user requests experience tail latency!",
+      "bullets": [
+        "p50 (Median): Half of requests are faster. Masks severe outliers.",
+        "p99 / p99.9 (Tail Latency): Caused by GC pauses, noisy neighbors, TCP retransmits, cache misses, and disk compaction.",
+        "Hedged Requests: Send the same read request to a second replica if the first doesn't respond within the p95 threshold to chop off the p99 tail."
+      ],
+      "codeSnippet": {
+        "title": "Hedged Read Request Pattern to Curb p99 Tail Latency",
+        "code": "export async function hedgedRead<T>(\n  primaryCall: () => Promise<T>,\n  backupCall: () => Promise<T>,\n  p95TimeoutMs = 15\n): Promise<T> {\n  return new Promise((resolve, reject) => {\n    let settled = false;\n    const timer = setTimeout(() => {\n      // Primary exceeded p95! Fire backup replica concurrently\n      backupCall().then((res) => {\n        if (!settled) { settled = true; resolve(res); }\n      }).catch(() => {});\n    }, p95TimeoutMs);\n\n    primaryCall().then((res) => {\n      clearTimeout(timer);\n      if (!settled) { settled = true; resolve(res); }\n    }).catch((err) => { if (!settled) reject(err); });\n  });\n}"
+      }
+    },
+    {
+      "heading": "Trading Latency for Throughput via Batching",
+      "body": "Many high-scale systems intentionally sacrifice a few milliseconds of latency to achieve massive gains in throughput. Instead of performing a network round-trip and disk fsync for every single message, systems like Kafka and group-commit databases buffer records for `5-10ms` (or up to `64KB`) and flush them in a single sequential I/O operation.",
+      "bullets": [
+        "Micro-batching (Kafka `linger.ms`): Waits 5ms to coalesce 500 messages into 1 compressed TCP packet, boosting throughput 10x.",
+        "Pipelining (Redis): Sends 50 commands in a single socket write without waiting for individual RTTs.",
+        "Asynchronous Offloading: Return `202 Accepted` in 5ms to keep user latency low, and process heavy work via background worker queues."
+      ]
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Optimize for Ultra-Low Latency (No Batching)",
+      "pros": "Immediate per-request completion, ideal for interactive user-facing request/response loops.",
+      "cons": "High per-message syscall, network header, and disk IOPS overhead; saturates CPU and network cards at lower QPS.",
+      "bestFor": "Real-time bidding (RTB), gaming servers, interactive UI APIs, and high-frequency trading."
+    },
+    {
+      "option": "Optimize for High Throughput (Micro-Batching & Compression)",
+      "pros": "10x-50x higher records/sec per core, sequential disk writes, high compression ratios across batch payloads.",
+      "cons": "Adds a deterministic baseline latency floor (`linger.ms` wait time) to every single item.",
+      "bestFor": "Log ingestion, telemetry pipelines, Kafka producers, analytics warehouses, and database group commits."
+    }
+  ],
+  "interviewTip": "Never say 'latency should be under 100ms.' Always specify the percentile: 'We will target p50 read latency under 20ms and p99 read latency under 100ms.' This immediately signals senior production experience.",
+  "jsonUrl": "/api/subtopics/core-fundamentals/latency-vs-throughput.json"
+}

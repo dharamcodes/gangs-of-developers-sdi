@@ -1,0 +1,57 @@
+{
+  "id": "rel-circuit-breaker",
+  "topicId": "reliability",
+  "topicTitle": "Reliability",
+  "topicNumber": 8,
+  "subtopicNumber": "8.4",
+  "title": "Circuit Breaker",
+  "subtitle": "State machine that short-circuits calls to failing dependencies so they can recover and callers fail fast.",
+  "readingTime": "6 min read",
+  "difficulty": "Intermediate",
+  "keyTakeaways": [
+    "A Circuit Breaker wraps outbound calls in a three-state machine: `CLOSED` (normal), `OPEN` (short-circuit fail fast), and `HALF-OPEN` (trial probes).",
+    "Requires a minimum request volume threshold (`minimumNumberOfCalls`) in the sliding window before tripping to avoid false positives at low QPS.",
+    "Failing fast in `OPEN` state protects caller thread pools and relieves load on the struggling downstream service."
+  ],
+  "architectureDiagram": "                  [ Failure Rate >= 50% (over min 20 calls) ]\n          +---------------------------------------------------------+\n          |                                                         v\n+--------------------+                                    +--------------------+\n|       CLOSED       |                                    |        OPEN        |\n| (Calls pass thru)  |                                    | (Fail fast / Cache)|\n+--------------------+                                    +--------------------+\n          ^                                                         |\n          |       +--------------------+                            |\n          +-------|     HALF-OPEN      | <--------------------------+\n    [ N Probes    | (Allow N trial reqs|      [ Wait Duration Elapsed (e.g. 15s) ]\n      Succeed ]   |  Fail -> back OPEN)|\n                  +--------------------+",
+  "sections": [
+    {
+      "heading": "State Machine Mechanics (`CLOSED`, `OPEN`, `HALF-OPEN`)",
+      "body": "When a downstream service is completely down or experiencing severe latency degradation, continuing to send requests—even with a 1-second timeout—ties up caller threads for 1 full second per request and bombards the recovering service. Modeled after electrical breakers, a **Circuit Breaker** monitors a sliding window of recent outcomes (errors and slow calls). When the failure or slow-call rate breaches a threshold, the breaker trips to `OPEN` and rejects all calls in sub-microsecond time without touching the network.",
+      "bullets": [
+        "**CLOSED**: Requests flow normally. A ring buffer or sliding time window tracks error rate and slow-call rate.",
+        "**OPEN**: All calls immediately throw `CircuitBreakerOpenError` or invoke a fallback (e.g., stale cache). A cooldown timer (`waitDurationInOpenState`) runs.",
+        "**HALF-OPEN**: Once cooldown expires, the breaker allows a tiny fixed number of probe requests (e.g., 5 calls). If they succeed, it transitions to `CLOSED`; if any fail, it snaps immediately back to `OPEN`."
+      ],
+      "codeSnippet": {
+        "title": "Sliding Window Circuit Breaker State Machine",
+        "code": "class CircuitBreaker {\n  private state: \"CLOSED\" | \"OPEN\" | \"HALF_OPEN\" = \"CLOSED\";\n  private openedAt = 0;\n  private failures = 0;\n  private total = 0;\n\n  async execute<T>(fn: () => Promise<T>, fallback: () => T): Promise<T> {\n    if (this.state === \"OPEN\") {\n      if (Date.now() - this.openedAt > 15_000) this.state = \"HALF_OPEN\";\n      else return fallback();\n    }\n    try {\n      const result = await fn();\n      if (this.state === \"HALF_OPEN\") this.reset();\n      return result;\n    } catch (err) {\n      this.recordFailure();\n      return fallback();\n    }\n  }\n  private recordFailure() {\n    this.failures++; this.total++;\n    if (this.state === \"HALF_OPEN\" || (this.total >= 20 && this.failures / this.total >= 0.5)) {\n      this.state = \"OPEN\"; this.openedAt = Date.now();\n    }\n  }\n  private reset() { this.state = \"CLOSED\"; this.failures = 0; this.total = 0; }\n}"
+      }
+    },
+    {
+      "heading": "Granularity & Sliding Window Tuning",
+      "body": "A poorly scoped circuit breaker can cause wider outages than the bug it tries to contain. If a client uses a single circuit breaker per downstream hostname, and one specific API endpoint (`/reports/heavy`) starts timing out, tripping the breaker will block fast, healthy endpoints (`/auth/verify`) on the same host. Similarly, if a multi-tenant service fails for a single corrupt tenant, tripping a global breaker causes an outage for all tenants.",
+      "bullets": [
+        "Scope circuit breakers per `(service, endpoint_group)` or per downstream shard/AZ rather than globally.",
+        "Track **Slow Call Rate** (e.g., calls taking > 800ms) in addition to exceptions so gray failures trip the breaker before timeouts pile up.",
+        "Always configure `minimumNumberOfCalls` (e.g., 20 requests in a 10s window) so 1 failure out of 2 off-peak requests doesn't trip a 50% threshold."
+      ]
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Local Per-Pod In-Memory Circuit Breaker (Resilience4j / Envoy)",
+      "pros": "Zero external coordination latency; resilient even if Redis/control plane is down.",
+      "cons": "Each of N caller pods must independently experience failures before opening its local breaker.",
+      "bestFor": "99% of production microservice deployments and service mesh sidecars."
+    },
+    {
+      "option": "Distributed Shared Circuit Breaker (Redis-Backed)",
+      "pros": "Instantaneous fleet-wide protection once aggregate failure threshold is crossed.",
+      "cons": "Adds network hop to every RPC call and creates a single point of failure on the Redis cluster.",
+      "bestFor": "Protecting strict external third-party API quotas across hundreds of ephemeral serverless workers."
+    }
+  ],
+  "interviewTip": "Explain how **Timeouts**, **Retries**, and **Circuit Breakers** compose together: each individual attempt has a **Timeout**, failed attempts are **Retried** with jittered backoff, and the **Circuit Breaker** wraps the calls so when the downstream is down, neither timeouts nor retries run.",
+  "jsonUrl": "/api/subtopics/reliability/rel-circuit-breaker.json"
+}

@@ -1,0 +1,57 @@
+{
+  "id": "obs-distributed-tracing",
+  "topicId": "observability",
+  "topicTitle": "Observability",
+  "topicNumber": 10,
+  "subtopicNumber": "10.3",
+  "title": "Distributed Tracing",
+  "subtitle": "W3C Trace Context propagation, causal span DAGs, and head-based vs tail-based sampling strategies.",
+  "readingTime": "10 min read",
+  "difficulty": "Advanced",
+  "keyTakeaways": [
+    "Distributed tracing reconstructs the causal Directed Acyclic Graph (DAG) of a single request across microservices, queues, and databases using a shared Trace ID and parent-child Span IDs.",
+    "Context propagation (W3C traceparent header) must cross both synchronous RPC boundaries (HTTP/gRPC) and asynchronous message broker envelopes (Kafka headers).",
+    "Tail-based sampling buffers complete traces in memory to guarantee 100% capture of errors and high-latency outliers while sampling only 1% of healthy baseline traffic."
+  ],
+  "architectureDiagram": "Client Request\n  | traceparent: 00-4bf92f3577b34da6...-00f067aa0ba902b7-01\n  v\n[API Gateway Span A: 0ms ======================== 180ms]\n   |--> [Auth Service Span B: 5ms == 20ms]\n   +--> [Order Service Span C: 22ms ============= 175ms]\n           |--> [Postgres Query Span D: 25ms == 45ms]\n           +--> [Payment RPC Span E: 48ms ======= 170ms (ERROR 504)]\n\nSpan Stream ---> [Consistent Hash Load Balancer (by trace_id)]\n                       |\n                       v\n               [OTel Tail-Sampling Collector Pool]\n               (Keep 100% if error/latency>500ms, else 1%)\n                       |\n                       v\n               [Tempo / Jaeger / ClickHouse Trace Store]",
+  "sections": [
+    {
+      "heading": "Anatomy of a Trace & W3C Context Propagation",
+      "body": "When a request traverses 20 microservices, metrics tell you *which* service is slow, and logs tell you *what* error occurred locally, but only a distributed trace reveals the critical path, serial vs parallel fan-out, and N+1 sequential database calls caused by an upstream caller.",
+      "bullets": [
+        "Trace & Span Hierarchy: A Trace is a tree/DAG of Spans sharing a 128-bit `trace_id`. Each Span has a 64-bit `span_id`, a `parent_span_id`, start/end monotonic timestamps, attributes, and status.",
+        "W3C Trace Context Standard: Propagated via HTTP/gRPC metadata header `traceparent: 00-<trace-id>-<parent-span-id>-<trace-flags>`, plus optional `baggage` for cross-cutting routing keys (e.g., `synthetic-test=true`).",
+        "Async Boundary Preservation: Producers inject `traceparent` into Kafka/SQS message headers; consumers extract it and link their processing span via `Parent` or `FollowsFrom` references."
+      ],
+      "codeSnippet": {
+        "title": "OpenTelemetry Context Propagation & Tail-Sampling Config",
+        "code": "// W3C Traceparent Header Format:\n// version (00) | 16-byte trace_id | 8-byte parent_span_id | flags (01 = sampled)\n// traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01\n\n# OpenTelemetry Collector Tail-Based Sampling Policy\nprocessors:\n  tail_sampling:\n    decision_wait: 10s\n    num_traces: 100000\n    policies:\n      - name: keep-errors\n        type: status_code\n        status_code: { status_codes: [ERROR] }\n      - name: keep-high-latency\n        type: latency\n        latency: { threshold_ms: 500 }\n      - name: baseline-probabilistic\n        type: probabilistic\n        probabilistic: { sampling_percentage: 1.0 }"
+      }
+    },
+    {
+      "heading": "Head-Based vs Tail-Based Sampling Architectures",
+      "body": "Storing 100% of spans at high scale is prohibitively expensive. Sampling reduces storage cost while preserving statistical and diagnostic visibility, but the point at which the sampling decision is made fundamentally changes architecture.",
+      "bullets": [
+        "Head-Based Sampling: The ingress gateway rolls a dice (e.g., 1%) and sets the `sampled=01` flag in `traceparent`. Every downstream service obeys the flag. Cheap and stateless, but misses 99% of rare errors.",
+        "Tail-Based Sampling: Services emit 100% of spans to a collector tier. A first-tier router hashes `trace_id` so all spans of a trace land on the same collector node, which waits 5-10s before deciding whether to persist the trace.",
+        "Exemplars: Attach a sampled `trace_id` directly to a Prometheus Histogram bucket observation so engineers can click from a p99 latency spike on a dashboard straight to the exact offending trace."
+      ]
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Head-Based Sampling",
+      "pros": "Stateless, zero collector buffering memory, minimal network egress from application pods.",
+      "cons": "Blind to whether a request will fail or stall downstream; captures only a tiny fraction of rare 5xx errors.",
+      "bestFor": "Ultra-high-QPS edge services where collector memory buffering is cost-prohibitive."
+    },
+    {
+      "option": "Tail-Based Sampling",
+      "pros": "Guarantees 100% capture of anomalous traces (5xx errors, p99 latency spikes) while keeping storage low.",
+      "cons": "Requires trace_id-affinitized stateful collector pools and full span network transmission from apps to collectors.",
+      "bestFor": "Mission-critical payment, checkout, and multi-hop microservice architectures requiring high debuggability."
+    }
+  ],
+  "interviewTip": "If asked how to implement tail-based sampling at scale, explain that a two-tier collector architecture with consistent hashing on `trace_id` is mandatory so all spans belonging to the same trace arrive at the same stateful collector instance.",
+  "jsonUrl": "/api/subtopics/observability/obs-distributed-tracing.json"
+}

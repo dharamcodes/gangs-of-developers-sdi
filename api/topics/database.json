@@ -1,0 +1,693 @@
+{
+  "id": "database",
+  "topicNumber": 4,
+  "title": "Database",
+  "description": "Storage engines, ACID semantics, concurrency control, horizontal scaling, and operational bottlenecks.",
+  "jsonUrl": "/api/topics/database.json",
+  "subtopics": [
+    {
+      "id": "db-sql-vs-nosql",
+      "topicId": "database",
+      "topicTitle": "Database",
+      "topicNumber": 4,
+      "subtopicNumber": "4.1",
+      "title": "SQL vs NoSQL",
+      "subtitle": "Choosing between relational ACID engines and distributed non-relational data stores based on access patterns and scale.",
+      "readingTime": "8 min read",
+      "difficulty": "Foundational",
+      "keyTakeaways": [
+        "Relational (SQL) databases enforce schemas on write, support expressive joins, and provide strong ACID transactions out of the box.",
+        "NoSQL databases (Key-Value, Document, Wide-Column, Graph) optimize for specific access patterns, horizontal partitionability, and flexible schemas.",
+        "Modern architectures employ polyglot persistence—using PostgreSQL for core ledger/transactional state and DynamoDB/Cassandra for high-throughput telemetry or session state."
+      ],
+      "architectureDiagram": "+--------------------------------------------------------------------+\n|                    POLYGLOT PERSISTENCE LAYER                      |\n+--------------------------------------------------------------------+\n         |                                         |\n         v (Relational / ACID)                     v (High-Scale / Key-Access)\n+-------------------------------+         +-------------------------------+\n|   PostgreSQL / MySQL (SQL)    |         |  DynamoDB / Cassandra (NoSQL) |\n|-------------------------------|         |-------------------------------|\n| - Normalized Tables (3NF)     |         | - Partition Key + Sort Key    |\n| - B+ Tree Storage Engine      |         | - LSM-Tree / Hash Storage     |\n| - Multi-Table Joins & Foreign |         | - Denormalized Single-Table   |\n|   Key Constraints             |         |   Aggregates                  |\n+-------------------------------+         +-------------------------------+",
+      "sections": [
+        {
+          "heading": "Storage Engines & Data Modeling Philosophy",
+          "body": "In SQL databases, data is normalized into third normal form (3NF) to eliminate redundancy and maintain referential integrity. You model the domain entities first and write arbitrary ad-hoc queries later. In NoSQL systems like DynamoDB or Apache Cassandra, you must know your exact query access patterns upfront and model data around partition keys and sort keys—often duplicating data across items to serve reads in a single network hop without joins.",
+          "bullets": [
+            "Document Stores (MongoDB): Store JSON/BSON documents; ideal when an entity and its nested children are fetched together.",
+            "Wide-Column Stores (Cassandra, Bigtable):LSM-tree backed; optimized for massive write throughput and time-series range scans.",
+            "Key-Value Stores (DynamoDB, Redis): O(1) hash lookup by primary key with predictable single-digit millisecond latency."
+          ],
+          "codeSnippet": {
+            "title": "SQL Normalized Join vs NoSQL Single-Table Design",
+            "code": "-- SQL: Normalized schema queried via JOIN\nSELECT o.id, o.total_cents, u.email\nFROM orders o\nJOIN users u ON o.user_id = u.id\nWHERE u.id = 'usr_991' ORDER BY o.created_at DESC LIMIT 10;\n\n// NoSQL (DynamoDB Single-Table Design): Pre-joined item collection\n// Partition Key (PK): 'USER#usr_991'\n// Sort Key (SK):      'ORDER#2026-09-30#ord_501'\nconst response = await dynamoClient.query({\n  TableName: 'CommerceApp',\n  KeyConditionExpression: 'PK = :pk AND begins_with(SK, :skPrefix)',\n  ExpressionAttributeValues: { ':pk': 'USER#usr_991', ':skPrefix': 'ORDER#' },\n  ScanIndexForward: false,\n  Limit: 10\n});"
+          }
+        },
+        {
+          "heading": "Scaling Characteristics & Consistency Boundaries",
+          "body": "Traditional RDBMS engines were designed for single-node vertical scaling with shared-disk memory architectures. While NewSQL systems (CockroachDB, Google Spanner) add distributed consensus over relational SQL, they incur cross-node coordination latency. Native NoSQL systems shard automatically via consistent hashing, trading multi-key serializability for linear horizontal write scalability.",
+          "bullets": [
+            "Schema Evolution: SQL `ALTER TABLE` on billion-row tables requires careful online DDL tools (e.g., `gh-ost`), whereas NoSQL enforces schema-on-read in application code.",
+            "Secondary Indexes: Global secondary indexes in NoSQL are usually updated asynchronously, meaning index reads are eventually consistent.",
+            " Impedance Mismatch: Document databases map directly to in-memory object graphs, avoiding complex ORM hydration."
+          ]
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Relational RDBMS (PostgreSQL / MySQL)",
+          "pros": "Strict ACID guarantees, expressive SQL joins, strong constraints, mature tooling.",
+          "cons": "Horizontal write scaling (sharding) requires manual application routing or middleware.",
+          "bestFor": "Financial ledgers, billing, inventory, and domains with evolving query patterns."
+        },
+        {
+          "option": "Distributed NoSQL (DynamoDB / Cassandra)",
+          "pros": "Seamless horizontal partitioning, predictable latency at petabyte scale, high write throughput.",
+          "cons": "No native joins, rigid access patterns, eventual consistency pitfalls on secondary indexes.",
+          "bestFor": "IoT telemetry, chat message history, user activity feeds, and high-scale shopping carts."
+        }
+      ],
+      "interviewTip": "Never justify NoSQL in an interview simply by saying 'we have a lot of data.' PostgreSQL easily handles terabytes of data. Justify NoSQL by pointing to specific write throughput requirements (e.g., 200k writes/sec) or strictly key-value/partitioned access patterns.",
+      "jsonUrl": "/api/subtopics/database/db-sql-vs-nosql.json"
+    },
+    {
+      "id": "db-indexing",
+      "topicId": "database",
+      "topicTitle": "Database",
+      "topicNumber": 4,
+      "subtopicNumber": "4.2",
+      "title": "Indexing",
+      "subtitle": "Internal mechanics of B+ Trees, LSM-Trees, composite index prefix rules, and covering indexes.",
+      "readingTime": "9 min read",
+      "difficulty": "Intermediate",
+      "keyTakeaways": [
+        "B+ Trees store data pointers only in leaf nodes linked sequentially, delivering O(log N) point lookups and fast range scans.",
+        "LSM-Trees (Log-Structured Merge-Trees) turn random disk writes into sequential append-only writes in MemTables and SSTables.",
+        "Composite indexes follow the leftmost prefix rule: an index on (A, B, C) accelerates queries on (A) and (A, B), but cannot be used for (B, C) alone."
+      ],
+      "architectureDiagram": "                      B+ TREE INDEX STRUCTURE\n                 +-------------------------------+\n                 |   Internal Node: [ 25 | 60 ]  |\n                 +-------------------------------+\n                  /              |              \\\n                 v               v               v\n      +---------------+  +---------------+  +---------------+\n      | Leaf: 10, 18  |->| Leaf: 25, 42  |->| Leaf: 60, 88  | (Doubly Linked\n      +---------------+  +---------------+  +---------------+  for Range Scans)\n          |      |           |      |           |      |\n          v      v           v      v           v      v\n       [Heap/Clustered Data Pages on Disk (8KB / 16KB Blocks)]",
+      "sections": [
+        {
+          "heading": "B+ Trees vs LSM-Trees Under the Hood",
+          "body": "B+ Trees (used by PostgreSQL and MySQL InnoDB) maintain balanced pages on disk (typically 8KB–16KB) with high fanout (hundreds of keys per node). A 3- to 4-level B+ Tree can index billions of rows while keeping internal nodes cached in RAM, requiring at most 1 disk I/O per lookup. Conversely, LSM-Trees (RocksDB, Cassandra) buffer writes in an in-memory red-black/skip-list (`MemTable`) and a disk `WAL`, flushing immutable sorted `SSTables` and compacting them in the background.",
+          "bullets": [
+            "Clustered Index (InnoDB Primary Key): Leaf nodes hold the actual row payload; secondary indexes store the primary key value, requiring a second lookup ('bookmark lookup') unless covered.",
+            "Heap Table (PostgreSQL): All indexes are secondary and point to `ctid` (physical page and tuple offset) in the heap.",
+            "Bloom Filters: LSM engines attach Bloom filters to each SSTable to skip disk reads when a key is definitely absent."
+          ],
+          "codeSnippet": {
+            "title": "Composite & Covering Index Optimization in PostgreSQL",
+            "code": "-- Slow query: filters by status & created_at, fetches amount\nEXPLAIN ANALYZE\nSELECT id, amount_cents FROM payments\nWHERE merchant_id = 'm_42' AND status = 'SETTLED'\nORDER BY created_at DESC LIMIT 20;\n\n-- Optimal Covering Index (Index-Only Scan, 0 heap fetches):\n-- Equality columns first (merchant_id, status), then sort/range column (created_at),\n-- and INCLUDE payload columns to avoid touching the table heap.\nCREATE INDEX CONCURRENTLY idx_payments_merch_status_created\nON payments (merchant_id, status, created_at DESC)\nINCLUDE (id, amount_cents);"
+          }
+        },
+        {
+          "heading": "Selectivity, Cardinality, and Write Amplification",
+          "body": "Every additional index speeds up matching `SELECT` queries but slows down `INSERT`, `UPDATE`, and `DELETE` operations because the storage engine must update every affected B+ Tree and risk page splits. Low-cardinality columns (like `is_deleted` boolean) make poor standalone B-Tree indexes unless defined as a partial/filtered index (e.g., `WHERE status = 'PENDING'`) targeting a small subset of rows.",
+          "bullets": [
+            "Equality Before Range: In composite indexes, always order equality predicates (`=`) before inequality or range predicates (`>`, `<`, `BETWEEN`).",
+            "GIN / Inverted Indexes: Used for full-text search and JSONB containment queries where keys map to posting lists of row IDs.",
+            "Geospatial Indexes (R-Tree / Geohash / S2): Partition 2D coordinates into hierarchical bounding boxes or space-filling curves."
+          ]
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "B+ Tree Storage Engine (PostgreSQL, InnoDB)",
+          "pros": "Predictable low-latency reads, fast range scans, minimal read amplification.",
+          "cons": "Random I/O on writes due to in-place page updates and page splits.",
+          "bestFor": "Read-heavy OLTP workloads requiring low p99 read latency."
+        },
+        {
+          "option": "LSM-Tree Storage Engine (RocksDB, Cassandra)",
+          "pros": "Sequential disk writes yield massive ingestion throughput and better compression.",
+          "cons": "Read amplification (checking multiple SSTables) and compaction CPU/IO spikes.",
+          "bestFor": "Write-intensive workloads like event logs, messaging, and time-series metrics."
+        }
+      ],
+      "interviewTip": "When designing composite indexes in an interview, state the ESR rule explicitly: Equality columns first, Sort columns second, and Range/Included columns last.",
+      "jsonUrl": "/api/subtopics/database/db-indexing.json"
+    },
+    {
+      "id": "db-transactions",
+      "topicId": "database",
+      "topicTitle": "Database",
+      "topicNumber": 4,
+      "subtopicNumber": "4.3",
+      "title": "Transactions",
+      "subtitle": "Guaranteeing Atomicity, Consistency, Isolation, and Durability via Write-Ahead Logging (WAL) and MVCC.",
+      "readingTime": "8 min read",
+      "difficulty": "Foundational",
+      "keyTakeaways": [
+        "Atomicity and Durability are implemented at the storage layer using Write-Ahead Logging (WAL) with redo and undo records.",
+        "Multi-Version Concurrency Control (MVCC) keeps multiple immutable versions of rows so readers never block writers and writers never block readers.",
+        "Long-running transactions hold open snapshots, preventing vacuuming/garbage collection and risking connection exhaustion."
+      ],
+      "architectureDiagram": "Client                   Buffer Pool (RAM)             Disk Storage\n  |                             |                           |\n  |--- 1. BEGIN; UPDATE ... --->|                           |\n  |                             |--- 2. Append Undo/Redo -->| [WAL Log File]\n  |                             |    (Sequential Write)     |\n  |                             |--- 3. Dirty Page in RAM   |\n  |--- 4. COMMIT -------------->|                           |\n  |                             |--- 5. fsync(WAL) -------->| (Durable!)\n  |<-- 6. ACK Commit Success ---|                           |\n  |                             |... 7. Async Checkpoint -->| [Data Pages]",
+      "sections": [
+        {
+          "heading": "How ACID Works Under the Hood (WAL & ARIES)",
+          "body": "Databases do not flush modified 8KB data pages to disk on every `COMMIT` because random disk I/O is slow. Instead, they use the Write-Ahead Log (WAL) protocol: before any data page is modified, an append-only log record containing both Undo (old value) and Redo (new value) information is written sequentially to the WAL and flushed via `fsync`. Once the commit record hits the WAL on disk, the transaction is durable—even if power fails before dirty memory pages are checkpointed.",
+          "bullets": [
+            "Atomicity (Undo Log): If a transaction aborts or crashes mid-flight, the engine replays undo records backward to restore prior state.",
+            "Durability (Redo Log): Upon crash recovery, the engine replays committed WAL records forward from the last checkpoint.",
+            "Consistency: Application-defined invariants (foreign keys, `CHECK (balance >= 0)`) validated before commit."
+          ],
+          "codeSnippet": {
+            "title": "Atomic Ledger Transfer with Safe Transaction Boundaries",
+            "code": "-- Keep transactions short: never make external HTTP calls inside BEGIN..COMMIT!\nBEGIN TRANSACTION;\n\n-- Deduct from sender only if balance is sufficient\nUPDATE accounts\nSET balance_cents = balance_cents - 5000, updated_at = NOW()\nWHERE account_id = 'acc_sender' AND balance_cents >= 5000;\n\n-- Verify 1 row affected in application; if 0, ROLLBACK\nUPDATE accounts\nSET balance_cents = balance_cents + 5000, updated_at = NOW()\nWHERE account_id = 'acc_receiver';\n\nINSERT INTO ledger_entries (tx_id, debit_acc, credit_acc, amount_cents)\nVALUES ('tx_1099', 'acc_sender', 'acc_receiver', 5000);\n\nCOMMIT;"
+          }
+        },
+        {
+          "heading": "Multi-Version Concurrency Control (MVCC)",
+          "body": "Instead of overwriting a row in place and locking out concurrent readers, MVCC stamps each tuple version with the creating transaction ID (`xmin` in Postgres) and deleting/updating transaction ID (`xmax`). When a transaction starts, it receives a snapshot of active transactions and reads the latest tuple version visible to its snapshot.",
+          "bullets": [
+            "Zero Read Locks: Readers see a consistent historical snapshot without acquiring shared locks that stall writers.",
+            "Dead Tuples & Vacuuming: Old row versions must be cleaned up asynchronously (`AUTOVACUUM` in Postgres or purge threads in InnoDB).",
+            "Transaction Anti-Pattern: Calling a slow third-party API (like Stripe) inside an open database transaction holds locks and MVCC snapshots for seconds, collapsing database throughput."
+          ]
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Synchronous WAL Flush (fsync on every commit)",
+          "pros": "Zero committed data loss on OS crash or power failure (true ACID durability).",
+          "cons": "Commit latency is bounded by disk IOPS / NVMe flush speed.",
+          "bestFor": "Financial transactions, orders, user authentication, and core state."
+        },
+        {
+          "option": "Asynchronous / Group Commit (`synchronous_commit = off`)",
+          "pros": "Significantly higher write throughput by batching WAL flushes every few milliseconds.",
+          "cons": "Up to a few milliseconds of committed transactions can be lost on sudden host failure.",
+          "bestFor": "High-frequency analytics counters, audit logs, and non-critical telemetry."
+        }
+      ],
+      "interviewTip": "Always emphasize that external network calls (RPCs, payment gateways, message broker publishes) must never happen inside an open DB transaction block. Use an idempotency key or Transactional Outbox instead.",
+      "jsonUrl": "/api/subtopics/database/db-transactions.json"
+    },
+    {
+      "id": "db-isolation-levels",
+      "topicId": "database",
+      "topicTitle": "Database",
+      "topicNumber": 4,
+      "subtopicNumber": "4.4",
+      "title": "Isolation Levels",
+      "subtitle": "Understanding concurrency anomalies (Dirty Reads, Non-Repeatable Reads, Phantom Reads, Write Skew) and ANSI SQL isolation guarantees.",
+      "readingTime": "10 min read",
+      "difficulty": "Advanced",
+      "keyTakeaways": [
+        "Read Committed (default in PostgreSQL) prevents dirty reads, but allows non-repeatable reads and write skew within the same transaction.",
+        "Repeatable Read / Snapshot Isolation prevents non-repeatable reads by freezing a snapshot at transaction start, yet remains vulnerable to Write Skew.",
+        "Serializable (via SSI or 2PL) guarantees execution equivalent to a serial one-by-one schedule, eliminating all concurrency anomalies at the cost of serialization retries."
+      ],
+      "architectureDiagram": "+---------------------+------------+-------------------+---------------+------------+\n| Isolation Level     | Dirty Read | Non-Repeatable Rd | Phantom Read  | Write Skew |\n+---------------------+------------+-------------------+---------------+------------+\n| Read Uncommitted    | Possible   | Possible          | Possible      | Possible   |\n| Read Committed      | Prevented  | Possible          | Possible      | Possible   |\n| Repeatable Read (SI)| Prevented  | Prevented         | Engine-Depend | Possible   |\n| Serializable (SSI)  | Prevented  | Prevented         | Prevented     | Prevented  |\n+---------------------+------------+-------------------+---------------+------------+",
+      "sections": [
+        {
+          "heading": "Concurrency Anomalies Explained",
+          "body": "When multiple transactions execute concurrently, subtle race conditions emerge if isolation is weak. Beyond classic Dirty Reads (reading uncommitted data) and Non-Repeatable Reads (reading a row twice and seeing different committed values), senior engineers must watch out for Lost Updates and Write Skew.",
+          "bullets": [
+            "Lost Update: Two transactions read `counter = 10`, both increment in memory, and both write `11`, losing one increment.",
+            "Phantom Read: Transaction A queries `WHERE status = 'ON_CALL'`, Transaction B inserts a new matching row and commits, changing the result set of A's range query.",
+            "Write Skew (The On-Call Doctor Problem): Two doctors are on call (invariant: >= 1 must remain on call). Under Snapshot Isolation, both concurrently read `count = 2`, both update their own row to `off_call`, and both commit—leaving 0 doctors on call!"
+          ],
+          "codeSnippet": {
+            "title": "Preventing Write Skew with Serializable Snapshot Isolation (SSI)",
+            "code": "-- Doctor A and Doctor B run this concurrently:\nBEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;\n\n-- Both transactions read count = 2 in their snapshot\nSELECT COUNT(*) FROM doctors WHERE shift_id = 42 AND on_call = true;\n\n-- Doctor A updates Alice; Doctor B updates Bob (disjoint rows!)\nUPDATE doctors SET on_call = false\nWHERE shift_id = 42 AND doctor_id = 'doc_alice';\n\nCOMMIT;\n-- Under SERIALIZABLE (SSI), Postgres detects the rw-antidependency cycle\n-- and aborts the second committer with SQLSTATE 40001 (serialization_failure)."
+          }
+        },
+        {
+          "heading": "How Engines Implement Isolation Levels",
+          "body": "PostgreSQL's default is `READ COMMITTED` (each statement sees a fresh snapshot of data committed before that statement began), whereas MySQL InnoDB's default is `REPEATABLE READ` (snapshot established at the first read in the transaction, using gap locks for locking reads). For `SERIALIZABLE`, modern PostgreSQL and CockroachDB use Serializable Snapshot Isolation (SSI), tracking read-write dependency graphs without blocking readers, aborting only when a cycle forms.",
+          "bullets": [
+            "Two-Phase Locking (2PL): Traditional serializable implementation using shared/exclusive and predicate/gap locks; prone to deadlocks.",
+            "Serializable Snapshot Isolation (SSI): Optimistic approach tracking `SIREAD` locks in memory; requires application retry loops on `40001` errors.",
+            "Materializing Conflicts: If using Repeatable Read, you can prevent write skew by locking a parent summary row (`SELECT ... FOR UPDATE` on the `shifts` table)."
+          ]
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Read Committed / Snapshot Isolation",
+          "pros": "High concurrency, zero read locks, minimal transaction abort rates.",
+          "cons": "Susceptible to subtle invariants breaking via Write Skew or Lost Updates if not explicitly locked.",
+          "bestFor": "General CRUD microservices, social feeds, and read-heavy dashboards."
+        },
+        {
+          "option": "Serializable Isolation (SSI)",
+          "pros": "Mathematically eliminates all concurrency anomalies; simplifies application correctness reasoning.",
+          "cons": "CPU overhead tracking read dependencies and mandatory client retries on contended keys.",
+          "bestFor": "Core banking ledgers, auction bidding, and double-entry accounting systems."
+        }
+      ],
+      "interviewTip": "Know the default isolation level of your chosen database (PostgreSQL = Read Committed, MySQL InnoDB = Repeatable Read) and be ready to explain the 'On-Call Doctors' Write Skew anomaly when asked why Repeatable Read isn't fully Serializable.",
+      "jsonUrl": "/api/subtopics/database/db-isolation-levels.json"
+    },
+    {
+      "id": "db-optimistic-vs-pessimistic-locking",
+      "topicId": "database",
+      "topicTitle": "Database",
+      "topicNumber": 4,
+      "subtopicNumber": "4.5",
+      "title": "Optimistic vs Pessimistic Locking",
+      "subtitle": "Preventing lost updates and double-booking in high-concurrency reservation and inventory systems.",
+      "readingTime": "8 min read",
+      "difficulty": "Intermediate",
+      "keyTakeaways": [
+        "Pessimistic locking acquires exclusive row locks (`SELECT ... FOR UPDATE`) upfront before modifying data, serializing contending transactions.",
+        "Optimistic Concurrency Control (OCC) uses a `version` column or compare-and-swap (CAS) check at write time without holding database locks.",
+        "Choose Pessimistic locking when contention is high and rollbacks are expensive; choose Optimistic locking when contention is low or reads span user think-time."
+      ],
+      "architectureDiagram": "PESSIMISTIC LOCKING (SELECT FOR UPDATE)       OPTIMISTIC LOCKING (CAS / Version)\nTx A                  DB         Tx B         Tx A                  DB         Tx B\n |-- SELECT FOR UPD ->|           |            |-- Read (ver=1) --->|<-- Read (ver=1)\n |   (Row Locked)     |<-- SELECT |            |-- Compute...       |    Compute...\n |-- UPDATE & COMMIT->|    (Wait) |            |-- UPDATE WHERE --->|               |\n |                    |---> Lock  |            |   ver=1 (ver->2)   |<-- UPDATE     |\n |                    |   Granted |            |                    |    WHERE ver=1|\n |                    |           |            |                    |---> 0 rows!   |\n                                                                        (Retry/Fail)",
+      "sections": [
+        {
+          "heading": "Pessimistic Locking & Deadlock Prevention",
+          "body": "Pessimistic locking assumes conflicts are likely and blocks concurrent writers immediately using `SELECT ... FOR UPDATE`. While effective for short, high-contention server-side transactions (such as deducting flash-sale inventory), holding exclusive locks across multiple rows can trigger deadlocks if two transactions acquire locks in opposite orders.",
+          "bullets": [
+            "Consistent Lock Ordering: Always sort entity IDs ascending (`ORDER BY account_id ASC`) before running `SELECT ... FOR UPDATE` on multiple rows to mathematically prevent circular wait deadlocks.",
+            "`FOR UPDATE SKIP LOCKED`: Crucial pattern for database-backed job queues or ticket allocation where workers grab the next available unlocked item without waiting.",
+            "`NOWAIT` / Lock Timeouts: Always configure `SET lock_timeout = '2s'` so a stuck transaction fails fast rather than exhausting the connection pool."
+          ],
+          "codeSnippet": {
+            "title": "Optimistic CAS vs Pessimistic SKIP LOCKED in Ticket Booking",
+            "code": "-- 1. OPTIMISTIC LOCKING (Compare-And-Swap via version column)\nUPDATE seat_inventory\nSET status = 'RESERVED', reserved_by = 'usr_88', version = version + 1\nWHERE event_id = 'evt_1' AND seat_no = '14A'\n  AND status = 'AVAILABLE' AND version = 7;\n-- If affected_rows == 0, seat was taken concurrently -> return 409 Conflict.\n\n-- 2. PESSIMISTIC LOCKING (Assigning any available general-admission ticket)\nBEGIN;\nSELECT ticket_id FROM tickets\nWHERE event_id = 'evt_1' AND status = 'AVAILABLE'\nLIMIT 1 FOR UPDATE SKIP LOCKED;\n-- Update the locked ticket_id and COMMIT;"
+          }
+        },
+        {
+          "heading": "Optimistic Concurrency Control (OCC)",
+          "body": "Optimistic locking never holds a database lock while reading or computing. Every row includes an integer `version` (or `updated_at` timestamp / ETag). When writing back, the `UPDATE` predicate asserts `WHERE id = :id AND version = :read_version`. If another transaction modified the row in the interim, the version will have incremented, `0 rows` are updated, and the application either retries with fresh data or returns `409 Conflict`.",
+          "bullets": [
+            "Safe Across User Think-Time: Essential for collaborative wiki editing or e-commerce checkout forms where a user views a page for 30 seconds before submitting.",
+            "High Contention Collapse: If 500 users try to update the exact same hot row simultaneously under OCC, 499 will fail and retry in a storm, wasting CPU.",
+            "Atomic Single-Statement Updates: For simple counters (`SET stock = stock - 1 WHERE id = ? AND stock >= 1`), the database acquires an implicit row lock only for the duration of the `UPDATE`, combining the best of both worlds."
+          ]
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Optimistic Locking (Version / CAS)",
+          "pros": "No database locks held during reads; immune to deadlocks; scales well when conflicts are rare.",
+          "cons": "High retry overhead and wasted work under heavy contention on hot rows.",
+          "bestFor": "Low-to-medium contention updates, HTTP ETag APIs, and multi-step UI workflows."
+        },
+        {
+          "option": "Pessimistic Locking (SELECT FOR UPDATE)",
+          "pros": "Guarantees progress without wasted retries under high contention; supports `SKIP LOCKED`.",
+          "cons": "Reduces concurrency, holds connections longer, and introduces deadlock risks.",
+          "bestFor": "High-contention inventory allocation, wallet transfers, and worker queue claiming."
+        }
+      ],
+      "interviewTip": "In Ticketmaster or Hotel Booking interviews, propose `SELECT ... FOR UPDATE SKIP LOCKED` when picking from a pool of interchangeable items, or Optimistic Locking (`version = version + 1`) when users pick a specific seat map item.",
+      "jsonUrl": "/api/subtopics/database/db-optimistic-vs-pessimistic-locking.json"
+    },
+    {
+      "id": "db-replication",
+      "topicId": "database",
+      "topicTitle": "Database",
+      "topicNumber": 4,
+      "subtopicNumber": "4.6",
+      "title": "Replication",
+      "subtitle": "Single-leader, multi-leader, and leaderless database replication topologies, WAL shipping, and failover mechanics.",
+      "readingTime": "8 min read",
+      "difficulty": "Intermediate",
+      "keyTakeaways": [
+        "Single-Leader (Primary-Replica) replication routes all writes to the primary node and streams WAL/binlog changes to replicas.",
+        "Synchronous replication guarantees zero data loss (RPO = 0) on primary failure at the cost of higher write latency; asynchronous replication risks losing in-flight writes (RPO > 0).",
+        "Semi-synchronous replication waits for at least one in-sync standby to acknowledge WAL receipt before committing, balancing durability and latency."
+      ],
+      "architectureDiagram": "                 +-----------------------------+\n   Writes -----> |   Primary DB (Leader)       |\n                 |   [Appends to WAL/Binlog]   |\n                 +-----------------------------+\n                    /                       \\\n  Sync WAL Stream  / (ACK before commit)     \\  Async WAL Stream\n  (RPO = 0)       v                           v (Lag: ~10-100ms)\n     +-------------------------+   +-------------------------+\n     | Sync Standby Replica    |   | Async Read Replica      |\n     | (Failover Candidate)    |   | (Serves Read Traffic)   |\n     +-------------------------+   +-------------------------+",
+      "sections": [
+        {
+          "heading": "Physical vs Logical Replication Formats",
+          "body": "Database engines replicate state changes using two primary log formats. Physical (block/WAL) replication ships exact byte-for-byte disk page modifications, making replicas identical clones of the primary. Logical (row-based binlog) replication streams higher-level row mutations (`INSERT`, `UPDATE` before/after images), enabling cross-version upgrades and Change Data Capture (CDC) pipelines.",
+          "bullets": [
+            "Statement-Based Replication: Ships raw SQL strings; broken by non-deterministic functions like `NOW()` or `UUID()`.",
+            "Write-Ahead Log (Physical) Shipping: Fast and low overhead, but tightly coupled to the exact OS architecture and database major version.",
+            "Logical Replication / Row-Based Binlog: Powers Debezium CDC streams into Kafka, Elasticsearch, and data warehouses."
+          ],
+          "codeSnippet": {
+            "title": "PostgreSQL Semi-Synchronous Quorum Replication Config",
+            "code": "# postgresql.conf on Primary Node\nwal_level = replica\nmax_wal_senders = 10\n\n# Wait for ANY 1 of the standby nodes to flush WAL to disk before ACK\nsynchronous_commit = on\nsynchronous_standby_names = 'ANY 1 (standby_az1, standby_az2)'\n\n-- Verify replication lag across standbys:\nSELECT client_addr, state, sync_state,\n       pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn) AS lag_bytes\nFROM pg_stat_replication;"
+          }
+        },
+        {
+          "heading": "Failover Hazards & Split-Brain Mitigation",
+          "body": "When a primary node stops responding to heartbeats, an orchestrator (e.g., Patroni, Orchestrator, AWS RDS Multi-AZ) promotes a standby replica to primary. If replication was asynchronous, the old primary may have acknowledged writes that never reached the new primary—causing silent data loss and primary-key collisions if the old primary rejoins.",
+          "bullets": [
+            "Split-Brain: Two nodes both believe they are the active primary and accept conflicting writes; prevented via STONITH (fencing tokens) and consensus leases (etcd/ZooKeeper).",
+            "Multi-Leader Replication: Used in multi-region active-active setups; requires conflict resolution (Last-Write-Wins, CRDTs, or custom merge logic).",
+            "Recovery Point Objective (RPO) vs Recovery Time Objective (RTO): Sync replication targets RPO = 0; automated failover targets RTO < 30 seconds."
+          ]
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Synchronous / Semi-Synchronous Replication",
+          "pros": "Guarantees zero data loss (RPO = 0) upon primary crash; strong read consistency on standby.",
+          "cons": "Write latency increases by the network round-trip time (RTT) to the synchronous replica.",
+          "bestFor": "Payments, user accounts, and multi-AZ high-availability primaries within the same region."
+        },
+        {
+          "option": "Asynchronous Replication",
+          "pros": "Primary write latency is completely decoupled from replica network spikes or replica outages.",
+          "cons": "Recent committed writes may be lost if the primary crashes before shipping its WAL.",
+          "bestFor": "Cross-region disaster recovery replicas and read-scaling replicas."
+        }
+      ],
+      "interviewTip": "Recommend Semi-Synchronous replication across 3 Availability Zones (1 Primary + 2 Standbys, where at least 1 standby must ACK WAL flush) as the gold standard for production OLTP databases.",
+      "jsonUrl": "/api/subtopics/database/db-replication.json"
+    },
+    {
+      "id": "db-read-replicas",
+      "topicId": "database",
+      "topicTitle": "Database",
+      "topicNumber": 4,
+      "subtopicNumber": "4.7",
+      "title": "Read Replicas",
+      "subtitle": "Scaling read-heavy workloads while solving replication lag anomalies: Read-Your-Writes, Monotonic Reads, and LSN pinning.",
+      "readingTime": "8 min read",
+      "difficulty": "Intermediate",
+      "keyTakeaways": [
+        "Read replicas scale read throughput horizontally, but every replica still processes 100% of the write stream—so read replicas do NOT scale write capacity.",
+        "Asynchronous replication lag causes users to miss data they just submitted unless Read-Your-Own-Writes consistency is enforced.",
+        "Tracking the Log Sequence Number (LSN) or GTID per user session allows intelligent routing between replicas and the primary."
+      ],
+      "architectureDiagram": "User (Updates Profile) ----> [API Server]\n                                  |--- 1. Write (INSERT/UPDATE) ---> [Primary DB]\n                                  |<-- Returns commit LSN: 0/9A4F -- [Primary DB]\n                                  |                                       |\nUser (Reloads Profile) ----> [API Server]                           (WAL Stream)\n  (Cookie: min_lsn=0/9A4F)        |                                       v\n                                  |--- 2. Check Replica LSN -------> [Read Replica]\n                                  |    (If Replica LSN >= 0/9A4F,     (Replay LSN)\n                                  |     read Replica; else Primary)",
+      "sections": [
+        {
+          "heading": "Consistency Anomalies with Read Replicas",
+          "body": "In systems with a 90:10 read-to-write ratio, offloading `SELECT` queries to read replicas dramatically reduces CPU and I/O pressure on the primary. However, because replicas apply WAL records asynchronously (typically 5ms to 500ms behind), naive round-robin load balancing across replicas introduces jarring user-experience bugs.",
+          "bullets": [
+            "Read-Your-Writes Violation: A user posts a comment, refreshes the page, and their comment disappears because the read hit a lagging replica.",
+            "Non-Monotonic Reads (Time Travel): A user refreshes twice; the first request hits Replica 1 (lag 5ms, shows new message) and the second hits Replica 2 (lag 300ms, message vanishes).",
+            "Causal Violation: Observer sees User B's reply to User A's message before User A's original message has replicated."
+          ],
+          "codeSnippet": {
+            "title": "LSN / Timestamp Pinning for Read-Your-Own-Writes Routing",
+            "code": "class DatabaseRouter {\n  async executeRead(query: string, userId: string) {\n    // Check if user performed a write in the last 5 seconds\n    const lastWriteLsn = await redis.get(`user:last_write_lsn:${userId}`);\n    if (!lastWriteLsn) {\n      return this.replicaPool.query(query);\n    }\n    // Route to primary if user recently wrote, or check replica LSN\n    const replicaCaughtUp = await this.replicaPool.hasReplayedLsn(lastWriteLsn);\n    return replicaCaughtUp\n      ? this.replicaPool.query(query)\n      : this.primaryPool.query(query);\n  }\n}"
+          }
+        },
+        {
+          "heading": "Architectural Patterns for Replica Routing",
+          "body": "To preserve strong user-perceived consistency without routing all reads back to the primary, production systems combine session affinity with write-tracking watermarks.",
+          "bullets": [
+            "Write-Window Sticky Routing: Store a short-lived key in Redis (`user_wrote:{id}`, TTL = 5s) on any mutation; route that user's reads to Primary while the key exists.",
+            "LSN / GTID Causal Tokens: Return the primary's commit Log Sequence Number (Postgres `pg_current_wal_lsn()`) or MySQL `GTID` to the client; replicas wait or reject until their replay position reaches that LSN.",
+            "Dedicated Analytical Replicas: Isolate heavy BI/reporting queries onto dedicated replicas so buffer pool cache eviction doesn't degrade user-facing OLTP replicas."
+          ]
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Time-Window Primary Pinning (e.g., 5s after write)",
+          "pros": "Trivial to implement with Redis or an HTTP cookie; requires no DB-specific LSN queries.",
+          "cons": "Routes all reads from active writers to Primary; breaks if replication lag spikes beyond 5s.",
+          "bestFor": "Standard web applications, CRUD APIs, and e-commerce user profiles."
+        },
+        {
+          "option": "LSN / GTID Causal Watermark Routing",
+          "pros": "Mathematically guarantees Read-Your-Writes and Monotonic Reads even during replication lag spikes.",
+          "cons": "Requires proxy/driver support (e.g., ProxySQL, PgPool, or custom middleware) to track LSNs.",
+          "bestFor": "Collaborative SaaS tools, financial dashboards, and globally distributed read replicas."
+        }
+      ],
+      "interviewTip": "Whenever you add Read Replicas to your architecture diagram, proactively tell the interviewer how you will handle 'Read-Your-Own-Writes' for the user who just mutated state—this immediately signals senior production experience.",
+      "jsonUrl": "/api/subtopics/database/db-read-replicas.json"
+    },
+    {
+      "id": "db-sharding",
+      "topicId": "database",
+      "topicTitle": "Database",
+      "topicNumber": 4,
+      "subtopicNumber": "4.8",
+      "title": "Sharding",
+      "subtitle": "Horizontal data partitioning across independent database nodes: Shard Keys, Routing, Resharding, and Cross-Shard Joins.",
+      "readingTime": "10 min read",
+      "difficulty": "Advanced",
+      "keyTakeaways": [
+        "Sharding splits a single logical dataset across multiple independent database servers (shards) so each node handles a fraction of the writes and storage.",
+        "Choosing the right Shard Key is critical: it must have high cardinality and align with the primary query pattern to prevent cross-shard scatter-gather queries.",
+        "Directory-based or Consistent Hashing with Virtual Shards (Logical Shards) simplifies rebalancing when adding new physical hardware."
+      ],
+      "architectureDiagram": "                   [Application / Stateless API]\n                                 |\n                                 v\n             +---------------------------------------+\n             |   Shard Router (Vitess / Citus / App) |\n             |   hash(tenant_id) % 1024 -> Shard Map |\n             +---------------------------------------+\n                /                |                \\\n               v                 v                 v\n      +----------------+ +----------------+ +----------------+\n      |   Shard 01     | |   Shard 02     | |   Shard 03     |\n      | VBuckets 0-340 | | VBuckets 341.. | | VBuckets 682.. |\n      | (Primary+Repl) | | (Primary+Repl) | | (Primary+Repl) |\n      +----------------+ +----------------+ +----------------+",
+      "sections": [
+        {
+          "heading": "Shard Key Selection & Routing Strategies",
+          "body": "A shard is an independent database instance with its own CPU, memory, disk, and replication group. When sharding a table, every query should ideally include the `shard_key` in its `WHERE` clause so the router can dispatch the query to a single shard. If a query omits the shard key, the coordinator must perform a 'scatter-gather' query across all N shards—meaning total latency is dictated by the slowest shard (tail latency amplification).",
+          "bullets": [
+            "Range-Based Sharding: Shards hold contiguous ranges (e.g., `created_at` month or zip code); great for range scans, but suffers from write hotspots on the latest time shard.",
+            "Hash-Based Sharding: Applies a hash function (`xxHash(user_id)`) to distribute writes uniformly across shards, but destroys range queries over the shard key.",
+            "Logical / Virtual Shards: Create 1,024 logical schemas/tables upfront across 4 physical machines (256 per host). To scale out, migrate whole logical shards to new machines via replication without rewriting application hash math."
+          ],
+          "codeSnippet": {
+            "title": "Snowflake-Style Composite ID Embedding Shard ID",
+            "code": "// Instagram / Discord pattern: Embed logical_shard_id inside the 64-bit ID\n// [41 bits: Timestamp ms] [13 bits: Logical Shard ID (8192)] [10 bits: Seq]\nfunction generateShardedId(timestampMs: bigint, shardId: bigint, seq: bigint): bigint {\n  const epoch = 1704067200000n; // Custom epoch\n  return ((timestampMs - epoch) << 23n) | (shardId << 10n) | seq;\n}\n\nfunction extractShardId(entityId: bigint): number {\n  return Number((entityId >> 10n) & 0x1FFFn); // Direct O(1) routing from ID alone!\n}"
+          }
+        },
+        {
+          "heading": "Solving Cross-Shard Queries & Celebrity Hotspots",
+          "body": "Once data is sharded by `user_id`, how do you look up a post by `post_id` or query an index on `email`? You either embed the `shard_id` directly inside the `post_id` (as shown above) or maintain a Global Secondary Index table (itself sharded by the secondary attribute) that maps `email -> user_id`.",
+          "bullets": [
+            "Reference / Broadcast Tables: Small, rarely changing lookup tables (e.g., currencies, countries, feature tiers) are replicated in full to every shard to allow local joins.",
+            "Co-located Joins: Tables sharded by the exact same key (`tenant_id`) can be joined locally within each shard without network hops.",
+            "Resharding Zero-Downtime: Copy historical snapshot from source shard to target shard, stream CDC/binlog changes until caught up, briefly pause writes to flip routing metadata, and resume."
+          ]
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Hash-Based Sharding (e.g., hash(user_id))",
+          "pros": "Uniform distribution of data and write IOPS across all cluster nodes.",
+          "cons": "Range queries across the shard key require expensive scatter-gather fan-out.",
+          "bestFor": "Multi-tenant SaaS (`tenant_id`), social networks (`user_id`), and messaging apps."
+        },
+        {
+          "option": "Range / Directory-Based Sharding",
+          "pros": "Efficient range queries; flexible mapping allows isolating VIP/huge tenants onto dedicated shards.",
+          "cons": "Requires a highly available lookup directory; prone to sequential write hotspots.",
+          "bestFor": "Time-series archival, enterprise multi-tenant systems with uneven tenant sizes."
+        }
+      ],
+      "interviewTip": "Exhaust vertical scaling, indexing, caching, connection pooling, and table partitioning before introducing Sharding. When you do shard, pick a key that co-locates 95%+ of your entity queries on a single shard.",
+      "jsonUrl": "/api/subtopics/database/db-sharding.json"
+    },
+    {
+      "id": "db-partitioning",
+      "topicId": "database",
+      "topicTitle": "Database",
+      "topicNumber": 4,
+      "subtopicNumber": "4.9",
+      "title": "Partitioning",
+      "subtitle": "Single-node table partitioning (Range, List, Hash), Vertical Partitioning, and Partition Pruning for massive tables.",
+      "readingTime": "7 min read",
+      "difficulty": "Intermediate",
+      "keyTakeaways": [
+        "Table Partitioning divides a large logical table into smaller physical sub-tables within the same database instance, whereas Sharding distributes across multiple servers.",
+        "Partition Pruning allows the query planner to skip scanning irrelevant partitions entirely, keeping working-set B+ Tree indexes small enough to fit in RAM.",
+        "Dropping old time-series data via `DROP TABLE partition_2025_01` is an instantaneous metadata operation compared to `DELETE FROM`, which generates massive WAL and dead tuples."
+      ],
+      "architectureDiagram": "               Logical Table: [ audit_events ]\n                              |\n        +---------------------+---------------------+\n        | (Partition Pruning by created_at)         |\n        v                     v                     v\n+----------------+    +----------------+    +----------------+\n| events_2026_07 |    | events_2026_08 |    | events_2026_09 | (Active Partition)\n| (Cold / Read)  |    | (Warm)         |    | (Hot B+ Tree   |\n|                |    |                |    |  Fits in RAM!) |\n+----------------+    +----------------+    +----------------+",
+      "sections": [
+        {
+          "heading": "Horizontal Partitioning (Range, List, Hash)",
+          "body": "When a single table grows past hundreds of gigabytes, its B+ Tree indexes exceed available RAM, causing random disk reads on every insert and query. Declarative table partitioning splits the parent table into physical child tables. Because each partition has its own independent local B+ Tree index, the active partition's index remains compact and resident in the buffer pool.",
+          "bullets": [
+            "Range Partitioning: Partition by date/timestamp (`created_at` monthly/daily); ideal for logs, orders, and billing records.",
+            "List Partitioning: Partition by discrete category (`region IN ('US', 'EU', 'APAC')`) for data locality or compliance.",
+            "Fast Retention Lifecycle: Expiring 100M rows with `DELETE` bloats MVCC tables and saturates I/O; detaching and dropping a monthly partition takes milliseconds."
+          ],
+          "codeSnippet": {
+            "title": "Declarative Time-Range Partitioning in PostgreSQL",
+            "code": "CREATE TABLE webhook_deliveries (\n  id UUID NOT NULL,\n  tenant_id VARCHAR(64) NOT NULL,\n  payload JSONB NOT NULL,\n  created_at TIMESTAMPTZ NOT NULL,\n  PRIMARY KEY (id, created_at) -- Partition key MUST be part of unique/PK constraints\n) PARTITION BY RANGE (created_at);\n\nCREATE TABLE webhook_deliveries_2026_09\n  PARTITION OF webhook_deliveries\n  FOR VALUES FROM ('2026-09-01 00:00:00Z') TO ('2026-10-01 00:00:00Z');\n\n-- Instantaneous archival without MVCC dead-tuple bloat:\nALTER TABLE webhook_deliveries DETACH PARTITION webhook_deliveries_2026_01 CONCURRENTLY;"
+          }
+        },
+        {
+          "heading": "Vertical Partitioning (Row Splitting & TOAST)",
+          "body": "Vertical partitioning splits a table by columns rather than rows. If a `products` table contains frequently updated columns (`stock_count`, `price_cents`) alongside multi-kilobyte `description_html` and `metadata_json` blobs, every update to `stock_count` forces PostgreSQL to copy the entire row tuple or suffer lower page cache density. Moving large blobs into a separate `product_details` table keeps the core table's 8KB pages densely packed.",
+          "bullets": [
+            "Buffer Pool Density: Smaller row widths mean more rows fit inside a single 8KB/16KB memory page, drastically increasing cache hit ratios.",
+            "Security & Access Control: Isolate sensitive PII columns (`ssn`, `tax_id`) into a vertically partitioned table with restricted IAM/role permissions.",
+            "Global Unique Constraints Caveat: In partitioned tables, unique constraints (including Primary Keys) must include the partition key column so uniqueness can be verified locally within a single partition."
+          ]
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Time-Range Horizontal Partitioning",
+          "pros": "Keep hot indexes in RAM; instant O(1) data retention drops; fast time-bounded queries.",
+          "cons": "Queries missing the partition key scan every partition's index, degrading performance.",
+          "bestFor": "Time-series events, financial transactions, chat messages, and audit logs."
+        },
+        {
+          "option": "Vertical Partitioning (Column Splitting)",
+          "pros": "Maximizes CPU cache and buffer pool hit rates for hot metadata columns; reduces MVCC write amplification.",
+          "cons": "Requires an extra join or lookup when the full entity payload is needed.",
+          "bestFor": "Entities with mix of hot counters/status fields and large cold JSON/text blobs."
+        }
+      ],
+      "interviewTip": "Clarify the terminology early in an interview: 'Partitioning' usually refers to splitting one table into smaller physical tables on the same DB server, while 'Sharding' means partitioning across multiple independent DB servers.",
+      "jsonUrl": "/api/subtopics/database/db-partitioning.json"
+    },
+    {
+      "id": "db-bottlenecks",
+      "topicId": "database",
+      "topicTitle": "Database",
+      "topicNumber": 4,
+      "subtopicNumber": "4.10",
+      "title": "Database Bottlenecks",
+      "subtitle": "Diagnosing and resolving CPU saturation, Disk IOPS exhaustion, Lock Contention, N+1 queries, and MVCC bloat.",
+      "readingTime": "9 min read",
+      "difficulty": "Advanced",
+      "keyTakeaways": [
+        "High DB CPU with low Disk I/O usually points to missing indexes causing in-memory sequential scans, complex sorting, or N+1 query storms.",
+        "High Disk Read IOPS indicates working-set data or indexes have outgrown the RAM Buffer Pool, causing constant page thrashing.",
+        "Lock contention on a single 'hot row' (e.g., a global counter or celebrity user balance) serializes execution regardless of how many CPU cores the server has."
+      ],
+      "architectureDiagram": "                  DIAGNOSING DATABASE BOTTLENECKS\n                                 |\n        +------------------------+------------------------+\n        v                        v                        v\n+------------------+    +------------------+    +------------------+\n| High CPU Usage   |    | High Disk IOPS   |    | High Latency,    |\n| Low Disk Wait    |    | High I/O Wait    |    | Low CPU & Disk   |\n+------------------+    +------------------+    +------------------+\n| - Missing Index  |    | - Buffer Pool    |    | - Row Lock Wait  |\n| - N+1 Queries    |    |   Thrashing      |    |   (Hot Key/Row)  |\n| - Unindexed Sort |    | - WAL fsync Wait |    | - Connection Pool|\n| - Deep OFFSET    |    | - Vacuum Lag     |    |   Exhaustion     |\n+------------------+    +------------------+    +------------------+",
+      "sections": [
+        {
+          "heading": "Query-Level Bottlenecks: Deep Pagination & N+1 Storms",
+          "body": "Two of the most common production outages stem from innocent-looking application queries: ORM N+1 loops (fetching 100 posts and issuing 100 separate queries for author details) and `OFFSET` pagination (`LIMIT 20 OFFSET 100000`). With `OFFSET 100000`, the database must still read, materialize, and discard 100,020 rows from disk/index before returning the final 20.",
+          "bullets": [
+            "Keyset / Cursor Pagination: Replace `OFFSET` with `WHERE (created_at, id) < (:last_created_at, :last_id) ORDER BY created_at DESC, id DESC LIMIT 20` for constant O(log N) performance at any depth.",
+            "Hot-Row Lock Contention: If 1,000 concurrent requests run `UPDATE campaigns SET clicks = clicks + 1 WHERE id = 1`, 999 threads block on row locks. Fix by buffering increments in Redis or splitting the row into 16 sub-buckets (`slot_id = rand(0..15)`) and summing on read.",
+            "Unbounded Queries: Never allow an API endpoint to execute a `SELECT` without a hard `LIMIT` and statement timeout."
+          ],
+          "codeSnippet": {
+            "title": "Keyset (Cursor) Pagination vs Sub-Bucketed Hot Counter",
+            "code": "-- 1. Keyset Pagination: O(log N) index seek even at page 50,000\nSELECT id, title, created_at FROM articles\nWHERE (created_at, id) < ('2026-09-30T12:00:00Z', 'art_8821')\nORDER BY created_at DESC, id DESC\nLIMIT 25;\n\n-- 2. Sharded/Slot Counter to eliminate single-row lock contention\n-- Write: pick random slot 0..15 so 16 transactions update in parallel\nINSERT INTO post_likes_slots (post_id, slot_id, count)\nVALUES ('post_99', floor(random() * 16), 1)\nON CONFLICT (post_id, slot_id)\nDO UPDATE SET count = post_likes_slots.count + 1;\n\n-- Read: aggregate across the 16 rows\nSELECT COALESCE(SUM(count), 0) FROM post_likes_slots WHERE post_id = 'post_99';"
+          }
+        },
+        {
+          "heading": "Storage Engine Bottlenecks: MVCC Bloat & XID Wraparound",
+          "body": "In MVCC databases like PostgreSQL, every `UPDATE` is physically an `INSERT` of a new tuple version plus marking the old tuple dead. Under heavy update churn, tables accumulate gigabytes of dead tuples ('table bloat'), degrading index scans and threatening Transaction ID (XID) wraparound if `autovacuum` cannot keep pace.",
+          "bullets": [
+            "Tune Autovacuum Aggressively: Lower `autovacuum_vacuum_scale_factor` (e.g., to `0.01` or `0.02`) on high-churn tables so cleanup runs continuously in small batches.",
+            "HOT (Heap-Only Tuple) Updates: In Postgres, if an updated column is NOT part of any index and space exists on the same 8KB page (`fillfactor = 80`), Postgres avoids updating indexes entirely.",
+            "Statement Timeouts: Configure `statement_timeout = '3000ms'` at the role/session level so rogue queries never snowball into a cascading outage."
+          ]
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Sub-Bucketed (Slot) Row Counters in SQL",
+          "pros": "Multiplies write concurrency by N slots while preserving strict ACID durability in SQL.",
+          "cons": "Reads must `SUM()` across N rows; cannot easily enforce strict `<= 0` lower bounds across slots.",
+          "bestFor": "High-concurrency like counters, view counts, and aggregated ledger balances."
+        },
+        {
+          "option": "Write-Behind Buffering in Redis",
+          "pros": "Absorbs 100k+ increments/sec in memory with sub-millisecond latency.",
+          "cons": "Risks losing buffered increments if Redis crashes before flushing to the SQL database.",
+          "bestFor": "Social media view counts, ad impression counters, and non-financial metrics."
+        }
+      ],
+      "interviewTip": "If an interviewer asks 'What happens if a celebrity tweets and 50,000 users click Like in the same second?', explain how updating a single SQL row causes lock contention and propose either Redis write-behind batching or a 32-slot sharded counter table.",
+      "jsonUrl": "/api/subtopics/database/db-bottlenecks.json"
+    },
+    {
+      "id": "db-connection-pooling",
+      "topicId": "database",
+      "topicTitle": "Database",
+      "topicNumber": 4,
+      "subtopicNumber": "4.11",
+      "title": "Connection Pooling",
+      "subtitle": "Managing database connections at scale with PgBouncer, ProxySQL, and transaction-level multiplexing.",
+      "readingTime": "7 min read",
+      "difficulty": "Intermediate",
+      "keyTakeaways": [
+        "PostgreSQL spawns a separate OS process per connection (~5–10MB RAM each); opening thousands of direct connections causes severe OS context-switching and memory exhaustion.",
+        "Optimal active DB connection count is surprisingly small—governed by `Connections = (Core Count * 2) + Effective Spindle Count`.",
+        "External connection poolers (PgBouncer, RDS Proxy) multiplex thousands of application/serverless connections onto a few dozen physical DB connections using Transaction Pooling."
+      ],
+      "architectureDiagram": "[200 K8s Pods / Lambda Functions]  (5,000 Concurrent Client Connections)\n   |       |       |       |\n   v       v       v       v\n+------------------------------------------------------------------+\n|                PgBouncer / RDS Proxy (Pooler Layer)              |\n|        Mode: Transaction Pooling (Assigns server conn only       |\n|        between BEGIN and COMMIT, returns to pool when idle)      |\n+------------------------------------------------------------------+\n                   |               |               |\n                   v               v               v\n         (60 Persistent Physical Connections — Zero Handshake)\n                   |               |               |\n             +-------------------------------------------+\n             |     PostgreSQL Primary (32 vCPU Node)     |\n             +-------------------------------------------+",
+      "sections": [
+        {
+          "heading": "Why Too Many Connections Kill Database Performance",
+          "body": "Opening a new database connection requires a TCP 3-way handshake, a TLS handshake, authentication verification, and—in PostgreSQL—forking a dedicated backend OS process. Even worse, when 2,000 backend processes are active simultaneously on a 32-core database server, the Linux kernel spends more CPU time on context switching, L1/L2 cache invalidation, and spinlock contention than executing actual SQL queries.",
+          "bullets": [
+            "The HikariCP Formula: A 16-core database with NVMe SSDs achieves peak throughput at roughly 35–50 concurrent active queries—not 1,000.",
+            "Microservice Multiplication Problem: If 50 microservices each run 20 pods with a local pool of 20 connections, that demands `50 * 20 * 20 = 20,000` connections!",
+            "Serverless / AWS Lambda Spike: Stateless functions scale to 1,000 concurrent instances in seconds, immediately crashing a relational DB without a proxy pooler."
+          ],
+          "codeSnippet": {
+            "title": "PgBouncer Transaction Pooling & Application Pool Sizing",
+            "code": "; pgbouncer.ini — Multiplex 5,000 app connections into 40 DB connections\n[databases]\ncommerce_prod = host=10.0.1.50 port=5432 dbname=commerce\n\n[pgbouncer]\npool_mode = transaction          ; Return connection to pool on COMMIT/ROLLBACK\nmax_client_conn = 5000           ; Accept up to 5,000 client connections\ndefault_pool_size = 40           ; Maintain only 40 actual Postgres backend processes\nreserve_pool_size = 5\nquery_wait_timeout = 2           ; Fail fast if queue wait exceeds 2 seconds"
+          }
+        },
+        {
+          "heading": "Session vs Transaction vs Statement Pooling",
+          "body": "Connection poolers like PgBouncer operate in three distinct modes depending on when a physical backend connection can be reclaimed and shared with another client.",
+          "bullets": [
+            "Session Pooling: A physical DB connection stays bound to the client for its entire TCP connection lifetime; polite for legacy features, poor for multiplexing.",
+            "Transaction Pooling (Recommended): A physical DB connection is assigned to a client only for the duration of a single transaction (`BEGIN ... COMMIT`) and immediately returned to the pool while the app does HTTP/business logic.",
+            "Transaction Pooling Caveats: Session-level features like `SET LOCAL`, advisory locks, `LISTEN/NOTIFY`, or unnamed prepared statements cannot span across transactions."
+          ]
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Application-Side Pool Only (e.g., HikariCP / pg-pool)",
+          "pros": "Zero extra network hop; supports session-scoped state and prepared statements effortlessly.",
+          "cons": "Total connections scale linearly with `Pods * PoolSize`, breaking down as microservices scale out.",
+          "bestFor": "Monoliths or small deployments with a fixed, predictable number of application containers."
+        },
+        {
+          "option": "External Proxy Pooler in Transaction Mode (PgBouncer / ProxySQL)",
+          "pros": "Decouples app scaling from DB connection limits; caps DB active processes at optimal CPU count.",
+          "cons": "Adds ~0.2ms proxy hop; requires disabling session-level state or using PgBouncer 1.21+ prepared statement support.",
+          "bestFor": "Large microservice fleets, auto-scaling Kubernetes clusters, and serverless functions."
+        }
+      ],
+      "interviewTip": "When drawing an architecture with auto-scaling application servers or serverless functions talking to PostgreSQL/MySQL, always place PgBouncer or RDS Proxy in front of the database to prevent connection storms.",
+      "jsonUrl": "/api/subtopics/database/db-connection-pooling.json"
+    },
+    {
+      "id": "db-denormalization",
+      "topicId": "database",
+      "topicTitle": "Database",
+      "topicNumber": 4,
+      "subtopicNumber": "4.12",
+      "title": "Denormalization",
+      "subtitle": "Trading write complexity and storage redundancy for O(1) read performance using materialized views, embedded documents, and CDC sync.",
+      "readingTime": "8 min read",
+      "difficulty": "Intermediate",
+      "keyTakeaways": [
+        "Normalization (3NF) optimizes for write integrity and zero data duplication; Denormalization optimizes for read latency by pre-computing joins and aggregates.",
+        "Denormalized fields (e.g., `comment_count` on a `posts` row or `author_name` inside a `comments` document) eliminate expensive multi-table joins and `COUNT(*)` scans.",
+        "Keeping denormalized data consistent requires either synchronous transactional triggers or asynchronous Change Data Capture (CDC) pipelines."
+      ],
+      "architectureDiagram": "NORMALIZED (Read-Time Join)               DENORMALIZED (Write-Time Fanout / Pre-Joined)\n+---------+       +----------+            +-------------------------------------------+\n|  posts  |<----->| comments |            | posts_read_view                           |\n+---------+  JOIN +----------+            |-------------------------------------------|\n     |            (COUNT(*))              | post_id | title | author_name | cmt_count |\n     v                                    +-------------------------------------------+\n+---------+                                     ^\n|  users  |                                     | (Updated via Trigger or Kafka CDC)\n+---------+                               [Write Path]",
+      "sections": [
+        {
+          "heading": "When and How to Denormalize Safely",
+          "body": "At scale, executing `SELECT COUNT(*) FROM comments WHERE post_id = ?` or joining 5 tables on every feed load wastes CPU and destroys latency. By storing `comment_count` directly on the `posts` row—or embedding `{ author_id, author_username, author_avatar }` inside each comment record—reads become single-table point lookups.",
+          "bullets": [
+            "Pre-Computed Counters: Maintain `follower_count` or `unread_count` as an integer column rather than scanning join tables.",
+            "Snapshot Historical Facts: An `order_items` row should copy `product_name` and `unit_price_cents` at purchase time; this is both a domain requirement and a denormalization win.",
+            "PostgreSQL Materialized Views: Pre-compute complex analytical queries into a physical table refreshed periodically via `REFRESH MATERIALIZED VIEW CONCURRENTLY`."
+          ],
+          "codeSnippet": {
+            "title": " keeping Denormalized Search/Read Views in Sync via CDC",
+            "code": "// Asynchronous CDC Consumer (Debezium -> Kafka -> Read Model Updater)\nasync function onUserProfileUpdatedEvent(event: UserUpdatedCDC) {\n  const { userId, newDisplayName, newAvatarUrl, version } = event;\n\n  // Idempotent update using source version guard to prevent out-of-order overwrites\n  await db.query(`\n    UPDATE comments_denormalized\n    SET author_name = $1, author_avatar = $2, author_version = $3\n    WHERE author_id = $4 AND author_version < $3\n  `, [newDisplayName, newAvatarUrl, version, userId]);\n}"
+          }
+        },
+        {
+          "heading": "Managing Write Amplification & Drift Repair",
+          "body": "The primary risk of denormalization is data drift—where the source-of-truth table and the denormalized copy diverge due to partial failures or race conditions. Furthermore, if a user with 50,000 comments changes their username, updating all 50,000 comment rows synchronously would time out.",
+          "bullets": [
+            "Synchronous vs Asynchronous Propagation: Keep high-value counters updated in the same DB transaction (or sub-bucketed table); offload mass fanout updates (like username changes) to background Kafka workers.",
+            "Version Stamps for Out-of-Order Events: Always attach a monotonically increasing `version` or `lsn` to CDC events so an older delayed event never overwrites a newer denormalized value.",
+            "Periodic Reconciliation Jobs: Run a nightly background job that compares `COUNT(*)` against stored `comment_count` for active entities and heals any drift."
+          ]
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Normalized Schema (3NF)",
+          "pros": "Single source of truth; updates touch exactly one row; zero risk of inconsistent copies.",
+          "cons": "Read latency degrades as joins and runtime `COUNT(*)` / `SUM()` aggregations scale.",
+          "bestFor": "Write-heavy OLTP core tables and systems with moderate read traffic."
+        },
+        {
+          "option": "Denormalized Read Model / CQRS View",
+          "pros": "Single-lookup O(1) reads with zero joins; predictable sub-10ms p99 read latency.",
+          "cons": "Higher storage footprint, write amplification, and eventual consistency lag on updates.",
+          "bestFor": "High-read feeds, e-commerce product catalogs, and search indexes."
+        }
+      ],
+      "interviewTip": "Always keep a normalized 'System of Record' table as the source of truth, and treat denormalized tables, Elasticsearch indexes, or Redis hashes as derived 'Read Views' synchronized via CDC (Debezium/Kafka) so you can always rebuild them if a bug corrupts the view.",
+      "jsonUrl": "/api/subtopics/database/db-denormalization.json"
+    }
+  ]
+}

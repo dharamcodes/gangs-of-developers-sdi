@@ -1,0 +1,57 @@
+{
+  "id": "ms-saga",
+  "topicId": "microservices",
+  "topicTitle": "Microservices",
+  "topicNumber": 9,
+  "subtopicNumber": "9.10",
+  "title": "Saga",
+  "subtitle": "Managing multi-service distributed transactions via local commits and semantic compensating transactions.",
+  "readingTime": "7 min read",
+  "difficulty": "Staff+",
+  "keyTakeaways": [
+    "A **Saga** replaces blocking distributed two-phase commits (2PC) with a sequence of local ACID transactions $T_1, T_2, \\dots, T_n$ paired with compensating undo actions $C_{k-1}, \\dots, C_1$.",
+    "Use **Choreography** (event-driven) for simple 2–3 step flows, and **Orchestration** (state machine / Temporal) for complex multi-step workflows.",
+    "Because Sagas lack the **Isolation** ('I' in ACID) across steps, use **Semantic Locks** (`PENDING` status) and structure steps into Pivot and Retriable transactions."
+  ],
+  "architectureDiagram": "Orchestrated Saga Forward & Compensating Rollback Flow:\n[Order Saga Orchestrator]\n   |\n   +---> 1. T1: ReserveInventory() --------> [Inventory Svc] (OK: Reserved)\n   +---> 2. T2: ChargeCreditCard() --------> [Payment Svc]   (FAIL: Card Declined!)\n   |\n   +===> 3. C1: ReleaseInventory() (Compensate T1!) -------> [Inventory Svc] (Rolled Back)\n   +===> 4. Mark Order = CANCELLED",
+  "sections": [
+    {
+      "heading": "Why Not 2PC? Compensating Transactions & Saga Structure",
+      "body": "When each microservice owns its own private database, spanning an ACID transaction across `OrderService`, `InventoryService`, and `PaymentService` would require Distributed Two-Phase Commit (XA / 2PC). In practice, 2PC is an availability anti-pattern across microservices: it holds row locks across network round trips, degrades throughput by an order of magnitude, and blocks indefinitely if the coordinator crashes mid-protocol. A **Saga** achieves eventual atomicity by executing a chain of local transactions ($T_1 \\rightarrow T_2 \\rightarrow T_3$) that commit immediately. If $T_3$ fails, the Saga executes **Compensating Transactions** ($C_2 \\rightarrow C_1$) in reverse order to semantically undo the committed changes (e.g., issuing a refund or releasing reserved stock).",
+      "bullets": [
+        "**Compensatable Transactions ($T_1, T_2$)**: Steps that precede the pivot and have a clean inverse compensation ($C_1, C_2$).",
+        "**Pivot Transaction ($T_p$)**: The go/no-go decision point of the saga (e.g., charging the customer's credit card). If it fails, roll back; if it succeeds, the saga is guaranteed to run to completion.",
+        "**Retriable Transactions ($T_{p+1}, \\dots$)**: Steps after the pivot (e.g., provisioning a shipping label or sending confirmation email) that are guaranteed to eventually succeed via idempotent forward retries."
+      ],
+      "codeSnippet": {
+        "title": "Durable Saga Orchestrator Step & Compensation Loop",
+        "code": "interface SagaStep<Ctx> {\n  name: string;\n  invoke: (ctx: Ctx) => Promise<void>;\n  compensate: (ctx: Ctx) => Promise<void>; // Must be idempotent!\n}\n\nexport async function executeSaga<Ctx>(sagaId: string, ctx: Ctx, steps: SagaStep<Ctx>[]) {\n  const completed: SagaStep<Ctx>[] = [];\n  for (const step of steps) {\n    try {\n      await sagaLog.record(sagaId, step.name, \"STARTED\");\n      await step.invoke(ctx);\n      await sagaLog.record(sagaId, step.name, \"COMPLETED\");\n      completed.push(step);\n    } catch (err) {\n      for (const doneStep of completed.reverse()) {\n        await retryUntilSuccess(() => doneStep.compensate(ctx));\n        await sagaLog.record(sagaId, doneStep.name, \"COMPENSATED\");\n      }\n      throw err;\n    }\n  }\n}"
+      }
+    },
+    {
+      "heading": "Choreography vs Orchestration & Handling Lack of Isolation (ACD)",
+      "body": "Sagas can be coordinated in two ways: **Choreography** (services listen to each other's domain events without a central coordinator) or **Orchestration** (a stateful orchestrator or workflow engine like Temporal/Cadence commands each participant and manages compensations). Crucially, because each local transaction commits immediately before the entire Saga finishes, intermediate state is visible to concurrent requests (**Dirty Reads** / **Lost Updates**). To restore safety without DB locks, apply **Countermeasures for Lack of Isolation**:",
+      "bullets": [
+        "**Semantic Lock**: `T1` sets the record status to `APPROVAL_PENDING` or `RESERVED` so concurrent transactions know the entity is mid-saga and either wait or fail cleanly.",
+        "**Commutative Updates**: Design balance/inventory adjustments as relative deltas (`+10`, `-10`) rather than overwriting absolute values.",
+        "**Pessimistic View Reordering**: Place high-risk steps most likely to fail early in the Saga to minimize how often compensations execute."
+      ]
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Choreography Saga (Decentralized Event Chain)",
+      "pros": "No central orchestrator service to deploy; natural fit for 2–3 loosely coupled services.",
+      "cons": "Hard to visualize end-to-end state, prone to cyclic event dependencies, and painful to modify when steps > 3.",
+      "bestFor": "Simple 2–3 step workflows where participants already emit domain events."
+    },
+    {
+      "option": "Orchestration Saga (Central State Machine / Temporal)",
+      "pros": "Explicit visibility into workflow state, centralized timeout/compensation handling, zero cyclic dependencies.",
+      "cons": "Requires operating a durable workflow orchestrator or state-machine persistence table.",
+      "bestFor": "Complex multi-step business flows (checkout, travel booking, loan underwriting, payment settlement)."
+    }
+  ],
+  "interviewTip": "Mention that Sagas only provide **ACD (Atomicity, Consistency, Durability) without Isolation**, and explain how you use a **Semantic Lock** (e.g., setting `order.status = PENDING` or `inventory = RESERVED`) to prevent dirty reads and double-spending while the Saga is in flight.",
+  "jsonUrl": "/api/subtopics/microservices/ms-saga.json"
+}

@@ -1,0 +1,57 @@
+{
+  "id": "dist-leader-election",
+  "topicId": "distributed-systems",
+  "topicTitle": "Distributed Systems",
+  "topicNumber": 6,
+  "subtopicNumber": "6.5",
+  "title": "Leader Election",
+  "subtitle": "Preventing Split-Brain using consensus leases, heartbeats, monotonic epochs, and Fencing Tokens.",
+  "readingTime": "8 min read",
+  "difficulty": "Advanced",
+  "keyTakeaways": [
+    "Leader election ensures exactly one node coordinates writes, partition assignments, or scheduled jobs at any given logical epoch.",
+    "Time-based leases alone can suffer from Split-Brain if the old leader experiences a long Stop-The-World GC pause or clock drift and continues acting as leader after its lease expired.",
+    "Monotonically increasing Epoch Numbers (Fencing Tokens) validated by the storage layer mathematically fence off zombie leaders."
+  ],
+  "architectureDiagram": "                PREVENTING SPLIT-BRAIN WITH FENCING TOKENS\n  [Old Leader (Node 1)] ---> Acquires Lease (Epoch = 33)\n           |                 (Enters 15s JVM GC Pause... Lease Expires!)\n  [New Leader (Node 2)] ---> Elected Leader (Epoch = 34)\n           |---------------> Writes to Storage (Epoch = 34) --> [Storage Accepts: max_epoch=34]\n  [Old Leader Wakes Up] ---> Delayed Write   (Epoch = 33) ----> [Storage REJECTS: 33 < 34!]",
+  "sections": [
+    {
+      "heading": "How Leader Election Works (etcd / ZooKeeper / Raft)",
+      "body": "Rather than implementing custom Bully or Ring election algorithms from scratch (which frequently break under asymmetric network partitions), production systems rely on a consensus store like `etcd` (Raft) or `ZooKeeper` (ZAB) or internal Raft groups. Candidates compete to create an ephemeral key or acquire a lease backed by a majority quorum. The winner must renew its lease via periodic heartbeats before the lease TTL expires.",
+      "bullets": [
+        "Heartbeat Timeout Balance: Too short (e.g., 100ms) causes false-positive elections during minor network jitter ('flapping'); too long (e.g., 60s) increases failover RTO downtime when a leader genuinely crashes. Typical values: 3–10 seconds.",
+        "Pre-Vote Phase in Raft: Prevents a partitioned node with an incremented term from disrupting a healthy cluster leader when the partition heals.",
+        "Watch / Notification Pattern: Standby followers register a watch on the leader key in etcd/ZooKeeper instead of polling in a tight loop, waking up immediately when the ephemeral node vanishes."
+      ],
+      "codeSnippet": {
+        "title": "Storage-Layer Fencing Token Validation Against Zombie Leaders",
+        "code": "-- Every leader election increments a monotonic epoch / fencing_token in etcd.\n-- The leader MUST pass its fencing_token on every storage mutation.\nUPDATE partition_metadata\nSET current_state = $1,\n    last_fencing_token = $2,\n    updated_at = NOW()\nWHERE partition_id = $3\n  AND last_fencing_token <= $2; -- FENCING GUARD: Reject zombie leaders with older epochs!\n\n// In application code:\nif (result.rowCount === 0) {\n  logger.error('Fencing token rejected! Stepping down immediately as zombie leader.');\n  process.exit(1);\n}"
+      }
+    },
+    {
+      "heading": "The Zombie Leader Problem & Fencing Tokens",
+      "body": "Suppose Node 1 holds a 10-second leader lease with `epoch = 33`. It prepares a write to the storage system, but right before the TCP packet leaves the NIC, Node 1 suffers a 15-second Stop-The-World garbage collection pause (or virtual machine live migration freeze). Meanwhile, the lease expires, Node 2 is elected leader with `epoch = 34`, and Node 2 writes to storage. Then Node 1 wakes up—still believing its lease is valid—and flushes its delayed packet, corrupting Node 2's state!",
+      "bullets": [
+        "Monotonic Fencing Token (`epoch` / `term` / `zxid`): Every time a leader is elected, the consensus service increments a strictly monotonic integer.",
+        "Resource-Side Enforcement: The downstream storage server or database checks the token attached to every write and rejects any request whose token is smaller than the highest token already seen.",
+        "Lease Check Before Side-Effects: Even with monotonic clocks (`CLOCK_MONOTONIC`), only downstream fencing guarantees linearizable safety against network delays."
+      ]
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "External Consensus Coordinator (etcd / ZooKeeper)",
+      "pros": "Battle-tested linearizable lease management, watches, and monotonic revision numbers (`ModRevision`).",
+      "cons": "Requires operating and maintaining a separate 3- or 5-node etcd/ZK cluster.",
+      "bestFor": "Microservice job schedulers, Kafka/shard controllers, and primary database failover managers (Patroni)."
+    },
+    {
+      "option": "Embedded Raft per Partition (CockroachDB / Kafka KRaft)",
+      "pros": "Zero external dependencies; scales leadership across thousands of independent partition groups.",
+      "cons": "Higher implementation complexity and heartbeat traffic across partition groups.",
+      "bestFor": "Distributed databases and large-scale streaming brokers."
+    }
+  ],
+  "interviewTip": "Never talk about Leader Election or Distributed Locks without bringing up Martin Kleppmann's 'Fencing Tokens'—explain how a GC pause can create two active leaders and how an incrementing epoch token checked by the storage engine prevents split-brain corruption.",
+  "jsonUrl": "/api/subtopics/distributed-systems/dist-leader-election.json"
+}

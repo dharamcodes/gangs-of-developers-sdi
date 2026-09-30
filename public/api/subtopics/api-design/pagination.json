@@ -1,0 +1,55 @@
+{
+  "id": "pagination",
+  "topicId": "api-design",
+  "topicTitle": "API Design",
+  "topicNumber": 3,
+  "subtopicNumber": "3.3",
+  "title": "Pagination",
+  "subtitle": "Why Offset/Limit pagination collapses on deep pages and real-time feeds, and how Keyset/Cursor pagination guarantees O(1) index performance.",
+  "readingTime": "7 min read",
+  "difficulty": "Intermediate",
+  "keyTakeaways": [
+    "Offset pagination (`LIMIT 20 OFFSET 100000`) forces the database to scan and discard 100,000 rows on disk (`O(N)` cost), causing severe latency spikes on deep pages.",
+    "Offset pagination also suffers from the **Page Drift (Duplicate/Skipped Row)** bug when new items are inserted at the top of a real-time feed while a user scrolls.",
+    "Cursor (Keyset) pagination encodes the last seen `(created_at, id)` tuple into an opaque token and uses an indexed `WHERE (created_at, id) < ($1, $2)` seek (`O(1)` cost)."
+  ],
+  "architectureDiagram": "OFFSET PAGINATION (O(N) Full Scan + Drift Bug!)\nSELECT * FROM posts ORDER BY created_at DESC LIMIT 20 OFFSET 100000;\n[DB Engine]: Scans 100,020 rows -> Discards first 100,000 -> Returns 20 (Slow!)\n\nCURSOR / KEYSET PAGINATION (O(1) B-Tree Index Seek!)\nSELECT * FROM posts WHERE (created_at, id) < ('2026-03-10T12:00Z', 'p_882')\nORDER BY created_at DESC, id DESC LIMIT 20;\n[B-Tree Index]: Jumps directly to ('2026-03-10T12:00Z', 'p_882') -> Reads next 20!",
+  "sections": [
+    {
+      "heading": "The Two Fatal Flaws of Offset Pagination at Scale",
+      "body": "Beginner APIs implement pagination using `?page=5&limit=20`, which translates to `SELECT * FROM items ORDER BY created_at DESC LIMIT 20 OFFSET 80`. While this works for small admin tables, it fails catastrophically on large or rapidly mutating datasets for two reasons: (1) **Database I/O Amplification**: To serve `OFFSET 500,000`, PostgreSQL or MySQL must still walk through 500,000 index/heap entries just to count and throw them away. (2) **Data Drift on Inserts**: If a user loads Page 1 (items 1–20), and 3 new tweets arrive at the top before they request Page 2 (`OFFSET 20`), the user will see items 18, 19, and 20 duplicated at the top of Page 2!",
+      "bullets": [
+        "Deep Offset DoS Attack: Scrapers requesting `?page=50000` can easily bring down a production database with CPU-pegging offset scans.",
+        "COUNT(*) Overhead: Returning `total_pages: 48291` requires running `SELECT COUNT(*)` across millions of rows on every request."
+      ],
+      "codeSnippet": {
+        "title": "Opaque Base64 Cursor (Keyset) Pagination with Tie-Breaker ID",
+        "code": "// Composite B-Tree Index: CREATE INDEX idx_posts_cursor ON posts (created_at DESC, id DESC);\n// Why include 'id'? Multiple rows can share the exact same millisecond timestamp!\n\nexport interface CursorPayload { createdAt: string; id: string; }\n\nexport function encodeCursor(row: CursorPayload): string {\n  return Buffer.from(JSON.stringify(row)).toString(\"base64url\");\n}\n\nexport async function listFeedPosts(rawCursor: string | undefined, limit = 20, db: DbClient) {\n  // Fetch limit + 1 to cheaply determine 'has_more' without a second query!\n  if (!rawCursor) {\n    const rows = await db.query(\n      \"SELECT * FROM posts ORDER BY created_at DESC, id DESC LIMIT $1\",\n      [limit + 1]\n    );\n    return formatPage(rows, limit);\n  }\n\n  const { createdAt, id } = JSON.parse(Buffer.from(rawCursor, \"base64url\").toString()) as CursorPayload;\n  const rows = await db.query(\n    `SELECT * FROM posts\n     WHERE (created_at, id) < ($1, $2)\n     ORDER BY created_at DESC, id DESC\n     LIMIT $3`,\n    [createdAt, id, limit + 1]\n  );\n  return formatPage(rows, limit);\n}"
+      }
+    },
+    {
+      "heading": "Engineering Bulletproof Cursor Pagination",
+      "body": "Cursor (or Keyset) pagination replaces row-count offsets with a pointer to the last item seen on the current page. By base64-encoding the sort key and a unique tie-breaker ID (e.g., `{\"createdAt\":\"2026-03-10T12:00:00.000Z\",\"id\":\"post_991\"}`), the server keeps the cursor **opaque** so clients don't hardcode internal database column names, allowing you to swap PostgreSQL for DynamoDB or Elasticsearch later without breaking the API contract.",
+      "bullets": [
+        "Always Include a Unique Tie-Breaker: If 50 events occur in the same millisecond, `WHERE created_at < $1` will skip 49 of them! Always use a tuple comparison `WHERE (created_at, id) < ($1, $2)` backed by a composite index.",
+        "The `LIMIT + 1` Trick: Request `21` rows from the DB when the user asks for `limit=20`. If 21 rows return, slice off the 21st row and set `has_more: true`—zero extra queries needed!"
+      ]
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Cursor / Keyset Pagination (?cursor=eyJ...&limit=20)",
+      "pros": "Constant O(1) database seek time whether on Page 1 or Page 100,000; immune to duplicate/skipped items during live inserts.",
+      "cons": "Cannot jump directly to an arbitrary page number ('Jump to Page 42'); sorting columns must be backed by a composite B-tree index.",
+      "bestFor": "Infinite-scroll social feeds, chat message history, transaction logs, and high-scale public APIs."
+    },
+    {
+      "option": "Offset / Limit Pagination (?page=3&limit=20)",
+      "pros": "Supports numbered page buttons (`1, 2, 3 ... 15`) in back-office data tables; trivial to combine with arbitrary ad-hoc column sorting.",
+      "cons": "Degrades linearly `O(Offset)` on deep pages; causes duplicate/missed rows when data changes between page loads.",
+      "bestFor": "Internal admin dashboards, small bounded datasets (< 10,000 rows), or search UIs capped at max 50 pages."
+    }
+  ],
+  "interviewTip": "Whenever an interview involves a feed, chat history, or activity log, explicitly state: 'We will use Cursor-based Keyset Pagination on `(created_at, id)` rather than `OFFSET` to avoid O(N) scan degradation and duplicate items when new posts arrive.'",
+  "jsonUrl": "/api/subtopics/api-design/pagination.json"
+}

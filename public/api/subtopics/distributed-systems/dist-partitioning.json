@@ -1,0 +1,57 @@
+{
+  "id": "dist-partitioning",
+  "topicId": "distributed-systems",
+  "topicTitle": "Distributed Systems",
+  "topicNumber": 6,
+  "subtopicNumber": "6.2",
+  "title": "Partitioning",
+  "subtitle": "Distributed data placement, Document-Partitioned (Local) vs Term-Partitioned (Global) secondary indexes, and rebalancing strategies.",
+  "readingTime": "8 min read",
+  "difficulty": "Advanced",
+  "keyTakeaways": [
+    "Distributed partitioning splits data across cluster nodes so storage and query load scale linearly with cluster size.",
+    "Local (Document-Partitioned) Secondary Indexes keep the index on the same node as the primary record: writes are fast (single node), but secondary reads must scatter-gather across all partitions.",
+    "Global (Term-Partitioned) Secondary Indexes partition the index itself by the indexed attribute: secondary reads hit a single partition, but writes must update multiple nodes asynchronously."
+  ],
+  "architectureDiagram": "LOCAL SECONDARY INDEX (Scatter-Gather Read)   GLOBAL SECONDARY INDEX (Single-Partition Read)\nQuery: WHERE color = 'red'                    Query: WHERE color = 'red' -> hashes to Node 1!\n       |                                             |\n  +----+----+----+                                   v\n  v         v    v                            +------------------------------+\n[Node 1] [Node 2] [Node 3]                    | Global Index Node 1 ('red')  |\n(Local)  (Local)  (Local)                     | -> Points to doc IDs across  |\n(Fast Write, Slow Fan-out Read)               |    Nodes 1, 2, 3 (Fast Read!)|\n                                              +------------------------------+",
+  "sections": [
+    {
+      "heading": "Secondary Indexing in Partitioned Distributed Systems",
+      "body": "Partitioning by primary key is easy, but secondary indexes are the Achilles' heel of distributed databases. When you index a secondary field like `status` or `email` across a 50-node cluster, you face a fundamental trade-off between Local Indexes (Document-Partitioned) and Global Indexes (Term-Partitioned).",
+      "bullets": [
+        "Local Secondary Index (Elasticsearch shards, MongoDB, Cassandra): Each partition maintains its own secondary index covering *only* the documents stored on that partition. Writing a document updates only 1 node, but querying by the secondary index requires querying all 50 partitions in parallel (tail latency amplification).",
+        "Global Secondary Index (DynamoDB GSI, CockroachDB): The secondary index is partitioned independently by the indexed term (`hash(email)`). A lookup by `email` goes directly to 1 node! However, inserting a single item now requires updating the primary partition AND sending network updates to the remote GSI partition(s).",
+        "Asynchronous GSI Updates: To avoid slow distributed 2PC transactions on every write, systems like DynamoDB update Global Secondary Indexes asynchronously within a few milliseconds."
+      ],
+      "codeSnippet": {
+        "title": "Compound Partition Key to Avoid Hot Partitions & Scatter-Gather",
+        "code": "// Problem: Partitioning IoT sensor events purely by `sensor_id` creates a hot partition\n// if one industrial sensor emits 50,000 events/sec.\n// Solution: Compound Partition Key combining sensor_id + time_bucket (or write shard)\nfunction buildPartitionKey(sensorId: string, timestampMs: number): string {\n  const hourBucket = new Date(timestampMs).toISOString().slice(0, 13); // '2026-09-30T15'\n  return `${sensorId}#${hourBucket}`;\n}\n\n// Now Local Secondary Indexes on this partition key can serve time-bounded\n// queries for a sensor from a SINGLE partition without scatter-gather!"
+      }
+    },
+    {
+      "heading": "Rebalancing Partitions Safely Under Load",
+      "body": "As cluster traffic grows or nodes fail, partitions must move between machines ('rebalancing'). Naive rebalancing strategies can saturate network bandwidth or render routing tables inconsistent during the migration.",
+      "bullets": [
+        "Never Use `hash(key) % N_machines`: Changing `N` from 10 to 11 invalidates ~91% of keys simultaneously.",
+        "Fixed Number of Logical Partitions (Elasticsearch, Kafka, Redis Cluster): Create far more logical partitions than physical nodes at cluster creation (e.g., 1,024 partitions across 8 nodes). When Node 9 joins, stream ~113 complete logical partitions to Node 9.",
+        "Dynamic Range Splitting (HBase, TiKV, CockroachDB): Start with 1 range partition; whenever a partition exceeds 64MB (or a QPS threshold), split it in half at the median key and migrate one half to another node."
+      ]
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Local Secondary Index (Document-Partitioned)",
+      "pros": "Single-node atomic writes; no cross-node index synchronization overhead.",
+      "cons": "Secondary index queries require scatter-gather across all partitions (vulnerable to p99 tail latency).",
+      "bestFor": "Full-text search (Elasticsearch) and workloads where queries almost always include the partition key."
+    },
+    {
+      "option": "Global Secondary Index (Term-Partitioned)",
+      "pros": "Point lookups and range scans on the secondary index hit a single partition in O(1) network hops.",
+      "cons": "Writes fan out across multiple nodes; index is typically eventually consistent.",
+      "bestFor": "Looking up users by `email` or `phone_number` when the table is partitioned by `user_id`."
+    }
+  ],
+  "interviewTip": "If your system design requires querying an entity by two different attributes (e.g., `order_id` and `user_id`), explain how a Global Secondary Index (partitioned by `user_id` and updated asynchronously) avoids scatter-gather queries.",
+  "jsonUrl": "/api/subtopics/distributed-systems/dist-partitioning.json"
+}

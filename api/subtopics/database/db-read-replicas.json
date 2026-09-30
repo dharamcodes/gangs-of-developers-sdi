@@ -1,0 +1,57 @@
+{
+  "id": "db-read-replicas",
+  "topicId": "database",
+  "topicTitle": "Database",
+  "topicNumber": 4,
+  "subtopicNumber": "4.7",
+  "title": "Read Replicas",
+  "subtitle": "Scaling read-heavy workloads while solving replication lag anomalies: Read-Your-Writes, Monotonic Reads, and LSN pinning.",
+  "readingTime": "8 min read",
+  "difficulty": "Intermediate",
+  "keyTakeaways": [
+    "Read replicas scale read throughput horizontally, but every replica still processes 100% of the write stream—so read replicas do NOT scale write capacity.",
+    "Asynchronous replication lag causes users to miss data they just submitted unless Read-Your-Own-Writes consistency is enforced.",
+    "Tracking the Log Sequence Number (LSN) or GTID per user session allows intelligent routing between replicas and the primary."
+  ],
+  "architectureDiagram": "User (Updates Profile) ----> [API Server]\n                                  |--- 1. Write (INSERT/UPDATE) ---> [Primary DB]\n                                  |<-- Returns commit LSN: 0/9A4F -- [Primary DB]\n                                  |                                       |\nUser (Reloads Profile) ----> [API Server]                           (WAL Stream)\n  (Cookie: min_lsn=0/9A4F)        |                                       v\n                                  |--- 2. Check Replica LSN -------> [Read Replica]\n                                  |    (If Replica LSN >= 0/9A4F,     (Replay LSN)\n                                  |     read Replica; else Primary)",
+  "sections": [
+    {
+      "heading": "Consistency Anomalies with Read Replicas",
+      "body": "In systems with a 90:10 read-to-write ratio, offloading `SELECT` queries to read replicas dramatically reduces CPU and I/O pressure on the primary. However, because replicas apply WAL records asynchronously (typically 5ms to 500ms behind), naive round-robin load balancing across replicas introduces jarring user-experience bugs.",
+      "bullets": [
+        "Read-Your-Writes Violation: A user posts a comment, refreshes the page, and their comment disappears because the read hit a lagging replica.",
+        "Non-Monotonic Reads (Time Travel): A user refreshes twice; the first request hits Replica 1 (lag 5ms, shows new message) and the second hits Replica 2 (lag 300ms, message vanishes).",
+        "Causal Violation: Observer sees User B's reply to User A's message before User A's original message has replicated."
+      ],
+      "codeSnippet": {
+        "title": "LSN / Timestamp Pinning for Read-Your-Own-Writes Routing",
+        "code": "class DatabaseRouter {\n  async executeRead(query: string, userId: string) {\n    // Check if user performed a write in the last 5 seconds\n    const lastWriteLsn = await redis.get(`user:last_write_lsn:${userId}`);\n    if (!lastWriteLsn) {\n      return this.replicaPool.query(query);\n    }\n    // Route to primary if user recently wrote, or check replica LSN\n    const replicaCaughtUp = await this.replicaPool.hasReplayedLsn(lastWriteLsn);\n    return replicaCaughtUp\n      ? this.replicaPool.query(query)\n      : this.primaryPool.query(query);\n  }\n}"
+      }
+    },
+    {
+      "heading": "Architectural Patterns for Replica Routing",
+      "body": "To preserve strong user-perceived consistency without routing all reads back to the primary, production systems combine session affinity with write-tracking watermarks.",
+      "bullets": [
+        "Write-Window Sticky Routing: Store a short-lived key in Redis (`user_wrote:{id}`, TTL = 5s) on any mutation; route that user's reads to Primary while the key exists.",
+        "LSN / GTID Causal Tokens: Return the primary's commit Log Sequence Number (Postgres `pg_current_wal_lsn()`) or MySQL `GTID` to the client; replicas wait or reject until their replay position reaches that LSN.",
+        "Dedicated Analytical Replicas: Isolate heavy BI/reporting queries onto dedicated replicas so buffer pool cache eviction doesn't degrade user-facing OLTP replicas."
+      ]
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Time-Window Primary Pinning (e.g., 5s after write)",
+      "pros": "Trivial to implement with Redis or an HTTP cookie; requires no DB-specific LSN queries.",
+      "cons": "Routes all reads from active writers to Primary; breaks if replication lag spikes beyond 5s.",
+      "bestFor": "Standard web applications, CRUD APIs, and e-commerce user profiles."
+    },
+    {
+      "option": "LSN / GTID Causal Watermark Routing",
+      "pros": "Mathematically guarantees Read-Your-Writes and Monotonic Reads even during replication lag spikes.",
+      "cons": "Requires proxy/driver support (e.g., ProxySQL, PgPool, or custom middleware) to track LSNs.",
+      "bestFor": "Collaborative SaaS tools, financial dashboards, and globally distributed read replicas."
+    }
+  ],
+  "interviewTip": "Whenever you add Read Replicas to your architecture diagram, proactively tell the interviewer how you will handle 'Read-Your-Own-Writes' for the user who just mutated state—this immediately signals senior production experience.",
+  "jsonUrl": "/api/subtopics/database/db-read-replicas.json"
+}

@@ -1,0 +1,57 @@
+{
+  "id": "obs-metrics",
+  "topicId": "observability",
+  "topicTitle": "Observability",
+  "topicNumber": 10,
+  "subtopicNumber": "10.1",
+  "title": "Metrics",
+  "subtitle": "Numeric time-series aggregations, cardinality management, and histogram quantiles for low-overhead system health tracking.",
+  "readingTime": "8 min read",
+  "difficulty": "Foundational",
+  "keyTakeaways": [
+    "Metrics are pre-aggregated numeric time series (Counters, Gauges, Histograms) optimized for fast querying, dashboards, and real-time alerting at constant storage cost per label set.",
+    "Unbounded label cardinality (e.g., attaching user_id or request_id as metric tags) causes time-series explosion, overwhelming TSDB index memory and compaction.",
+    "Always prefer Histograms over pre-computed client-side Summaries when aggregating latency across horizontally scaled instances so p95/p99 quantiles can be mathematically merged."
+  ],
+  "architectureDiagram": "+-------------------+      Scrape / Pull (15s)     +------------------------+\n| Microservice Pods | <--------------------------- | Prometheus / Collector |\n|  /metrics (Prom)  |                              +-----------+------------+\n+-------------------+                                          |\n                                                   Remote Write (Snappy/Protobuf)\n                                                               v\n+-------------------+      PromQL / Rollups        +------------------------+\n| Grafana / Alert   | <--------------------------- | Distributed TSDB       |\n| Manager           |                              | (Thanos / Mimir / VMs) |\n+-------------------+                              +------------------------+",
+  "sections": [
+    {
+      "heading": "Metric Primitives & Aggregation Mathematics",
+      "body": "Time-series databases (TSDBs) store data streams identified by a metric name and a unique set of key-value labels. Unlike raw events, metrics compress millions of requests into compact numeric counters or bucketed histograms, decoupling storage footprint from traffic volume.",
+      "bullets": [
+        "Counter: Monotonically increasing value (e.g., http_requests_total) reset only on process restart; queried via rate() or increase().",
+        "Gauge: Point-in-time snapshot that can go up or down (e.g., memory_in_use_bytes, active_connections, queue_depth).",
+        "Histogram: Samples observations into configurable upper-bound buckets (_bucket{le='0.1'}) plus _sum and _count, enabling server-side quantile estimation across fleets."
+      ],
+      "codeSnippet": {
+        "title": "Prometheus Histogram Instrumentation & PromQL p99 Calculation",
+        "code": "// 1. Service-side OpenTelemetry / Prometheus Histogram definition\nconst httpDuration = new client.Histogram({\n  name: 'http_request_duration_seconds',\n  help: 'HTTP latency distribution in seconds',\n  labelNames: ['service', 'route', 'status_class'], // Bounded cardinality!\n  buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5]\n});\n\n// 2. PromQL: Fleet-wide p99 latency over a 5-minute sliding window\n// histogram_quantile(0.99, sum by (le, route) (rate(http_request_duration_seconds_bucket[5m])))"
+      }
+    },
+    {
+      "heading": "The Cardinality Explosion Problem & TSDB Storage Internals",
+      "body": "Modern TSDBs like Prometheus use an inverted index in memory mapping label pairs to series IDs, backed by Gorilla XOR-compressed 2-hour blocks on disk. Total active time series equals the Cartesian product of all unique label values.",
+      "bullets": [
+        "Cartesian Multiplicative Risk: 50 services x 30 endpoints x 10 status codes x 20 pods = 300,000 series (healthy). Adding a customer_tier (5) is fine, but adding user_id (10M) creates trillions of series and OOMs the TSDB.",
+        "Recording Rules: Pre-compute expensive high-fanout PromQL aggregations into lower-cardinality rolled-up series at fixed intervals.",
+        "Downsampling & Retention Tiers: Keep raw 15s resolution for 14 days, 5m rollups for 90 days, and 1h rollups for 1+ years in object storage."
+      ]
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Pull Model (Prometheus Scrape)",
+      "pros": "Centralized scrape rate control, built-in target up/down health discovery, no collector overload loops during traffic spikes.",
+      "cons": "Requires service discovery visibility into target networks; ephemeral serverless jobs may exit before being scraped.",
+      "bestFor": "Kubernetes clusters, long-running microservices, and infrastructure daemon monitoring."
+    },
+    {
+      "option": "Push Model (StatsD / OTLP Push)",
+      "pros": "Works seamlessly with short-lived lambdas, batch jobs, and firewalled edge nodes without ingress ports.",
+      "cons": "Runaway clients can DDoS the central ingestion pipeline during retry storms without strict edge rate limiting.",
+      "bestFor": "Serverless functions, mobile/IoT telemetry, and multi-VPC environments without mesh routing."
+    }
+  ],
+  "interviewTip": "When designing a metrics pipeline in an interview, explicitly mention bounding label cardinality (never put user IDs or raw URLs in labels) and explain why server-side Histograms are required instead of averaging individual pod p99s.",
+  "jsonUrl": "/api/subtopics/observability/obs-metrics.json"
+}

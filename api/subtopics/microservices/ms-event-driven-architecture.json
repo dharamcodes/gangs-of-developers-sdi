@@ -1,0 +1,56 @@
+{
+  "id": "ms-event-driven-architecture",
+  "topicId": "microservices",
+  "topicTitle": "Microservices",
+  "topicNumber": 9,
+  "subtopicNumber": "9.9",
+  "title": "Event-Driven Architecture",
+  "subtitle": "Decoupled domain reaction pipelines powered by the Transactional Outbox pattern and idempotent consumers.",
+  "readingTime": "7 min read",
+  "difficulty": "Advanced",
+  "keyTakeaways": [
+    "The **Dual-Write Problem** (updating a local DB and publishing to Kafka in two separate network calls) causes silent data inconsistency on crash.",
+    "Solve Dual Writes using the **Transactional Outbox Pattern**: insert the business row and an `outbox` row in the exact same ACID database transaction.",
+    "Every event consumer MUST be **idempotent** by recording processed `event_id` keys in the same transaction as its business side effects."
+  ],
+  "architectureDiagram": "Transactional Outbox Pattern (Eliminating the Dual-Write Bug):\n+-----------------------------------------------------------+\n| Order Service Local Postgres (Single ACID Transaction)    |\n|   BEGIN;                                                  |\n|     INSERT INTO orders (id, status) VALUES ('o1', 'NEW'); |\n|     INSERT INTO outbox (event_id, payload) VALUES (...);  |\n|   COMMIT;                                                 |\n+-----------------------------------------------------------+\n                             |\n         (Debezium CDC WAL Tailer / Outbox Relay Poller)\n                             v\n                   [ Kafka Topic: orders ]\n                             |\n                             v\n            [ Idempotent Downstream Consumers ]",
+  "sections": [
+    {
+      "heading": "The Dual-Write Trap & Transactional Outbox Pattern",
+      "body": "In an Event-Driven Architecture (EDA), services communicate by publishing immutable facts (`OrderPlaced`, `PaymentCaptured`). A classic bug occurs when a developer writes: `await db.save(order); await kafka.send(event);`. If the pod crashes or loses network connectivity *after* `db.save()` commits but *before* `kafka.send()` succeeds, the order exists in the database forever, but downstream fulfillment and billing services are never notified! Flipping the order (`kafka.send()` first, then `db.save()`) is equally broken: if the DB commit fails, downstream services process a phantom event that never committed. The **Transactional Outbox Pattern** solves this without slow two-phase commits (2PC): write both the `orders` record and an `outbox_events` record inside a single local ACID database transaction, then use **Debezium Change Data Capture (CDC)** (tailing the Postgres WAL) or a background poller to reliably publish `outbox_events` to Kafka at-least-once.",
+      "bullets": [
+        "**Atomic Local Commit**: Either both the business state change and the outbox event commit, or neither does.",
+        "**CDC Log Tailing (Debezium)**: Reads the database Write-Ahead Log (WAL / Binlog) directly with near-zero query overhead and sub-50ms latency.",
+        "**Event Design**: Distinguish **Thin Notification Events** (just `order_id`, forcing consumers to call back) from **Fat Domain Events** (containing the self-contained immutable snapshot needed by consumers)."
+      ],
+      "codeSnippet": {
+        "title": "Transactional Outbox Write + Idempotent Consumer Inbox Pattern",
+        "code": "// PRODUCER: Single ACID Transaction (Business Write + Outbox Insert)\nawait db.transaction(async (tx) => {\n  await tx.query(\"INSERT INTO orders (id, amount) VALUES ($1, $2)\", [order.id, order.amount]);\n  await tx.query(\"INSERT INTO outbox (event_id, topic, key, payload) VALUES ($1, $2, $3, $4)\", [\n    crypto.randomUUID(), \"orders.events\", order.id, JSON.stringify(order)\n  ]);\n});\n\n// CONSUMER: Idempotent Processing via Transactional Inbox Table\nawait consumerDb.transaction(async (tx) => {\n  const inserted = await tx.query(\n    \"INSERT INTO processed_events (event_id) VALUES ($1) ON CONFLICT DO NOTHING RETURNING event_id\",\n    [event.eventId]\n  );\n  if (inserted.rowCount === 0) return; // Duplicate redelivery—skip safely!\n  await tx.query(\"UPDATE inventory SET reserved = reserved + $1 WHERE sku = $2\", [event.qty, event.sku]);\n});"
+      }
+    },
+    {
+      "heading": "Idempotent Consumers & Schema Evolution",
+      "body": "Because the Outbox Relay guarantees *At-Least-Once* publishing (if the relay crashes right after publishing to Kafka but before marking the outbox row as sent, it will republish the event), every consumer in an EDA must be strictly idempotent. Furthermore, because events remain in Kafka topics and data lakes for months and are consumed by dozens of teams, event schemas must enforce strict **Backward and Forward Compatibility** via a Schema Registry.",
+      "bullets": [
+        "**Transactional Inbox (`processed_events` table)**: Insert the incoming `event_id` primary key in the same local DB transaction as the consumer's state mutation.",
+        "**Safe Schema Evolution**: Never rename or change the type of existing fields; only add optional fields with default values, or publish a new versioned event/topic (`v2`) during breaking migrations."
+      ]
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Polling Outbox Publisher (`SELECT ... FOR UPDATE SKIP LOCKED`)",
+      "pros": "Simple to implement in application code; works with any relational database without extra infra.",
+      "cons": "Adds continuous polling query load on the primary database and ~100–500ms polling interval latency.",
+      "bestFor": "Low-to-medium throughput services (< 1,000 events/sec) or teams without Kafka Connect/Debezium."
+    },
+    {
+      "option": "Log-Based CDC Outbox (Debezium Reading Postgres WAL / MySQL Binlog)",
+      "pros": "Near real-time latency (< 20ms) and zero `SELECT` polling overhead on database tables.",
+      "cons": "Requires operating Kafka Connect / Debezium connectors and monitoring WAL replication slots.",
+      "bestFor": "High-throughput mission-critical event pipelines."
+    }
+  ],
+  "interviewTip": "Any time you draw a service writing to a database AND publishing an event to Kafka in a system design interview, immediately say: **'To prevent the dual-write bug, I will use the Transactional Outbox pattern with CDC and an idempotent consumer inbox.'**",
+  "jsonUrl": "/api/subtopics/microservices/ms-event-driven-architecture.json"
+}

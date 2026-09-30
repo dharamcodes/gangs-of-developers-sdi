@@ -1,0 +1,56 @@
+{
+  "id": "rel-load-shedding",
+  "topicId": "reliability",
+  "topicTitle": "Reliability",
+  "topicNumber": 8,
+  "subtopicNumber": "8.8",
+  "title": "Load Shedding",
+  "subtitle": "Proactively dropping excess low-priority requests at the edge to preserve goodput under overload.",
+  "readingTime": "6 min read",
+  "difficulty": "Staff+",
+  "keyTakeaways": [
+    "Without load shedding, an overloaded server's **Goodput** (useful responses completed before client timeout) drops to zero due to queueing delay.",
+    "Shed load as early and cheaply as possible—prioritizing requests by business criticality (`CRITICAL > HIGH > BATCH/CRAWLER`).",
+    "LIFO (Last-In, First-Out) queues with CoDel adaptive queue timeouts outperform FIFO queues during overload spikes."
+  ],
+  "architectureDiagram": "Throughput vs Load (The Overload Cliff):\nGoodput ^        /----------------\\  <-- With Load Shedding (100% of capacity serves valid responses)\n        |       /                  \\\n        |      /                    \\  <-- Without Load Shedding (Queueing > Timeout -> 0 Goodput!)\n        |     /                      \\________\n        +----+------------------------------------> Incoming Load (RPS)\n           100% Capacity",
+  "sections": [
+    {
+      "heading": "Goodput vs Throughput & Queueing Collapse",
+      "body": "When a service provisioned for 1,000 RPS suddenly receives 2,500 RPS, a naive server queues all 2,500 requests in memory. Soon, the queue grows so deep that every single request sits waiting in the queue for 3 seconds before a worker thread even looks at it. Since the client timeout is 1 second, **100% of clients have already disconnected**, yet the server spends 100% of its CPU processing dead requests! Although raw *throughput* looks high, **goodput** (successful responses delivered within the client's deadline) collapses to zero. **Load Shedding** prevents this cliff by immediately rejecting excess requests (`HTTP 503 Service Unavailable`) in microseconds so the remaining 1,000 RPS complete in 10ms.",
+      "bullets": [
+        "**Reject Cheaply**: Shed requests before parsing large JSON bodies, allocating heap objects, or touching databases.",
+        "**Adaptive Concurrency Limits (Little's Law $L = \\lambda W$)**: Dynamically adjust concurrency limits using TCP Vegas / Gradient algorithms (measuring `minRTT / sampleRTT` queue inflation).",
+        "**LIFO + CoDel Queueing**: During a traffic spike, serving the most recently arrived request (LIFO) keeps latency low for lucky requests while dropping stale requests at the tail of the queue."
+      ],
+      "codeSnippet": {
+        "title": "Priority-Aware Load Shedder Middleware",
+        "code": "type Priority = 0 | 1 | 2; // 0 = Checkout (Critical), 1 = Browse (Normal), 2 = Bot/Prefetch (Low)\n\nexport function shouldShedRequest(priority: Priority, utilizationRatio: number): boolean {\n  // Progressive shedding thresholds as server concurrency approaches 1.0 (100%)\n  const thresholds: Record<Priority, number> = {\n    2: 0.75, // Drop background/prefetch/crawler traffic above 75% load\n    1: 0.90, // Drop standard browse traffic above 90% load\n    0: 0.98  // Preserve critical checkout/payment traffic up to 98% load\n  };\n  return utilizationRatio >= thresholds[priority];\n}"
+      }
+    },
+    {
+      "heading": "Priority-Tiered & Cohort-Pinned Shedding",
+      "body": "Not all requests have equal business value. Dropping a background analytics ping or a web crawler request costs nothing, whereas dropping a user clicking 'Confirm Payment' loses a sale and breaks a multi-step session. Google, Uber, and Netflix assign a **Criticality Tier** header (`CRITICAL_PLUS`, `CRITICAL`, `SHEDDABLE_PLUS`, `SHEDDABLE`) to every internal RPC. Furthermore, to avoid breaking multi-call user workflows, servers hash the `user_id` or `session_id` to a score $[0, 100)$: if the server needs to shed 20% of traffic, it sheds all requests for users in score bucket $[80, 100)$ while allowing users in $[0, 80)$ to complete their entire multi-step checkout uninterrupted.",
+      "bullets": [
+        "**Rate Limiting vs Load Shedding**: Rate limiting enforces per-tenant fairness quotas regardless of server health; Load Shedding protects local server survival when physical resources (CPU, memory, event loop lag, in-flight concurrency) approach saturation.",
+        "**Session Cohort Pinning**: Shed by deterministic `hash(user_id) % 100` rather than random per-request coin flips so accepted users finish their full transaction flow."
+      ]
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "FIFO Queueing Without Load Shedding",
+      "pros": "Fair arrival ordering under normal load (< 70% utilization).",
+      "cons": "Catastrophic latency inflation under overload; every request in the queue times out (0% goodput).",
+      "bestFor": "Offline asynchronous job queues with no interactive client deadline."
+    },
+    {
+      "option": "Priority-Tiered Adaptive Load Shedding + LIFO",
+      "pros": "Guarantees near-100% goodput and sub-50ms latency for surviving high-priority requests even at 5x overload.",
+      "cons": "Requires propagating request priority headers and calibrating shedding thresholds.",
+      "bestFor": "High-scale API gateways, tier-0 microservices, and transactional databases."
+    }
+  ],
+  "interviewTip": "Distinguish **Rate Limiting** (customer-centric fairness at the edge) from **Load Shedding** (server-centric survival based on real-time CPU/queue saturation) and mention **Goodput vs Throughput**.",
+  "jsonUrl": "/api/subtopics/reliability/rel-load-shedding.json"
+}

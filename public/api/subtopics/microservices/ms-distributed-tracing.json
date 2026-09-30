@@ -1,0 +1,56 @@
+{
+  "id": "ms-distributed-tracing",
+  "topicId": "microservices",
+  "topicTitle": "Microservices",
+  "topicNumber": 9,
+  "subtopicNumber": "9.6",
+  "title": "Distributed Tracing",
+  "subtitle": "Propagating W3C Trace Context across RPC and message boundaries to reconstruct end-to-end request waterfalls.",
+  "readingTime": "5 min read",
+  "difficulty": "Intermediate",
+  "keyTakeaways": [
+    "A **Trace** represents the end-to-end journey of a single request (`trace-id`), composed of tree-structured **Spans** (`span-id` + `parent-span-id`).",
+    "Context propagation works by injecting the W3C `traceparent` header into outbound HTTP/gRPC calls and Kafka message headers.",
+    "**Tail-Based Sampling** retains 100% of traces that contain errors or high latency while sampling only 1% of boring successful traces."
+  ],
+  "architectureDiagram": "Trace Waterfall (trace-id: 4bf92f3577b34da6a3ce929d0e0e4736):\n[Span A: API Gateway (0ms -------------------------------------------------- 180ms)]\n   +-- [Span B: Order Service (10ms ----------------------------------- 165ms)]\n          +-- [Span C: Postgres INSERT (15ms ---- 35ms)]\n          +-- [Span D: Payment gRPC Call (40ms ------------------- 160ms)]\n                 +-- [Span E: Stripe Webhook/API (45ms --------- 155ms) ERROR 504]",
+  "sections": [
+    {
+      "heading": "Traces, Spans, and W3C `traceparent` Propagation",
+      "body": "In a monolith, debugging a slow request is as simple as inspecting a single stack trace or thread log. In a microservice architecture, a single user click may traverse an API Gateway, 4 gRPC services, 2 Kafka topics, and 3 databases across 10 different machines. **Distributed Tracing** (standardized via **OpenTelemetry**) stitches these causal hops together into a unified waterfall timeline. At the edge gateway, a globally unique 128-bit `trace-id` is generated. Each service operation creates a child **Span** with its own 64-bit `span-id`, records start/end timestamps and tags, and propagates the W3C `traceparent` header to downstream hops.",
+      "bullets": [
+        "**W3C `traceparent` Format**: `00-<32-hex-trace-id>-<16-hex-parent-span-id>-<2-hex-flags>` (e.g., `00-4bf92f35...-00f067aa0ba902b7-01`).",
+        "**Log Correlation**: Automatically inject `trace_id` and `span_id` into every structured JSON log line so engineers can jump from a trace span directly to the exact logs emitted during that span.",
+        "**Async Messaging Propagation**: Inject `traceparent` into Kafka record headers so asynchronous consumers link back to the originating producer trace."
+      ],
+      "codeSnippet": {
+        "title": "Propagating W3C Trace Context Across HTTP & Kafka (OpenTelemetry)",
+        "code": "import { context, propagation, trace } from \"@opentelemetry/api\";\n\nexport async function publishWithTraceContext(topic: string, payload: unknown) {\n  const tracer = trace.getTracer(\"order-service\");\n  return tracer.startActiveSpan(`kafka.produce:${topic}`, async (span) => {\n    const headers: Record<string, string> = {};\n    // Injects W3C 'traceparent' & 'tracestate' into Kafka message headers\n    propagation.inject(context.active(), headers);\n    await producer.send({ topic, messages: [{ value: JSON.stringify(payload), headers }] });\n    span.end();\n  });\n}"
+      }
+    },
+    {
+      "heading": "Head-Based vs Tail-Based Sampling",
+      "body": "At 100,000 RPS across 15 hops, recording and indexing 1,500,000 spans per second would cost more than the production application itself. **Head-Based Sampling** makes a random coin-flip decision (e.g., 1% sampled via flag `01`) at the API Gateway before the request executes. While cheap, Head-Based Sampling misses 99% of rare production errors and `p99.9` latency spikes! **Tail-Based Sampling** routes spans through an OpenTelemetry Collector tier (partitioned consistently by `trace_id`) which buffers a trace in memory for a few seconds and decides whether to store it *after* seeing if any span failed or breached a latency threshold.",
+      "bullets": [
+        "Route spans to Tail-Sampling Collector pods using `consistent_hash(trace_id)` so all spans of the same trace land on the same collector instance.",
+        "Combine **Metrics** (symptom detection via RED: Rate, Errors, Duration), **Traces** (isolating which service/hop is culpable), and **Logs** (root-cause exception details within that hop)."
+      ]
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Head-Based Sampling (Decision at Edge Ingress)",
+      "pros": "Extremely cheap and stateless; non-sampled requests incur zero span export overhead downstream.",
+      "cons": "Blind to whether the request will error or run slowly downstream; drops 99% of rare bug traces.",
+      "bestFor": "Ultra-high-volume services on a tight observability budget."
+    },
+    {
+      "option": "Tail-Based Sampling (Buffered in OTel Collector Tier)",
+      "pros": "Captures 100% of error traces and >1s slow traces while keeping storage costs low for normal traffic.",
+      "cons": "Requires stateful collector memory buffering and consistent-hash routing by `trace_id`.",
+      "bestFor": "Production microservice platforms prioritizing rapid incident MTTR."
+    }
+  ],
+  "interviewTip": "Mention **Tail-Based Sampling routed by `hash(trace_id)`** when discussing observability at scale—it shows you understand why naive 1% head-sampling fails to capture the exact 0.01% of failing requests engineers actually care about.",
+  "jsonUrl": "/api/subtopics/microservices/ms-distributed-tracing.json"
+}

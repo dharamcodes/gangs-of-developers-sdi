@@ -1,0 +1,57 @@
+{
+  "id": "http-1-1-vs-http-2-vs-http-3",
+  "topicId": "networking",
+  "topicTitle": "Networking",
+  "topicNumber": 2,
+  "subtopicNumber": "2.3",
+  "title": "HTTP/1.1 vs HTTP/2 vs HTTP/3",
+  "subtitle": "How web transport evolved from text-based serial connections to binary TCP multiplexing and finally QUIC over UDP.",
+  "readingTime": "8 min read",
+  "difficulty": "Intermediate",
+  "keyTakeaways": [
+    "HTTP/1.1 suffers from Application-Layer Head-of-Line (HoL) blocking, forcing browsers to open up to 6 parallel TCP connections per domain.",
+    "HTTP/2 introduces binary framing, HPACK header compression, and stream multiplexing over a single TCP connection—but remains vulnerable to TCP-Layer HoL blocking on packet loss.",
+    "HTTP/3 replaces TCP with QUIC over UDP, multiplexing independent streams in user space so a lost packet only stalls the single affected stream, while enabling 0-RTT/1-RTT combined TLS handshakes."
+  ],
+  "architectureDiagram": "HTTP/1.1 (6 TCP Conns)       HTTP/2 (1 TCP Conn)          HTTP/3 (QUIC over UDP)\n+------+ +------+ +------+   +------------------------+   +------------------------+\n|Req 1 | |Req 2 | |Req 3 |   | Stream 1 | Stream 2    |   | Stream 1 | Stream 2    |\n| (JS) | |(CSS) | |(Img) |   | (Framed) | (Framed)    |   | (QUIC)   | (QUIC)      |\n+------+ +------+ +------+   +------------------------+   +------------------------+\n| TCP  | | TCP  | | TCP  |   |   Single TCP Stream    |   |      UDP Datagrams     |\n+------+ +------+ +------+   +------------------------+   +------------------------+\nApp-layer HoL blocking!      Lost TCP pkt stalls ALL!     Lost pkt stalls ONLY S1!",
+  "sections": [
+    {
+      "heading": "From HTTP/1.1 Text Queues to HTTP/2 Binary Multiplexing",
+      "body": "In HTTP/1.1, requests on a persistent connection must be processed strictly in order: if Request #1 takes 200ms on the server, Request #2 behind it cannot receive its response first (Application-Layer Head-of-Line blocking). Browsers worked around this by opening 6 parallel TCP connections per origin and using hacks like CSS sprites and domain sharding. **HTTP/2** solved this at the application layer by breaking every request and response into small binary frames tagged with a `Stream ID`, allowing hundreds of concurrent requests to interleave over a **single TCP connection**, alongside HPACK header compression.",
+      "bullets": [
+        "Binary Framing Layer: Parses compact binary frames instead of error-prone newline-delimited ASCII text.",
+        "HPACK Header Compression: Eliminates redundant transmission of bloated `Cookie` and `User-Agent` headers across requests.",
+        "The Catch in HTTP/2: Because all HTTP/2 streams share one underlying TCP socket, if a single TCP packet drops on a lossy cellular network (2% packet loss), the OS kernel blocks ALL HTTP/2 streams until that packet is retransmitted!"
+      ],
+      "codeSnippet": {
+        "title": "Comparing Handshake Round-Trips Across HTTP Generations",
+        "code": "/*\n * Connection Setup Latency before First Byte of Application Request Sent:\n *\n * 1. HTTP/1.1 & HTTP/2 over TLS 1.2:\n *    - TCP 3-Way Handshake:        1 RTT\n *    - TLS 1.2 Handshake:          2 RTTs\n *    - Total Setup Cost:           3 RTTs before HTTP request!\n *\n * 2. HTTP/2 over TLS 1.3:\n *    - TCP 3-Way Handshake:        1 RTT\n *    - TLS 1.3 Handshake:          1 RTT\n *    - Total Setup Cost:           2 RTTs\n *\n * 3. HTTP/3 (QUIC over UDP with built-in TLS 1.3):\n *    - Transport + TLS Combined:   1 RTT (New connection)\n *    - Session Resumption:         0 RTT (Send HTTP request in very first packet!)\n */"
+      }
+    },
+    {
+      "heading": "HTTP/3 and QUIC: Solving TCP Head-of-Line Blocking",
+      "body": "To eliminate TCP-level Head-of-Line blocking without waiting 15 years for every OS kernel and middlebox router on Earth to upgrade TCP, Google designed **QUIC** (standardized as the transport layer for **HTTP/3**). QUIC runs on top of UDP in user space. It implements stream awareness directly inside the transport protocol: if a UDP packet carrying bytes for Stream #4 is lost, Streams #1, #2, and #3 continue delivering data to the application immediately.",
+      "bullets": [
+        "Combined Transport + Crypto Handshake: QUIC embeds TLS 1.3 directly into its handshake, requiring only 1 RTT for new connections and 0-RTT for resumed connections.",
+        "Connection Migration (Connection ID): When a user walks out of their house and switches from Wi-Fi IP to 5G Cellular IP, TCP connections break. QUIC identifies connections by a 64-bit `Connection ID`, surviving IP/port changes seamlessly!",
+        "QPACK Compression: Upgraded header compression tailored for out-of-order QUIC stream delivery."
+      ]
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "HTTP/2 over TCP",
+      "pros": "Universal support across all load balancers, corporate firewalls, and runtimes; low CPU overhead due to kernel TCP offload (TSO); required transport for gRPC.",
+      "cons": "Suffers from TCP-layer Head-of-Line blocking on lossy networks (>1-2% packet loss); breaks when client IP changes (Wi-Fi to 5G).",
+      "bestFor": "Internal data-center microservice communication (gRPC), stable broadband connections, and standard cloud backends."
+    },
+    {
+      "option": "HTTP/3 over QUIC (UDP)",
+      "pros": "Zero cross-stream HoL blocking on lossy mobile networks, 1-RTT/0-RTT handshakes, seamless Wi-Fi-to-Cellular connection migration.",
+      "cons": "Higher CPU usage in user-space UDP encryption/packet pacing, some enterprise networks block UDP port 443 (requires fallback to HTTP/2).",
+      "bestFor": "Mobile apps on spotty cellular connections, global CDN edge delivery (Cloudflare/Fastly), and latency-critical web apps."
+    }
+  ],
+  "interviewTip": "If your system design involves mobile clients on flaky networks (e.g., Uber driver app, WhatsApp, Instagram), explicitly recommend HTTP/3 (QUIC) at the CDN edge for connection migration (switching from Wi-Fi to 5G without dropping in-flight uploads) and 0-RTT resumption.",
+  "jsonUrl": "/api/subtopics/networking/http-1-1-vs-http-2-vs-http-3.json"
+}

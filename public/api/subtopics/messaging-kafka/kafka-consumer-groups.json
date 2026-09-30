@@ -1,0 +1,57 @@
+{
+  "id": "kafka-consumer-groups",
+  "topicId": "messaging-kafka",
+  "topicTitle": "Messaging / Kafka",
+  "topicNumber": 7,
+  "subtopicNumber": "7.3",
+  "title": "Consumer Groups",
+  "subtitle": "Coordinated horizontal scaling of consumers with dynamic partition assignment and rebalancing.",
+  "readingTime": "6 min read",
+  "difficulty": "Intermediate",
+  "keyTakeaways": [
+    "Within a single consumer group, each partition is assigned to at most one consumer instance at any given time.",
+    "If consumer instances exceed partition count, the extra consumers remain idle as warm standbys.",
+    "Cooperative incremental rebalancing avoids 'stop-the-world' pauses by only revoking partitions that actually need to move."
+  ],
+  "architectureDiagram": "Topic (4 Partitions)        Consumer Group A (Scale-Out)        Consumer Group B (Over-Provisioned)\n+-------------+             +--------------------------+        +--------------------------+\n| Partition 0 | ----------> | Consumer A1 (P0, P1)     |        | Consumer B1 (P0)         |\n| Partition 1 | --+         +--------------------------+        | Consumer B2 (P1)         |\n| Partition 2 | --|-------> | Consumer A2 (P2, P3)     |        | Consumer B3 (P2)         |\n| Partition 3 | --+         +--------------------------+        | Consumer B4 (P3)         |\n+-------------+                                                 | Consumer B5 (IDLE)       |\n                                                                +--------------------------+",
+  "sections": [
+    {
+      "heading": "Exclusive Partition Ownership & Group Coordination",
+      "body": "A Consumer Group is Kafka's mechanism for combining the semantics of point-to-point queues (load balancing across workers) and publish-subscribe (broadcasting to multiple services). One broker acts as the Group Coordinator, managing group membership via heartbeats. Within a single group, Kafka enforces a strict invariant: one partition can be consumed by only one consumer instance in that group simultaneously. This guarantees lock-free, ordered consumption per partition without race conditions.",
+      "bullets": [
+        "Max consumer parallelism per group is bounded by the number of partitions in the subscribed topic.",
+        "Heartbeats run on a background thread (`heartbeat.interval.ms`), while `max.poll.interval.ms` detects stuck processing threads.",
+        "Different consumer groups (e.g., `fraud-service` vs `search-indexer`) are completely isolated and read the full stream independently."
+      ],
+      "codeSnippet": {
+        "title": "Production Consumer Configuration (Cooperative Rebalancing)",
+        "code": "const consumer = kafka.consumer({\n  groupId: \"payment-ledger-writer-v1\",\n  sessionTimeout: 45000,       // Failure detection via missing heartbeats\n  heartbeatInterval: 3000,     // 1/3rd or less of sessionTimeout\n  maxPollInterval: 300000,     // Max time allowed between poll() calls (5m)\n  partitionAssigners: [PartitionAssigners.cooperativeSticky]\n});"
+      }
+    },
+    {
+      "heading": "Rebalance Storms & Cooperative Sticky Assignment",
+      "body": "When a consumer joins, crashes, or exceeds `max.poll.interval.ms` due to a slow downstream DB call, the Group Coordinator triggers a rebalance to reassign partitions. Historically, Eager rebalancing revoked ALL partitions from ALL consumers before reassigning them, causing a cluster-wide stop-the-world pause. If one overloaded consumer repeatedly timed out and rejoined, the group entered a 'rebalance storm' where zero messages were processed.",
+      "bullets": [
+        "Use `CooperativeStickyAssignor` (or KIP-848 next-gen protocol) so consumers keep processing unaffected partitions during rebalances.",
+        "Enable Static Group Membership (`group.instance.id`) so rolling Kubernetes restarts don't trigger immediate rebalances.",
+        "Keep `poll()` loops fast and bounded; never run unbounded synchronous retries inside the poll loop without pausing the consumer."
+      ]
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Eager Rebalancing (Range / RoundRobin Assignor)",
+      "pros": "Simple barrier synchronization; every rebalance starts from a clean slate.",
+      "cons": "Stop-the-world pause across the entire consumer group whenever a single pod restarts or scales.",
+      "bestFor": "Legacy clients or tiny consumer groups with negligible state."
+    },
+    {
+      "option": "Cooperative Sticky Assignment + Static Membership",
+      "pros": "Minimizes partition movement, preserves local cache affinity, and eliminates stop-the-world pauses.",
+      "cons": "Takes two short rebalance phases when revoking partitions; slightly delayed failover if static timeout is set too high.",
+      "bestFor": "Production microservices, stateful stream processors (Kafka Streams), and K8s rolling deployments."
+    }
+  ],
+  "interviewTip": "If an interviewer asks why adding more consumer pods didn't increase throughput, the immediate first check is whether `num_consumers > num_partitions`.",
+  "jsonUrl": "/api/subtopics/messaging-kafka/kafka-consumer-groups.json"
+}

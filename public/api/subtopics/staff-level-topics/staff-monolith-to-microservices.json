@@ -1,0 +1,58 @@
+{
+  "id": "staff-monolith-to-microservices",
+  "topicId": "staff-level-topics",
+  "topicTitle": "Staff-Level Topics",
+  "topicNumber": 12,
+  "subtopicNumber": "12.8",
+  "title": "Evolution from Monolith → Microservices",
+  "subtitle": "Modular monoliths, Domain-Driven Design bounded contexts, the Strangler Fig pattern, and database decomposition.",
+  "readingTime": "9 min read",
+  "difficulty": "Staff+",
+  "keyTakeaways": [
+    "Microservices primarily solve organizational scaling bottlenecks (100+ engineers stepping on each other's deployments and release trains), not raw compute performance—start with a Modular Monolith.",
+    "Never allow two microservices to share a physical database table; decompose the shared database *before* or *during* service extraction using dual-reading/dual-writing or Change Data Capture (CDC).",
+    "Migrate incrementally via the Strangler Fig pattern and Shadow Traffic verification at the API Gateway rather than attempting a high-risk 'big bang' cutover."
+  ],
+  "architectureDiagram": "                  [ API Gateway / Edge Router ]\n                   /            |             \\\n     (80% Legacy) /   (Shadow   |   (20% Canary\\\n                 /     Compare) |    Traffic)   \\\n                v               v                v\n+-----------------------+  [Diff Engine]  +-----------------------+\n|   Legacy Monolith     |                 | Extracted Order Svc   |\n| +-------------------+ |                 | +-------------------+ |\n| | Users | Catalog   | |                 | | Domain Logic      | |\n| +-------------------+ |                 | +---------+---------+ |\n| | Orders (Deprecated| |                 |           |           |\n| +---------+---------+ |                 |           v           |\n+-----------|-----------+                 | +-------------------+ |\n            v                             | | Isolated Order DB | |\n+-----------------------+   Debezium CDC  | +-------------------+ |\n| Shared Monolith DB    | ==============> +-----------------------+\n+-----------------------+",
+  "sections": [
+    {
+      "heading": "When to Decompose & Avoiding the Distributed Monolith",
+      "body": "Splitting a monolith too early creates a **Distributed Monolith**: a system with all the network latency, serialization overhead, and partial-failure complexity of microservices, combined with the tight coupling and lock-step deployment dependencies of a monolith.",
+      "bullets": [
+        "True Extraction Signals: Extract a bounded context when (1) independent teams are blocked by shared CI/CD release queues, (2) a module has radically different resource scaling needs (e.g., CPU-heavy video encoding vs I/O-bound CRUD), or (3) a domain requires strict security/PCI compliance isolation.",
+        "Enforce Modular Monolith Seams First: Before introducing network RPCs, refactor the monolith so the `Order` module only communicates with the `Inventory` module via an internal interface—banning cross-domain SQL `JOIN`s and foreign keys.",
+        "Right-Sizing Service Granularity: Align service boundaries with **DDD Bounded Contexts** (e.g., `Billing`, `Fulfillment`, `Identity`), not individual database tables ('Nano-services' like `UserAddressService` are an anti-pattern)."
+      ],
+      "codeSnippet": {
+        "title": "Strangler Fig Router with Asynchronous Shadow Read Comparison",
+        "code": "async function getOrderDetails(orderId: string): Promise<OrderResponse> {\n  if (featureFlags.isEnabled('route-orders-to-microservice', orderId)) {\n    return orderMicroserviceClient.getOrder(orderId);\n  }\n\n  // Legacy path remains authoritative while shadowing 10% to new microservice\n  const legacyResult = await monolithOrderRepo.findById(orderId);\n  if (Math.random() < 0.10) {\n    void orderMicroserviceClient.getOrder(orderId).then((newResult) => {\n      if (!deepEqual(legacyResult, newResult)) {\n        metrics.increment('strangler.order_read_parity_mismatch');\n      }\n    }).catch(() => metrics.increment('strangler.order_shadow_error'));\n  }\n  return legacyResult;\n}"
+      }
+    },
+    {
+      "heading": "The 5-Step Zero-Downtime Database Decomposition Playbook",
+      "body": "Extracting stateless code is easy; untangling a 5 TB `orders` table that has 40 monolith queries joining against `users` and `products` is the hardest part of migration.",
+      "bullets": [
+        "Step 1 (Logical Separation in Code): Replace SQL `JOIN`s between `orders` and `users` in the monolith with application-level composition (fetching user details via an internal `UserService` interface).",
+        "Step 2 (CDC / Backfill to New Store): Stand up the isolated `OrdersDB` and stream real-time binlog changes from the monolith DB via Debezium/Kafka while backfilling historical rows.",
+        "Step 3 (Shadow Reads & Parity Verification): Route read traffic to the new `OrderService` in dark-shadow mode, comparing responses field-by-field against the monolith until parity hits 99.999%.",
+        "Step 4 (Cutover Writes with Reverse CDC): Flip write authority to the new `OrderService` (`OrdersDB`), streaming reverse CDC back to the legacy monolith table briefly in case an instant rollback is needed."
+      ]
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Modular Monolith (Single Deployable, Strict Module Boundaries)",
+      "pros": "In-process function calls (nanoseconds), single ACID database transactions, simple deployment and local dev.",
+      "cons": "Shared blast radius (a memory leak or bad deploy impacts the whole process); shared language/runtime.",
+      "bestFor": "Startups, mid-size engineering orgs (<50 devs), and tightly coupled transactional domains."
+    },
+    {
+      "option": "Domain-Scoped Microservices (Isolated DB per Service)",
+      "pros": "Independent team deployment velocity, isolated fault blast radius, heterogeneous tech/scaling per domain.",
+      "cons": "Requires Sagas/Outbox for cross-service workflows, distributed tracing, and contract testing governance.",
+      "bestFor": "Large engineering organizations (100+ devs) with distinct domain boundaries and varied scaling profiles."
+    }
+  ],
+  "interviewTip": "If asked how to migrate a monolith to microservices, emphasize that **code extraction is trivial—data untangling is the critical path**, and walk through the 4-step CDC + Shadow Read parity verification pipeline.",
+  "jsonUrl": "/api/subtopics/staff-level-topics/staff-monolith-to-microservices.json"
+}

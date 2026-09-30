@@ -1,0 +1,57 @@
+{
+  "id": "db-optimistic-vs-pessimistic-locking",
+  "topicId": "database",
+  "topicTitle": "Database",
+  "topicNumber": 4,
+  "subtopicNumber": "4.5",
+  "title": "Optimistic vs Pessimistic Locking",
+  "subtitle": "Preventing lost updates and double-booking in high-concurrency reservation and inventory systems.",
+  "readingTime": "8 min read",
+  "difficulty": "Intermediate",
+  "keyTakeaways": [
+    "Pessimistic locking acquires exclusive row locks (`SELECT ... FOR UPDATE`) upfront before modifying data, serializing contending transactions.",
+    "Optimistic Concurrency Control (OCC) uses a `version` column or compare-and-swap (CAS) check at write time without holding database locks.",
+    "Choose Pessimistic locking when contention is high and rollbacks are expensive; choose Optimistic locking when contention is low or reads span user think-time."
+  ],
+  "architectureDiagram": "PESSIMISTIC LOCKING (SELECT FOR UPDATE)       OPTIMISTIC LOCKING (CAS / Version)\nTx A                  DB         Tx B         Tx A                  DB         Tx B\n |-- SELECT FOR UPD ->|           |            |-- Read (ver=1) --->|<-- Read (ver=1)\n |   (Row Locked)     |<-- SELECT |            |-- Compute...       |    Compute...\n |-- UPDATE & COMMIT->|    (Wait) |            |-- UPDATE WHERE --->|               |\n |                    |---> Lock  |            |   ver=1 (ver->2)   |<-- UPDATE     |\n |                    |   Granted |            |                    |    WHERE ver=1|\n |                    |           |            |                    |---> 0 rows!   |\n                                                                        (Retry/Fail)",
+  "sections": [
+    {
+      "heading": "Pessimistic Locking & Deadlock Prevention",
+      "body": "Pessimistic locking assumes conflicts are likely and blocks concurrent writers immediately using `SELECT ... FOR UPDATE`. While effective for short, high-contention server-side transactions (such as deducting flash-sale inventory), holding exclusive locks across multiple rows can trigger deadlocks if two transactions acquire locks in opposite orders.",
+      "bullets": [
+        "Consistent Lock Ordering: Always sort entity IDs ascending (`ORDER BY account_id ASC`) before running `SELECT ... FOR UPDATE` on multiple rows to mathematically prevent circular wait deadlocks.",
+        "`FOR UPDATE SKIP LOCKED`: Crucial pattern for database-backed job queues or ticket allocation where workers grab the next available unlocked item without waiting.",
+        "`NOWAIT` / Lock Timeouts: Always configure `SET lock_timeout = '2s'` so a stuck transaction fails fast rather than exhausting the connection pool."
+      ],
+      "codeSnippet": {
+        "title": "Optimistic CAS vs Pessimistic SKIP LOCKED in Ticket Booking",
+        "code": "-- 1. OPTIMISTIC LOCKING (Compare-And-Swap via version column)\nUPDATE seat_inventory\nSET status = 'RESERVED', reserved_by = 'usr_88', version = version + 1\nWHERE event_id = 'evt_1' AND seat_no = '14A'\n  AND status = 'AVAILABLE' AND version = 7;\n-- If affected_rows == 0, seat was taken concurrently -> return 409 Conflict.\n\n-- 2. PESSIMISTIC LOCKING (Assigning any available general-admission ticket)\nBEGIN;\nSELECT ticket_id FROM tickets\nWHERE event_id = 'evt_1' AND status = 'AVAILABLE'\nLIMIT 1 FOR UPDATE SKIP LOCKED;\n-- Update the locked ticket_id and COMMIT;"
+      }
+    },
+    {
+      "heading": "Optimistic Concurrency Control (OCC)",
+      "body": "Optimistic locking never holds a database lock while reading or computing. Every row includes an integer `version` (or `updated_at` timestamp / ETag). When writing back, the `UPDATE` predicate asserts `WHERE id = :id AND version = :read_version`. If another transaction modified the row in the interim, the version will have incremented, `0 rows` are updated, and the application either retries with fresh data or returns `409 Conflict`.",
+      "bullets": [
+        "Safe Across User Think-Time: Essential for collaborative wiki editing or e-commerce checkout forms where a user views a page for 30 seconds before submitting.",
+        "High Contention Collapse: If 500 users try to update the exact same hot row simultaneously under OCC, 499 will fail and retry in a storm, wasting CPU.",
+        "Atomic Single-Statement Updates: For simple counters (`SET stock = stock - 1 WHERE id = ? AND stock >= 1`), the database acquires an implicit row lock only for the duration of the `UPDATE`, combining the best of both worlds."
+      ]
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Optimistic Locking (Version / CAS)",
+      "pros": "No database locks held during reads; immune to deadlocks; scales well when conflicts are rare.",
+      "cons": "High retry overhead and wasted work under heavy contention on hot rows.",
+      "bestFor": "Low-to-medium contention updates, HTTP ETag APIs, and multi-step UI workflows."
+    },
+    {
+      "option": "Pessimistic Locking (SELECT FOR UPDATE)",
+      "pros": "Guarantees progress without wasted retries under high contention; supports `SKIP LOCKED`.",
+      "cons": "Reduces concurrency, holds connections longer, and introduces deadlock risks.",
+      "bestFor": "High-contention inventory allocation, wallet transfers, and worker queue claiming."
+    }
+  ],
+  "interviewTip": "In Ticketmaster or Hotel Booking interviews, propose `SELECT ... FOR UPDATE SKIP LOCKED` when picking from a pool of interchangeable items, or Optimistic Locking (`version = version + 1`) when users pick a specific seat map item.",
+  "jsonUrl": "/api/subtopics/database/db-optimistic-vs-pessimistic-locking.json"
+}

@@ -1,0 +1,57 @@
+{
+  "id": "connection-pooling",
+  "topicId": "networking",
+  "topicTitle": "Networking",
+  "topicNumber": 2,
+  "subtopicNumber": "2.8",
+  "title": "Connection Pooling",
+  "subtitle": "Amortizing TCP/TLS/Auth handshake costs, sizing pools correctly, and scaling serverless databases with proxies like PgBouncer.",
+  "readingTime": "7 min read",
+  "difficulty": "Intermediate",
+  "keyTakeaways": [
+    "Opening a fresh database connection on every query costs 20–50ms of TCP + TLS + DB authentication handshakes and spawns a dedicated OS process/thread on the DB server.",
+    "Connection pools maintain a warm cache of open sockets in the application or proxy tier, reducing connection acquisition time from ~30ms to <0.1ms.",
+    "More connections ≠ higher throughput: a PostgreSQL server with 16 CPU cores performs best with only ~35–50 active executing connections; beyond that, CPU context switching and lock contention degrade throughput."
+  ],
+  "architectureDiagram": "WITHOUT EXTERNAL POOLING (500 Pods x 20 Pool = 10,000 DB Connections -> DB Crashes!)\n[500 App Pods / Lambdas] ========(10,000 TCP Sockets)========> [ PostgreSQL (OOM!) ]\n\nWITH PGBOUNCER TRANSACTION POOLING (Multiplexed onto 50 Warm DB Connections)\n[500 App Pods / Lambdas] ===(10,000 Client Conns)===> [ PgBouncer ] ===(50 Warm Conns)===> [ PostgreSQL ]",
+  "sections": [
+    {
+      "heading": "Why Raw Database Connections Are Expensive",
+      "body": "When an application connects to a database like PostgreSQL, a multi-step ritual occurs: a TCP 3-way handshake, a TLS handshake, challenge-response credential authentication, and finally PostgreSQL `fork()`s a brand-new backend OS process allocating ~5–10MB of RAM. Doing this per HTTP request adds ~30ms of latency and caps throughput. **Connection Pooling** solves this by pre-establishing a bounded pool of warm connections at startup and lending them to worker threads for the duration of a query (or transaction).",
+      "bullets": [
+        "HikariCP / PostgreSQL Sizing Formula: `Pool Size = ((Core Count * 2) + Effective Spindle Count)`. A 16-core DB instance only needs ~35–50 concurrent active connections!",
+        "Pool Exhaustion & Acquire Timeouts: Always configure a strict `connectionTimeoutMillis` (e.g., 2,000ms) so requests fail fast rather than hanging forever when the DB slows down.",
+        "Idle Eviction & Max Lifetime: Periodically recycle connections (e.g., every 30 minutes with jitter) to respect DNS changes and avoid firewall idle drops."
+      ],
+      "codeSnippet": {
+        "title": "Production-Grade PostgreSQL Connection Pool Configuration",
+        "code": "import { Pool } from \"pg\";\n\nexport const dbPool = new Pool({\n  host: \"pgbouncer.internal.vpc\",\n  port: 6432,\n  max: 20,                        // Max connections per microservice pod\n  min: 4,                         // Keep 4 warm sockets ready at all times\n  idleTimeoutMillis: 30_000,      // Close idle extra connections after 30s\n  connectionTimeoutMillis: 2_000, // Fail fast if pool is exhausted > 2s\n  maxUses: 7500,                  // Recycle socket after 7500 queries (prevents memory leaks & balances DNS)\n});"
+      }
+    },
+    {
+      "heading": "External Connection Proxies: PgBouncer & RDS Proxy",
+      "body": "Suppose your database can safely handle 200 connections, and each pod has a pool size of 20. That works fine with 5 pods (100 connections). What happens when Kubernetes autoscales to 100 pods (2,000 connections) or you use AWS Lambda where 5,000 ephemeral functions spin up concurrently? Your database runs out of memory and crashes. The solution is an external connection pooler like **PgBouncer** or **AWS RDS Proxy** operating in **Transaction Pooling Mode**: it holds 10,000 lightweight client sockets on the front and multiplexes actual SQL transactions over just 50 physical database connections on the back.",
+      "bullets": [
+        "Session Pooling Mode: Assigns a backend connection for the client's entire session lifetime (supports temp tables, advisory locks).",
+        "Transaction Pooling Mode (Recommended at Scale): Assigns a physical DB connection *only* for the duration of a single `BEGIN...COMMIT` transaction or statement, achieving 20x–100x multiplexing ratios.",
+        "HTTP Keep-Alive Agents: Connection pooling isn't just for databases—always enable HTTP Keep-Alive connection pools in your REST/gRPC clients (`undici`/`axios`/`http.Agent`)."
+      ]
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Application-Side Connection Pool Only (HikariCP / node-pg)",
+      "pros": "Zero extra network hop, supports session-level features (prepared statements, `SET` variables, advisory locks).",
+      "cons": "Total DB connections scale linearly with `Pod Count × Pool Size`, crashing the DB during autoscaling events or serverless bursts.",
+      "bestFor": "Small-to-medium deployments with a fixed, predictable number of long-running application instances."
+    },
+    {
+      "option": "External Proxy Pooler in Transaction Mode (PgBouncer / RDS Proxy)",
+      "pros": "Decouples app fleet size from DB connection limits, supports 10,000+ serverless Lambda/pod connections over 50 DB backends, masks failover blips.",
+      "cons": "Adds ~0.2-0.5ms proxy hop; session-scoped SQL features (`LISTEN/NOTIFY`, session advisory locks) cannot be used in Transaction Mode.",
+      "bestFor": "Large microservice fleets (50+ pods), serverless architectures (AWS Lambda), and high-scale PostgreSQL/MySQL deployments."
+    }
+  ],
+  "interviewTip": "Whenever your design includes hundreds of microservice pods or serverless functions talking to a relational database, drop **PgBouncer (in Transaction Pooling mode)** in front of the database. Interviewers love seeing candidates protect the DB from connection exhaustion.",
+  "jsonUrl": "/api/subtopics/networking/connection-pooling.json"
+}

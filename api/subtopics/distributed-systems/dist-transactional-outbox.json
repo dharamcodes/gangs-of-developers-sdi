@@ -1,0 +1,57 @@
+{
+  "id": "dist-transactional-outbox",
+  "topicId": "distributed-systems",
+  "topicTitle": "Distributed Systems",
+  "topicNumber": 6,
+  "subtopicNumber": "6.11",
+  "title": "Transactional Outbox",
+  "subtitle": "Solving the Dual-Write problem between a database and a message broker (Kafka/RabbitMQ) with guaranteed at-least-once event publishing.",
+  "readingTime": "8 min read",
+  "difficulty": "Intermediate",
+  "keyTakeaways": [
+    "Never dual-write directly to a database and a message broker (`await db.save(); await kafka.send()`): if the process crashes or Kafka times out after the DB commit, the system enters permanent inconsistency.",
+    "The Transactional Outbox pattern inserts both the business entity AND an event row into an `outbox_events` table inside the **exact same local ACID transaction**.",
+    "A separate Message Relay (either a polling worker using `FOR UPDATE SKIP LOCKED` or Debezium CDC tailing the DB WAL) asynchronously publishes outbox rows to Kafka."
+  ],
+  "architectureDiagram": "                  TRANSACTIONAL OUTBOX PATTERN\n  [Order Service]\n        |\n        |  BEGIN LOCAL ACID TRANSACTION\n        |---> 1a. INSERT INTO orders (id, status) VALUES ('ord_1', 'PAID');\n        |---> 1b. INSERT INTO outbox_events (id, topic, payload) VALUES (...);\n        |  COMMIT; (Atomic: Both succeed or both roll back!)\n                                  |\n                     (2. Tail WAL via Debezium CDC\n                         OR Poll via SKIP LOCKED)\n                                  v\n                         [Outbox Relay Worker]\n                                  |\n                     (3. Publish with Idempotent Producer)\n                                  v\n                           [Kafka Broker]",
+  "sections": [
+    {
+      "heading": "Why Dual Writes Are Broken & How Outbox Solves It",
+      "body": "Suppose your `OrderService` needs to save a new order in PostgreSQL and publish an `OrderCreated` event to Kafka. If you commit to PostgreSQL first and the pod is OOM-killed 1ms before `kafka.send()` completes, the order exists in the DB but Downstream Inventory/Notification services never hear about it. Conversely, if you publish to Kafka first and the PostgreSQL commit fails due to a constraint error, downstream services process a phantom order that doesn't exist! The Transactional Outbox solves this by piggybacking on the local database's ACID transaction.",
+      "bullets": [
+        "Single Atomic Commit: Writing to `orders` and `outbox_events` in the same database uses a standard local transaction—no slow cross-system 2PC required.",
+        "Guaranteed At-Least-Once Delivery: Once the DB transaction commits, the event is durable on disk in `outbox_events`. The relay worker retries publishing to Kafka until Kafka acknowledges receipt.",
+        "Zero Impact from Broker Outages: If Kafka goes down for 15 minutes, user-facing API writes continue succeeding at full speed while events buffer safely in the `outbox_events` table."
+      ],
+      "codeSnippet": {
+        "title": "Transactional Outbox Write + SKIP LOCKED Polling Relay",
+        "code": "-- 1. Application Write Transaction:\nBEGIN;\nINSERT INTO orders (id, user_id, total_cents) VALUES ('ord_77', 'usr_1', 9900);\nINSERT INTO outbox_events (event_id, aggregate_id, topic, payload)\nVALUES ('evt_901', 'ord_77', 'orders.events', '{\"type\":\"ORDER_CREATED\",\"orderId\":\"ord_77\"}');\nCOMMIT;\n\n-- 2. Relay Worker Batch Claim & Delete (PostgreSQL):\nWITH claimed AS (\n  SELECT event_id, aggregate_id, topic, payload\n  FROM outbox_events\n  ORDER BY created_at ASC\n  LIMIT 100\n  FOR UPDATE SKIP LOCKED\n)\n-- Worker publishes `claimed` rows to Kafka (key = aggregate_id), then:\nDELETE FROM outbox_events WHERE event_id IN (SELECT event_id FROM claimed);"
+      }
+    },
+    {
+      "heading": "Transaction Log Mining (Debezium CDC) vs Polling Relay",
+      "body": "There are two ways to move records from the `outbox_events` table into Kafka:",
+      "bullets": [
+        "Polling Publisher (`SELECT ... FOR UPDATE SKIP LOCKED`): Simple to run with zero extra infrastructure; works well up to ~1,000–5,000 events/sec, though polling adds slight DB query overhead.",
+        "Transaction Log Tailer (Debezium CDC): Reads committed inserts directly from PostgreSQL's WAL or MySQL's binlog with near-zero read load on the database! Tip: even with Debezium, clean up old `outbox_events` rows via partitioning or immediately delete after insert (`INSERT` followed by `DELETE` still emits the WAL insert record!).",
+        "Downstream Deduplication (Transactional Inbox): Because the relay can crash after publishing to Kafka but before marking the outbox row sent, downstream consumers may receive the same `event_id` twice and must deduplicate."
+      ]
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Debezium CDC Log Tailer on Outbox Table",
+      "pros": "Sub-50ms latency; zero polling query load on the primary database; preserves strict WAL commit order.",
+      "cons": "Requires operating Kafka Connect and Debezium connectors; coupled to DB replication slots.",
+      "bestFor": "High-throughput microservice fleets already standardized on Kafka."
+    },
+    {
+      "option": "SQL Polling Relay Worker (`FOR UPDATE SKIP LOCKED`)",
+      "pros": "No CDC infrastructure needed; easy to implement in 30 lines of application code.",
+      "cons": "Adds polling CPU/IO overhead and MVCC dead-tuple churn on the database.",
+      "bestFor": "Low-to-medium throughput services (<2,000 events/sec) or non-Kafka brokers (SQS/RabbitMQ)."
+    }
+  ],
+  "interviewTip": "Whenever your architecture diagram shows a service writing to a DB and publishing an event to Kafka/SQS, draw or mention the 'Transactional Outbox Pattern'—interviewers frequently test whether candidates fall into the Dual-Write trap.",
+  "jsonUrl": "/api/subtopics/distributed-systems/dist-transactional-outbox.json"
+}

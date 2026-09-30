@@ -1,0 +1,57 @@
+{
+  "id": "ha-rpo-rto",
+  "topicId": "high-availability-cloud",
+  "topicTitle": "High-Availability / Cloud",
+  "topicNumber": 11,
+  "subtopicNumber": "11.5",
+  "title": "RPO / RTO",
+  "subtitle": "Quantifying maximum tolerable data loss (Recovery Point Objective) and maximum downtime (Recovery Time Objective).",
+  "readingTime": "7 min read",
+  "difficulty": "Foundational",
+  "keyTakeaways": [
+    "RPO (Recovery Point Objective) looks backward in time to measure maximum acceptable data loss (in seconds/hours of lost writes); RTO (Recovery Time Objective) looks forward from the disaster to measure maximum acceptable downtime until service restoration.",
+    "RPO is governed by your data replication and backup architecture (synchronous quorum vs async CDC vs periodic snapshots), whereas RTO is governed by your automation, standby warmth, and traffic-switching mechanisms.",
+    "As RPO and RTO approach zero, infrastructure and operational costs grow exponentially—requiring business-impact tiering across microservices."
+  ],
+  "architectureDiagram": "       Last Synced          DISASTER             Service Fully\n       Checkpoint           STRIKES!             Restored & Live\n           |                   |                       |\nPast ------+-------------------+-----------------------+------> Future\n           |<----- RPO ------->|<-------- RTO -------->|\n           | (Max Data Loss    | (Max Downtime Window: |\n           |  Window: Writes   |  Detect + Promote +   |\n           |  lost in flight)  |  Replay + Route)      |",
+  "sections": [
+    {
+      "heading": "Distinguishing RPO (Data Loss) from RTO (Service Downtime)",
+      "body": "RPO and RTO are the two foundational constraints of continuity engineering. Although often mentioned together, they are orthogonal engineering metrics solved by completely different mechanisms.",
+      "bullets": [
+        "RPO (Recovery Point Objective): Answers 'How much recent data can we afford to lose forever?' If a database takes snapshots at 12:00 PM and crashes at 12:45 PM without WAL archiving, 45 minutes of transactions are lost (RPO = 1 hour).",
+        "RTO (Recovery Time Objective): Answers 'How long can the system remain unavailable after an incident begins?' Includes alert detection time, human/automated decision time, infrastructure boot time, WAL replay, and DNS propagation.",
+        "Continuous WAL Archiving (PITR): Shipping Postgres/MySQL WAL segments continuously to S3 reduces RPO from hours (snapshot interval) down to seconds, even if RTO remains 20 minutes to restore the snapshot and replay the WAL."
+      ],
+      "codeSnippet": {
+        "title": "Automated RTO/RPO Tier Classification Matrix",
+        "code": "export const DR_TIERS = {\n  TIER_0_CRITICAL: {\n    examples: ['Auth', 'Payment Ledger', 'Checkout'],\n    rpoTarget: '0 seconds (Sync Multi-AZ Quorum)',\n    rtoTarget: '< 1 minute (Automated Active-Active / Hot Standby)',\n  },\n  TIER_1_CORE: {\n    examples: ['Order History', 'User Profile', 'Search'],\n    rpoTarget: '< 5 seconds (Async Cross-Region Replica)',\n    rtoTarget: '< 15 minutes (Warm Standby Promotion)',\n  },\n  TIER_2_INTERNAL: {\n    examples: ['BI Analytics', 'Admin Portal', 'Billing Batch'],\n    rpoTarget: '< 1 hour (Continuous S3 WAL + Hourly Snapshots)',\n    rtoTarget: '< 4 hours (Backup & Restore via Terraform)',\n  },\n};"
+      }
+    },
+    {
+      "heading": "The Cost Curve of Near-Zero RPO and RTO",
+      "body": "Designing every service for RPO = 0 and RTO = 0 bankrupts engineering budgets and slows velocity. Staff engineers map business revenue/compliance impact to tiered RPO/RTO budgets.",
+      "bullets": [
+        "Achieving RPO = 0 Across Regions: Requires synchronous cross-region consensus before acknowledging client writes, adding 30-80ms of WAN latency to every transaction.",
+        "Achieving Near-Zero RTO (< 30s): Requires pre-provisioned hot capacity in a secondary region, continuous cache warming, and automated health-check traffic shifting without human-in-the-loop approval.",
+        "Idempotent Client Replay for Effective RPO = 0: Even if an async regional database loses the last 2 seconds of writes (storage RPO = 2s), buffering raw client commands in a multi-region durable edge queue or client retry buffer allows replaying lost mutations."
+      ]
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Zero RPO (Synchronous Cross-Site Replication)",
+      "pros": "Guaranteed zero committed transactions lost even if an entire facility is destroyed.",
+      "cons": "Every write pays round-trip network latency to the remote site; remote site brownouts stall primary writes.",
+      "bestFor": "Core financial ledgers, regulatory compliance records, and cryptographic key management."
+    },
+    {
+      "option": "Near-Zero RPO (<5s Async Replication + WAL Streaming)",
+      "pros": "Sub-millisecond local write latency; primary remains unaffected by remote site network jitter.",
+      "cons": "Up to a few seconds of committed writes may be lost or require reconciliation after an ungraceful primary crash.",
+      "bestFor": "95% of high-scale web applications, e-commerce catalogs, social feeds, and SaaS platforms."
+    }
+  ],
+  "interviewTip": "Clarify RPO and RTO in the first 3 minutes of any storage or DR design interview: asking 'Do we require RPO = 0 across regions, or is RPO < 5 seconds with async replication acceptable?' immediately narrows down the database choices.",
+  "jsonUrl": "/api/subtopics/high-availability-cloud/ha-rpo-rto.json"
+}

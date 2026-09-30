@@ -1,0 +1,57 @@
+{
+  "id": "kafka-partitions",
+  "topicId": "messaging-kafka",
+  "topicTitle": "Messaging / Kafka",
+  "topicNumber": 7,
+  "subtopicNumber": "7.2",
+  "title": "Partitions",
+  "subtitle": "Sharding topics across brokers for horizontal write throughput and parallel consumption.",
+  "readingTime": "6 min read",
+  "difficulty": "Foundational",
+  "keyTakeaways": [
+    "A partition is the fundamental unit of parallelism, storage sharding, and ordering in Kafka.",
+    "Records with a partition key are hashed deterministically (Murmur2) to a specific partition; keyless records use sticky batching.",
+    "Hot partitions occur when a skewed key distribution funnels disproportionate traffic to a single broker."
+  ],
+  "architectureDiagram": "Producer Record (Key: \"user_42\")\n       |\n       v\n[ murmur2(\"user_42\") % 3 == 1 ]\n       |\n       +---------------------------+\n                                   |\n                                   v\nBroker 1                     Broker 2                     Broker 3\n+--------------------+       +--------------------+       +--------------------+\n| Topic-A Part 0 (L) |       | Topic-A Part 1 (L) |       | Topic-A Part 2 (L) |\n| [0][1][2][3]       |       | [0][1][2][3][NEW]  |       | [0][1][2]          |\n+--------------------+       +--------------------+       +--------------------+",
+  "sections": [
+    {
+      "heading": "Physical Storage Sharding & Key Routing",
+      "body": "A topic is a logical grouping, whereas a Partition is the physical unit of storage and throughput. Because a single broker disk and network interface cannot scale infinitely, Kafka splits a topic into N partitions distributed across multiple brokers. Each partition is an independent directory of segment files on disk. When a producer sends a message, the partitioner determines the target partition: if a key is present, it computes hash(key) % numPartitions; if null, the Sticky Partitioner fills a batch for one random partition before switching to the next to maximize batching efficiency.",
+      "bullets": [
+        "Sequential disk I/O and OS page-cache zero-copy (sendfile syscall) allow a single partition to sustain tens of megabytes per second.",
+        "Increasing partition count mid-flight breaks key-to-partition hash co-location for historical data.",
+        "Each partition is led by exactly one broker at any time, which handles all reads and writes (unless follower fetching is enabled)."
+      ],
+      "codeSnippet": {
+        "title": "Custom Composite Key Partitioner (Salting for Hot Keys)",
+        "code": "function selectPartition(key: string, isHotCustomer: boolean, totalPartitions: number): number {\n  const effectiveKey = isHotCustomer\n    ? `${key}#${Math.floor(Math.random() * 8)}` // Add 0..7 salt to spread hot key across 8 partitions\n    : key;\n  return Math.abs(murmur2Hash(effectiveKey)) % totalPartitions;\n}"
+      }
+    },
+    {
+      "heading": "Mitigating Hot Partitions & Skew",
+      "body": "Just like database sharding, Kafka partitions are vulnerable to the celebrity/hot-key problem. If partition routing is keyed by merchant_id and Amazon accounts for 35% of platform transactions, a single partition—and thus a single broker CPU/disk—will saturate while other brokers sit idle. Worse, because only one consumer thread in a consumer group can read from that partition, downstream processing for that partition will fall behind.",
+      "bullets": [
+        "Use compound keys (e.g., merchant_id + device_id) when global per-merchant ordering is not strictly required.",
+        "Apply key salting for known high-volume tenants and re-aggregate downstream in stream processors.",
+        "Avoid over-partitioning: thousands of partitions per broker increase end-to-end latency and replication overhead."
+      ]
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Deterministic Key-Based Partitioning",
+      "pros": "Guarantees that all events for the same entity land in the exact same partition in strict arrival order.",
+      "cons": "Susceptible to hot partition skew if certain keys generate orders of magnitude more events.",
+      "bestFor": "Stateful stream processing, CDC replication, and per-user/per-order state machines."
+    },
+    {
+      "option": "Sticky Round-Robin Partitioning (Null Key)",
+      "pros": "Evenly balances load across all partitions and brokers while preserving high producer batching efficiency.",
+      "cons": "Zero ordering guarantees across related events; events for the same entity scatter across partitions.",
+      "bestFor": "Stateless telemetry, clickstream ingestion, and log aggregation."
+    }
+  ],
+  "interviewTip": "Be careful when proposing 'let's just add more partitions on the fly' during a traffic spike: adding partitions changes `hash(key) % N`, breaking key locality and per-key ordering for in-flight entities.",
+  "jsonUrl": "/api/subtopics/messaging-kafka/kafka-partitions.json"
+}

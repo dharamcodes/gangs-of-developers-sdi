@@ -1,0 +1,58 @@
+{
+  "id": "consistency-models",
+  "topicId": "core-fundamentals",
+  "topicTitle": "Core Fundamentals",
+  "topicNumber": 1,
+  "subtopicNumber": "1.6",
+  "title": "Consistency Models",
+  "subtitle": "The spectrum from Linearizability and Sequential Consistency down to Causal, Read-Your-Writes, and Eventual Consistency.",
+  "readingTime": "8 min read",
+  "difficulty": "Advanced",
+  "keyTakeaways": [
+    "Consistency is not binary ('Strong vs Eventual')—it is a rich spectrum trading off coordination latency against anomalous read behaviors.",
+    "Linearizability is the strongest single-object model (real-time ordering), whereas Serializability is a multi-object transactional guarantee.",
+    "In 80% of user-facing systems, Eventual Consistency paired with 'Read-Your-Own-Writes' session guarantees feels indistinguishable from Strong Consistency at a fraction of the cost."
+  ],
+  "architectureDiagram": "STRONGEST (Highest Latency / Coordination)\n  ^\n  |  [ Linearizability ]       -> Real-time global ordering (wall-clock)\n  |  [ Sequential Consistency ]-> All nodes see operations in same logical order\n  |  [ Causal Consistency ]    -> Causally related ops ordered; concurrent ops free\n  |  [ Read-Your-Writes ]      -> Client always sees its own updates immediately\n  |  [ Eventual Consistency ]  -> Replicas converge if writes stop (no ordering)\n  v\nWEAKEST (Lowest Latency / Maximum Availability)",
+  "sections": [
+    {
+      "heading": "Navigating the Consistency Spectrum",
+      "body": "A consistency model is a contract between a distributed data store and the application developer regarding what values a `read(x)` is allowed to return when concurrent writes are happening across replicas. Choosing a weaker consistency model allows replicas to respond locally without cross-datacenter coordination, dramatically reducing latency and surviving network splits.",
+      "bullets": [
+        "Linearizability (Strongest): Once a write completes, all subsequent reads (by wall-clock time) across any replica MUST return that value or a newer one.",
+        "Sequential Consistency: Operations appear to execute in some single global order, consistent with each client's program order, but without strict real-time bounds.",
+        "Causal Consistency: If operation A causally precedes operation B (e.g., a reply to a comment), every node must see the comment before the reply.",
+        "Eventual Consistency: If no new updates are made, all replicas eventually converge to the same state via anti-entropy/gossip."
+      ],
+      "codeSnippet": {
+        "title": "Implementing Read-Your-Own-Writes via Monotonic Version Tokens",
+        "code": "// After a user writes to the Primary DB, we return the DB Log Sequence Number (LSN)\n// On subsequent reads, we only query a Read Replica if it has caught up to that LSN!\nexport async function readUserProfile(\n  userId: string,\n  clientLastSeenLsn: bigint,\n  primaryDb: DbNode,\n  replicaDb: DbNode\n) {\n  const replicaCurrentLsn = await replicaDb.getReplicationLsn();\n  if (replicaCurrentLsn >= clientLastSeenLsn) {\n    return replicaDb.query(\"SELECT * FROM users WHERE id = $1\", [userId]);\n  }\n  // Replica is lagging behind the user's own write; route to Primary!\n  return primaryDb.query(\"SELECT * FROM users WHERE id = $1\", [userId]);\n}"
+      }
+    },
+    {
+      "heading": "Client-Centric Session Guarantees",
+      "body": "Often you want the scalability of asynchronous read replicas without confusing the user who just updated their profile picture and hit refresh. Client-centric consistency models solve this by scoping guarantees to a single user session rather than all users globally.",
+      "bullets": [
+        "Read-Your-Writes: A user who updates their bio is routed to the leader (or tracks an LSN watermark) so they immediately see their change.",
+        "Monotonic Reads: Once a user sees value `V2`, they will never be routed to a lagging replica that still returns `V1` ( prevents 'time travel').",
+        "Monotonic Writes: A user's writes are serialized in the order they were issued by that client."
+      ]
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Linearizability / Strong Consistency",
+      "pros": "Eliminates stale reads, race conditions, and out-of-order causal anomalies; easiest mental model for engineers.",
+      "cons": "Requires Raft/Paxos or TrueTime coordination on every read/write; bounded by cross-AZ or cross-region speed of light.",
+      "bestFor": "Distributed lock managers, financial balances, uniqueness constraints (usernames), and access control lists."
+    },
+    {
+      "option": "Causal / Read-Your-Writes Consistency",
+      "pros": "Can be fully satisfied while network-partitioned (strongest model possible in an AP system!); low local read latency.",
+      "cons": "Requires tracking dependency graphs (vector clocks or LSN watermarks) in client tokens or session middleware.",
+      "bestFor": "Comment threads, chat applications, collaborative editing, and user profile updates."
+    }
+  ],
+  "interviewTip": "A classic Staff+ move in interviews: when designing a feed or profile service with read replicas, explicitly mention adding a 'Read-Your-Writes' LSN token or sticky routing for 5 seconds after a mutation so users never think their write failed.",
+  "jsonUrl": "/api/subtopics/core-fundamentals/consistency-models.json"
+}

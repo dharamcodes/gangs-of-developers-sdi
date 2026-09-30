@@ -1,0 +1,57 @@
+{
+  "id": "db-replication",
+  "topicId": "database",
+  "topicTitle": "Database",
+  "topicNumber": 4,
+  "subtopicNumber": "4.6",
+  "title": "Replication",
+  "subtitle": "Single-leader, multi-leader, and leaderless database replication topologies, WAL shipping, and failover mechanics.",
+  "readingTime": "8 min read",
+  "difficulty": "Intermediate",
+  "keyTakeaways": [
+    "Single-Leader (Primary-Replica) replication routes all writes to the primary node and streams WAL/binlog changes to replicas.",
+    "Synchronous replication guarantees zero data loss (RPO = 0) on primary failure at the cost of higher write latency; asynchronous replication risks losing in-flight writes (RPO > 0).",
+    "Semi-synchronous replication waits for at least one in-sync standby to acknowledge WAL receipt before committing, balancing durability and latency."
+  ],
+  "architectureDiagram": "                 +-----------------------------+\n   Writes -----> |   Primary DB (Leader)       |\n                 |   [Appends to WAL/Binlog]   |\n                 +-----------------------------+\n                    /                       \\\n  Sync WAL Stream  / (ACK before commit)     \\  Async WAL Stream\n  (RPO = 0)       v                           v (Lag: ~10-100ms)\n     +-------------------------+   +-------------------------+\n     | Sync Standby Replica    |   | Async Read Replica      |\n     | (Failover Candidate)    |   | (Serves Read Traffic)   |\n     +-------------------------+   +-------------------------+",
+  "sections": [
+    {
+      "heading": "Physical vs Logical Replication Formats",
+      "body": "Database engines replicate state changes using two primary log formats. Physical (block/WAL) replication ships exact byte-for-byte disk page modifications, making replicas identical clones of the primary. Logical (row-based binlog) replication streams higher-level row mutations (`INSERT`, `UPDATE` before/after images), enabling cross-version upgrades and Change Data Capture (CDC) pipelines.",
+      "bullets": [
+        "Statement-Based Replication: Ships raw SQL strings; broken by non-deterministic functions like `NOW()` or `UUID()`.",
+        "Write-Ahead Log (Physical) Shipping: Fast and low overhead, but tightly coupled to the exact OS architecture and database major version.",
+        "Logical Replication / Row-Based Binlog: Powers Debezium CDC streams into Kafka, Elasticsearch, and data warehouses."
+      ],
+      "codeSnippet": {
+        "title": "PostgreSQL Semi-Synchronous Quorum Replication Config",
+        "code": "# postgresql.conf on Primary Node\nwal_level = replica\nmax_wal_senders = 10\n\n# Wait for ANY 1 of the standby nodes to flush WAL to disk before ACK\nsynchronous_commit = on\nsynchronous_standby_names = 'ANY 1 (standby_az1, standby_az2)'\n\n-- Verify replication lag across standbys:\nSELECT client_addr, state, sync_state,\n       pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn) AS lag_bytes\nFROM pg_stat_replication;"
+      }
+    },
+    {
+      "heading": "Failover Hazards & Split-Brain Mitigation",
+      "body": "When a primary node stops responding to heartbeats, an orchestrator (e.g., Patroni, Orchestrator, AWS RDS Multi-AZ) promotes a standby replica to primary. If replication was asynchronous, the old primary may have acknowledged writes that never reached the new primary—causing silent data loss and primary-key collisions if the old primary rejoins.",
+      "bullets": [
+        "Split-Brain: Two nodes both believe they are the active primary and accept conflicting writes; prevented via STONITH (fencing tokens) and consensus leases (etcd/ZooKeeper).",
+        "Multi-Leader Replication: Used in multi-region active-active setups; requires conflict resolution (Last-Write-Wins, CRDTs, or custom merge logic).",
+        "Recovery Point Objective (RPO) vs Recovery Time Objective (RTO): Sync replication targets RPO = 0; automated failover targets RTO < 30 seconds."
+      ]
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Synchronous / Semi-Synchronous Replication",
+      "pros": "Guarantees zero data loss (RPO = 0) upon primary crash; strong read consistency on standby.",
+      "cons": "Write latency increases by the network round-trip time (RTT) to the synchronous replica.",
+      "bestFor": "Payments, user accounts, and multi-AZ high-availability primaries within the same region."
+    },
+    {
+      "option": "Asynchronous Replication",
+      "pros": "Primary write latency is completely decoupled from replica network spikes or replica outages.",
+      "cons": "Recent committed writes may be lost if the primary crashes before shipping its WAL.",
+      "bestFor": "Cross-region disaster recovery replicas and read-scaling replicas."
+    }
+  ],
+  "interviewTip": "Recommend Semi-Synchronous replication across 3 Availability Zones (1 Primary + 2 Standbys, where at least 1 standby must ACK WAL flush) as the gold standard for production OLTP databases.",
+  "jsonUrl": "/api/subtopics/database/db-replication.json"
+}

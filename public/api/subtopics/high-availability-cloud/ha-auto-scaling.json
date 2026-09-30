@@ -1,0 +1,57 @@
+{
+  "id": "ha-auto-scaling",
+  "topicId": "high-availability-cloud",
+  "topicTitle": "High-Availability / Cloud",
+  "topicNumber": 11,
+  "subtopicNumber": "11.7",
+  "title": "Auto Scaling",
+  "subtitle": "Target-tracking vs queue-depth scaling, predictive pre-warming, oscillation damping, and cold-start mitigation.",
+  "readingTime": "8 min read",
+  "difficulty": "Intermediate",
+  "keyTakeaways": [
+    "Scale stateless tiers on leading work indicators (queue depth per worker, active concurrent requests) rather than lagging host metrics like memory or raw CPU alone.",
+    "Asymmetric cooldown windows (fast scale-out in 30-60s, conservative scale-in over 10-15m) prevent thrashing and premature termination of warm instances during bumpy traffic.",
+    "Reactive auto-scaling is too slow for sudden flash crowds (e.g., ticket drops or push notifications) because container image pull + JVM/app boot + cache warmup takes 60-180 seconds—requiring Predictive or Scheduled pre-scaling."
+  ],
+  "architectureDiagram": "  +-----------------------+     +-----------------------+     +-----------------------+\n  | 1. Reactive Metric    |     | 2. Queue-Depth KEDA   |     | 3. Predictive / Cron  |\n  | CPU > 65% or RPS/Pod  |     | Backlog / TargetLag   |     | ML Forecast / Event   |\n  +-----------+-----------+     +-----------+-----------+     +-----------+-----------+\n              \\                             |                             /\n               +----------------------------+----------------------------+\n                                            |\n                                            v\n                      +-------------------------------------------+\n                      | Horizontal Pod / Instance Autoscaler      |\n                      | desired = ceil(current * (metric/target)) |\n                      | - Scale-Up Stabilization:   0s - 30s      |\n                      | - Scale-Down Stabilization: 600s (10m)    |\n                      +---------------------+---------------------+\n                                            |\n                                            v\n                      [ Karpenter / Cluster Node Provisioner ]",
+  "sections": [
+    {
+      "heading": "Scaling Control Loops, Signals, and Thrashing Prevention",
+      "body": "Auto-scaling dynamically adjusts compute capacity to match demand through a closed-loop proportional controller: $\\text{Desired Replicas} = \\lceil \\text{Current Replicas} \\times (\\frac{\\text{Current Metric}}{\\text{Target Metric}}) \\rceil$. Choosing the right control signal determines whether the controller stabilizes or oscillates.",
+      "bullets": [
+        "Why Memory Is a Poor Scale-In Metric: Managed runtimes (JVM, Go, Node.js) rarely return freed heap pages to the OS immediately; scaling on memory causes the cluster to scale out to max replicas and never scale back down.",
+        "Queue-Based Event-Driven Scaling (KEDA): For async workers, scale based on `queue_backlog / acceptable_processing_rate_per_worker` so backlog drain time stays constant regardless of spike size.",
+        "Asymmetric Stabilization Windows: Scale out aggressively as soon as demand spikes, but enforce a 10-to-15-minute stabilization cooldown before scaling in, draining existing in-flight connections gracefully (`SIGTERM` + `preStop` sleep)."
+      ],
+      "codeSnippet": {
+        "title": "Kubernetes HPA v2 with Asymmetric Scale-Up/Scale-Down Behavior",
+        "code": "apiVersion: autoscaling/v2\nkind: HorizontalPodAutoscaler\nmetadata:\n  name: checkout-api-hpa\nspec:\n  scaleTargetRef:\n    apiVersion: apps/v1\n    kind: Deployment\n    name: checkout-api\n  minReplicas: 12\n  maxReplicas: 200\n  metrics:\n    - type: Pods\n      pods:\n        metric:\n          name: http_requests_per_second\n        target:\n          type: AverageValue\n          averageValue: 500\n  behavior:\n    scaleUp:\n      stabilizationWindowSeconds: 0\n      policies:\n        - type: Percent\n          value: 100\n          periodSeconds: 30\n    scaleDown:\n      stabilizationWindowSeconds: 600\n      policies:\n        - type: Percent\n          value: 10\n          periodSeconds: 60"
+      }
+    },
+    {
+      "heading": "Cold-Start Lag, Overprovisioning Headroom, and Downstream Backpressure",
+      "body": "When a pod scales out, if the underlying Kubernetes cluster has no spare node capacity, provisioning a new cloud VM takes 45-90s, pulling container images takes 15-30s, and warming JIT/connection pools takes another 15s.",
+      "bullets": [
+        "Pause-Pod Overprovisioning (Headroom Buffer): Run low-priority 'pause/balloon pods' that reserve 15% spare node CPU/RAM. When real production pods scale out, they immediately preempt the pause pods in <2 seconds while Karpenter provisions new VMs in the background.",
+        "Predictive & Scheduled Scaling: Use historical diurnal traffic patterns (or pre-scheduled cron rules before marketing push notifications / live sports events) to pre-scale capacity 15 minutes ahead of the wave.",
+        "Protecting Non-Scalable Bottlenecks: Scaling stateless app pods from 20 to 200 (each opening 20 DB connections) suddenly demands 4,000 Postgres connections, crashing the database! Always cap `maxReplicas` or place a connection pooler (PgBouncer/RDS Proxy) in front of stateful stores."
+      ]
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Reactive Target-Tracking Auto-Scaling",
+      "pros": "Zero manual intervention; adapts organically to organic diurnal curves and unexpected traffic shifts.",
+      "cons": "Lags behind instantaneous flash spikes by 1-3 minutes (cold start window), risking initial 503 drops.",
+      "bestFor": "Standard web APIs, microservices with gradual organic traffic growth, and background consumer pools."
+    },
+    {
+      "option": "Predictive + Pause-Pod Headroom Scaling",
+      "pros": "Sub-second pod scheduling into warm spare node capacity; handles vertical flash-crowd spikes cleanly.",
+      "cons": "Pays continuously for 10-20% idle 'balloon' node buffer capacity.",
+      "bestFor": "Flash sales, live streaming events, ride-hailing surge windows, and push-notification backends."
+    }
+  ],
+  "interviewTip": "Always warn about the 'Auto-Scaling Database DoS' in interviews: horizontally auto-scaling your stateless tier 10x will immediately exhaust database connections and melt your stateful tier unless you enforce connection pooling and hard concurrency limits.",
+  "jsonUrl": "/api/subtopics/high-availability-cloud/ha-auto-scaling.json"
+}

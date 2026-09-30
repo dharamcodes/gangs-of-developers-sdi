@@ -1,0 +1,57 @@
+{
+  "id": "db-isolation-levels",
+  "topicId": "database",
+  "topicTitle": "Database",
+  "topicNumber": 4,
+  "subtopicNumber": "4.4",
+  "title": "Isolation Levels",
+  "subtitle": "Understanding concurrency anomalies (Dirty Reads, Non-Repeatable Reads, Phantom Reads, Write Skew) and ANSI SQL isolation guarantees.",
+  "readingTime": "10 min read",
+  "difficulty": "Advanced",
+  "keyTakeaways": [
+    "Read Committed (default in PostgreSQL) prevents dirty reads, but allows non-repeatable reads and write skew within the same transaction.",
+    "Repeatable Read / Snapshot Isolation prevents non-repeatable reads by freezing a snapshot at transaction start, yet remains vulnerable to Write Skew.",
+    "Serializable (via SSI or 2PL) guarantees execution equivalent to a serial one-by-one schedule, eliminating all concurrency anomalies at the cost of serialization retries."
+  ],
+  "architectureDiagram": "+---------------------+------------+-------------------+---------------+------------+\n| Isolation Level     | Dirty Read | Non-Repeatable Rd | Phantom Read  | Write Skew |\n+---------------------+------------+-------------------+---------------+------------+\n| Read Uncommitted    | Possible   | Possible          | Possible      | Possible   |\n| Read Committed      | Prevented  | Possible          | Possible      | Possible   |\n| Repeatable Read (SI)| Prevented  | Prevented         | Engine-Depend | Possible   |\n| Serializable (SSI)  | Prevented  | Prevented         | Prevented     | Prevented  |\n+---------------------+------------+-------------------+---------------+------------+",
+  "sections": [
+    {
+      "heading": "Concurrency Anomalies Explained",
+      "body": "When multiple transactions execute concurrently, subtle race conditions emerge if isolation is weak. Beyond classic Dirty Reads (reading uncommitted data) and Non-Repeatable Reads (reading a row twice and seeing different committed values), senior engineers must watch out for Lost Updates and Write Skew.",
+      "bullets": [
+        "Lost Update: Two transactions read `counter = 10`, both increment in memory, and both write `11`, losing one increment.",
+        "Phantom Read: Transaction A queries `WHERE status = 'ON_CALL'`, Transaction B inserts a new matching row and commits, changing the result set of A's range query.",
+        "Write Skew (The On-Call Doctor Problem): Two doctors are on call (invariant: >= 1 must remain on call). Under Snapshot Isolation, both concurrently read `count = 2`, both update their own row to `off_call`, and both commit—leaving 0 doctors on call!"
+      ],
+      "codeSnippet": {
+        "title": "Preventing Write Skew with Serializable Snapshot Isolation (SSI)",
+        "code": "-- Doctor A and Doctor B run this concurrently:\nBEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;\n\n-- Both transactions read count = 2 in their snapshot\nSELECT COUNT(*) FROM doctors WHERE shift_id = 42 AND on_call = true;\n\n-- Doctor A updates Alice; Doctor B updates Bob (disjoint rows!)\nUPDATE doctors SET on_call = false\nWHERE shift_id = 42 AND doctor_id = 'doc_alice';\n\nCOMMIT;\n-- Under SERIALIZABLE (SSI), Postgres detects the rw-antidependency cycle\n-- and aborts the second committer with SQLSTATE 40001 (serialization_failure)."
+      }
+    },
+    {
+      "heading": "How Engines Implement Isolation Levels",
+      "body": "PostgreSQL's default is `READ COMMITTED` (each statement sees a fresh snapshot of data committed before that statement began), whereas MySQL InnoDB's default is `REPEATABLE READ` (snapshot established at the first read in the transaction, using gap locks for locking reads). For `SERIALIZABLE`, modern PostgreSQL and CockroachDB use Serializable Snapshot Isolation (SSI), tracking read-write dependency graphs without blocking readers, aborting only when a cycle forms.",
+      "bullets": [
+        "Two-Phase Locking (2PL): Traditional serializable implementation using shared/exclusive and predicate/gap locks; prone to deadlocks.",
+        "Serializable Snapshot Isolation (SSI): Optimistic approach tracking `SIREAD` locks in memory; requires application retry loops on `40001` errors.",
+        "Materializing Conflicts: If using Repeatable Read, you can prevent write skew by locking a parent summary row (`SELECT ... FOR UPDATE` on the `shifts` table)."
+      ]
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Read Committed / Snapshot Isolation",
+      "pros": "High concurrency, zero read locks, minimal transaction abort rates.",
+      "cons": "Susceptible to subtle invariants breaking via Write Skew or Lost Updates if not explicitly locked.",
+      "bestFor": "General CRUD microservices, social feeds, and read-heavy dashboards."
+    },
+    {
+      "option": "Serializable Isolation (SSI)",
+      "pros": "Mathematically eliminates all concurrency anomalies; simplifies application correctness reasoning.",
+      "cons": "CPU overhead tracking read dependencies and mandatory client retries on contended keys.",
+      "bestFor": "Core banking ledgers, auction bidding, and double-entry accounting systems."
+    }
+  ],
+  "interviewTip": "Know the default isolation level of your chosen database (PostgreSQL = Read Committed, MySQL InnoDB = Repeatable Read) and be ready to explain the 'On-Call Doctors' Write Skew anomaly when asked why Repeatable Read isn't fully Serializable.",
+  "jsonUrl": "/api/subtopics/database/db-isolation-levels.json"
+}
