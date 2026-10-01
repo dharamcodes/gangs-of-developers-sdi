@@ -51,6 +51,7 @@ export default function HandbookReader() {
   const [expandedTopics, setExpandedTopics] = useState<Record<string, boolean>>(
     {}
   );
+  const [activeSectionId, setActiveSectionId] = useState<string>("section-0");
 
   const theme = useMemo(
     () =>
@@ -176,19 +177,26 @@ export default function HandbookReader() {
       ? allSubtopicsFlat[activeIndex + 1]
       : null;
 
+  const requestSequenceRef = React.useRef<number>(0);
+
   const handleSelectSubtopic = async (subtopicId: string, topicId: string) => {
     setExpandedTopics((prev) => ({ ...prev, [topicId]: true }));
     setMobileOpen(false);
     setLoadingSubtopic(true);
+    const requestId = ++requestSequenceRef.current;
     try {
       const detail = await fetchSubtopicData(topicId, subtopicId);
-      setActiveSubtopicDetail(detail);
+      if (requestId === requestSequenceRef.current) {
+        setActiveSubtopicDetail(detail);
+      }
       void fetchTopicData(topicId);
       if (typeof window !== "undefined") {
         window.scrollTo({ top: 0, behavior: "smooth" });
       }
     } finally {
-      setLoadingSubtopic(false);
+      if (requestId === requestSequenceRef.current) {
+        setLoadingSubtopic(false);
+      }
     }
   };
 
@@ -217,9 +225,40 @@ export default function HandbookReader() {
       const el = document.getElementById(elementId);
       if (el) {
         el.scrollIntoView({ behavior: "smooth", block: "start" });
+        setActiveSectionId(elementId);
       }
     }
   };
+
+  useEffect(() => {
+    if (!activeSubtopicDetail || typeof window === "undefined") return;
+    const sectionIds = [
+      ...activeSubtopicDetail.sections.map((_, idx) => `section-${idx}`),
+      ...(activeSubtopicDetail.tradeOffs ? ["section-tradeoffs"] : []),
+      "section-interview-tip",
+    ];
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            setActiveSectionId(entry.target.id);
+          }
+        });
+      },
+      {
+        rootMargin: "-80px 0px -65% 0px",
+        threshold: 0,
+      }
+    );
+
+    sectionIds.forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) observer.observe(el);
+    });
+
+    return () => observer.disconnect();
+  }, [activeSubtopicDetail]);
 
   if (!indexData || !activeSubtopicDetail) {
     return (
@@ -413,40 +452,72 @@ export default function HandbookReader() {
                       </Typography>
                     </Box>
                     <List dense disablePadding>
-                      {activeSubtopicDetail.sections.map((sec, sIdx) => (
-                        <ListItemButton
-                          key={sIdx}
-                          onClick={() =>
-                            handleScrollToSection(`section-${sIdx}`)
-                          }
-                          sx={{
-                            py: 0.6,
-                            px: 1,
-                            borderRadius: 1.25,
-                          }}
-                        >
-                          <ListItemText
-                            primary={sec.heading}
-                            slotProps={{
-                              primary: {
-                                sx: {
-                                  fontSize: "0.78rem",
-                                  fontWeight: 600,
-                                  color: "text.secondary",
-                                  lineHeight: 1.35,
-                                  "&:hover": { color: "primary.main" },
-                                },
-                              },
+                      {activeSubtopicDetail.sections.map((sec, sIdx) => {
+                        const secId = `section-${sIdx}`;
+                        const isCurrent = activeSectionId === secId;
+                        return (
+                          <ListItemButton
+                            key={sIdx}
+                            onClick={() => handleScrollToSection(secId)}
+                            sx={{
+                              py: 0.65,
+                              px: 1.25,
+                              my: 0.2,
+                              borderRadius: 1.5,
+                              borderLeft: isCurrent
+                                ? "3px solid"
+                                : "3px solid transparent",
+                              borderLeftColor: "primary.main",
+                              bgcolor: isCurrent
+                                ? mode === "light"
+                                  ? "rgba(180, 83, 9, 0.08)"
+                                  : "rgba(245, 158, 11, 0.12)"
+                                : "transparent",
+                              transition: "all 0.15s ease",
                             }}
-                          />
-                        </ListItemButton>
-                      ))}
+                          >
+                            <ListItemText
+                              primary={sec.heading}
+                              slotProps={{
+                                primary: {
+                                  sx: {
+                                    fontSize: "0.78rem",
+                                    fontWeight: isCurrent ? 750 : 550,
+                                    color: isCurrent
+                                      ? "primary.main"
+                                      : "text.secondary",
+                                    lineHeight: 1.35,
+                                    "&:hover": { color: "primary.main" },
+                                  },
+                                },
+                              }}
+                            />
+                          </ListItemButton>
+                        );
+                      })}
                       {activeSubtopicDetail.tradeOffs && (
                         <ListItemButton
                           onClick={() =>
                             handleScrollToSection("section-tradeoffs")
                           }
-                          sx={{ py: 0.6, px: 1, borderRadius: 1.25 }}
+                          sx={{
+                            py: 0.65,
+                            px: 1.25,
+                            my: 0.2,
+                            borderRadius: 1.5,
+                            borderLeft:
+                              activeSectionId === "section-tradeoffs"
+                                ? "3px solid"
+                                : "3px solid transparent",
+                            borderLeftColor: "primary.main",
+                            bgcolor:
+                              activeSectionId === "section-tradeoffs"
+                                ? mode === "light"
+                                  ? "rgba(180, 83, 9, 0.08)"
+                                  : "rgba(245, 158, 11, 0.12)"
+                                : "transparent",
+                            transition: "all 0.15s ease",
+                          }}
                         >
                           <ListItemText
                             primary={indexData.ui.tradeOffMatrixHeading}
@@ -454,8 +525,14 @@ export default function HandbookReader() {
                               primary: {
                                 sx: {
                                   fontSize: "0.78rem",
-                                  fontWeight: 600,
-                                  color: "text.secondary",
+                                  fontWeight:
+                                    activeSectionId === "section-tradeoffs"
+                                      ? 750
+                                      : 550,
+                                  color:
+                                    activeSectionId === "section-tradeoffs"
+                                      ? "primary.main"
+                                      : "text.secondary",
                                 },
                               },
                             }}
@@ -466,7 +543,24 @@ export default function HandbookReader() {
                         onClick={() =>
                           handleScrollToSection("section-interview-tip")
                         }
-                        sx={{ py: 0.6, px: 1, borderRadius: 1.25 }}
+                        sx={{
+                          py: 0.65,
+                          px: 1.25,
+                          my: 0.2,
+                          borderRadius: 1.5,
+                          borderLeft:
+                            activeSectionId === "section-interview-tip"
+                              ? "3px solid"
+                              : "3px solid transparent",
+                          borderLeftColor: "secondary.main",
+                          bgcolor:
+                            activeSectionId === "section-interview-tip"
+                              ? mode === "light"
+                                ? "rgba(2, 132, 199, 0.08)"
+                                : "rgba(56, 189, 248, 0.12)"
+                              : "transparent",
+                          transition: "all 0.15s ease",
+                        }}
                       >
                         <ListItemText
                           primary={indexData.ui.interviewTipHeading}
@@ -474,8 +568,14 @@ export default function HandbookReader() {
                             primary: {
                               sx: {
                                 fontSize: "0.78rem",
-                                fontWeight: 600,
-                                color: "text.secondary",
+                                fontWeight:
+                                  activeSectionId === "section-interview-tip"
+                                    ? 750
+                                    : 550,
+                                color:
+                                  activeSectionId === "section-interview-tip"
+                                    ? "secondary.main"
+                                    : "text.secondary",
                               },
                             },
                           }}

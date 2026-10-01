@@ -33,7 +33,6 @@ export interface SubtopicSummary {
 }
 
 export interface SubtopicDetail extends SubtopicSummary {
-  svgDiagramUrl?: string;
   keyTakeaways: string[];
   architectureDiagram: string;
   sections: SubtopicSection[];

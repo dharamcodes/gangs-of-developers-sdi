@@ -35,7 +35,7 @@ export async function fetchTopicData(
   const data = (await res.json()) as TopicFullPayload;
   topicCache.set(topicId, data);
   for (const sub of data.subtopics) {
-    subtopicCache.set(sub.id, sub);
+    subtopicCache.set(`${topicId}/${sub.id}`, sub);
   }
   return data;
 }
@@ -44,7 +44,8 @@ export async function fetchSubtopicData(
   topicId: string,
   subtopicId: string
 ): Promise<SubtopicDetail> {
-  const cached = subtopicCache.get(subtopicId);
+  const cacheKey = `${topicId}/${subtopicId}`;
+  const cached = subtopicCache.get(cacheKey);
   if (cached) {
     return cached;
   }
@@ -55,6 +56,6 @@ export async function fetchSubtopicData(
     );
   }
   const data = (await res.json()) as SubtopicDetail;
-  subtopicCache.set(subtopicId, data);
+  subtopicCache.set(cacheKey, data);
   return data;
 }

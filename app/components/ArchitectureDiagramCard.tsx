@@ -36,12 +36,24 @@ export default function ArchitectureDiagramCard({
   const [viewMode, setViewMode] = useState<"visual" | "ascii">("visual");
   const [zoomOpen, setZoomOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const copyTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  React.useEffect(() => {
+    return () => {
+      if (copyTimerRef.current) {
+        clearTimeout(copyTimerRef.current);
+      }
+    };
+  }, []);
 
   const handleCopyAscii = async () => {
     try {
       await navigator.clipboard.writeText(asciiDiagram);
       setCopied(true);
-      setTimeout(() => setCopied(false), 1800);
+      if (copyTimerRef.current) {
+        clearTimeout(copyTimerRef.current);
+      }
+      copyTimerRef.current = setTimeout(() => setCopied(false), 1800);
     } catch {
       // Ignore clipboard errors
     }

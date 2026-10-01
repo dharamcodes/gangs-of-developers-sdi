@@ -1,36 +1,70 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Gangs of Developers (GOD) - System Design Handbook
+
+An interactive, high-performance web handbook covering scalable system design, distributed architectures, high-availability cloud patterns, messaging, observability, and real-world system designs.
+
+## Highlights
+
+- **13 Core Topics & 130 Detailed Subtopics**: Covers Core Fundamentals, Database Internals, Distributed Systems, High Availability & Cloud, Messaging & Kafka, Microservices, Networking, Observability, Reliability Engineering, Staff-Level Architecture Trade-Offs, and Must-Practice System Designs.
+- **Architectural Diagrams**: Complete visual system diagrams and detailed Entity-Relationship (ER) storage blueprints with full-screen zoom support.
+- **Static Export Architecture**: Ultra-fast client-side reading experience backed by pre-generated static JSON endpoints in `public/api/`.
+- **Reader Experience**:
+  - Dark / Light mode switching
+  - Dynamic typography scaling (Normal, Large, Extra Large)
+  - Full-width reading mode
+  - Collapsible curriculum sidebar and instant search
+  - Code snippets and ASCII blueprint copy tools
+
+## Tech Stack
+
+- **Framework**: [Next.js 16](https://nextjs.org/) (App Router, Static Export)
+- **UI & Components**: [Material-UI (MUI)](https://mui.com/) & [Emotion](https://emotion.sh/)
+- **Language**: TypeScript 5
+- **Analytics**: [@vercel/analytics](https://vercel.com/analytics)
 
 ## Getting Started
 
-First, run the development server:
+### Prerequisites
+
+- Node.js 18+ (Node.js 20+ recommended)
+- npm, yarn, or pnpm
+
+### Development
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000) to view the application.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Production Build
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run build
+```
 
-## Learn More
+This compiles TypeScript, optimizes pages, and generates a production-ready static export into the `out/` directory.
 
-To learn more about Next.js, take a look at the following resources:
+### Linting & Type Checking
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+npm run lint
+npx tsc --noEmit
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Directory Structure
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```text
+├── app/
+│   ├── components/      # UI components (Reader, Sidebar, Header, Diagrams, etc.)
+│   ├── services/        # API and data loading services
+│   ├── types/           # TypeScript data models and interfaces
+│   ├── globals.css      # Core reset & custom scrollbar styles
+│   ├── layout.tsx       # Root layout & providers
+│   └── page.tsx         # Root handbook page
+├── public/
+│   ├── api/             # Static JSON curriculum index, topics, and subtopics
+│   ├── diagrams/        # Architecture diagrams and ER SVGs
+│   └── favicon.ico      # Site favicon
+└── next.config.ts       # Next.js configuration (static export)
+```
