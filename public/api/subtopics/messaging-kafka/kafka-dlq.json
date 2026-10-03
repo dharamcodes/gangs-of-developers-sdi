@@ -16,57 +16,25 @@
   "architectureDiagram": "Incoming Record\n       |\n       v\n[ Deserialization / Schema Check ] ---(Corrupt Payload)-----------------------+\n       |                                                                      |\n   (Valid)                                                                    |\n       v                                                                      v\n[ Business Handler ] ---(Transient 503)---> [ Retry Tiers ] ---(Exhausted)--> +--> [ orders.dlq ]\n       |                                                                             |\n   (Success)                                                                         v\n       v                                                                  [ Alert + Replay Tool ]",
   "sections": [
     {
-      "heading": "1. Architectural Fundamentals & Core Mechanics",
+      "heading": "Poison Pills & Failure Classification",
       "body": "A 'poison pill' is a message that can never be processed successfully no matter how many times it is retried, for example, a corrupted byte array, a breaking schema evolution, or a payload referencing a deleted foreign key that triggers a permanent `400 Bad Request`. If a consumer crashes and restarts on a poison pill without catching and isolating it, the consumer enters a tight crash loop, stalling the entire partition indefinitely. A Dead Letter Queue (DLQ) breaks this loop by publishing the raw offending bytes plus diagnostic headers to a dedicated `<topic>.dlq` topic and committing the main partition offset.",
       "bullets": [
-        "**Core Architectural Principle**: A Dead Letter Queue (DLQ) is a quarantine topic where unprocessable records ('poison pills') are sent after exhausting retries or failing validation.",
-        "**Problem Space & Invariants**: Non-retryable errors (e.g., malformed JSON, schema deserialization failures, business rule violations) should bypass retry tiers and go straight to the DLQ.",
-        "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-      ],
-      "asciiDiagram": "Incoming Record\n       |\n       v\n[ Deserialization / Schema Check ] ---(Corrupt Payload)-----------------------+\n       |                                                                      |\n   (Valid)                                                                    |\n       v                                                                      v\n[ Business Handler ] ---(Transient 503)---> [ Retry Tiers ] ---(Exhausted)--> +--> [ orders.dlq ]\n       |                                                                             |\n   (Success)                                                                         v\n       v                                                                  [ Alert + Replay Tool ]"
-    },
-    {
-      "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "Distributed architectures apply specific implementation patterns and topologies for Dead Letter Queue:",
-      "bullets": [
-        "**Immediate DLQ on Deserialization / Unhandled Error**: Guarantees high partition availability; one corrupt producer message never stalls millions of healthy messages. Best suited for Multi-tenant ingestion pipelines and webhook processors where availability is paramount.",
-        "**Circuit-Breaker Pause Before DLQ Flooding**: Provides prevents mass dlq dumping if a consumer bug or systemic db outage causes 100% of messages to fail. Best suited for Core financial ledgers and strict ordering pipelines where out-of-order DLQ replay is expensive.",
         "**Non-Retryable Errors** (`SerializationException`, `InvalidArgument`, `4xx`): Route immediately to DLQ on first failure.",
         "**Retryable Errors** (`SocketTimeoutException`, `DeadlockDetected`, `503`): Route through exponential retry topics first, then to DLQ after N attempts.",
-        "Configure immediate low-threshold alerts (e.g., `dlq_messages_in_per_sec > 0`) so poison pills are noticed within minutes.",
-        "Preserve raw `byte[]` payloads rather than re-serializing broken objects, allowing exact bit-for-bit replay."
+        "Always publish to the DLQ with `acks=all` before committing the source partition offset so records are never lost in transit."
       ],
       "codeSnippet": {
         "title": "Publishing Enriched Diagnostic Envelope to DLQ",
-        "code": "await producer.send({\n  topic: `${batch.topic}.dlq`,\n  acks: -1,\n  messages: [{\n    key: message.key,\n    value: message.value, // Preserve exact raw bytes for replay\n    headers: {\n      .message.headers,\n      \"x-dlq-original-topic\": batch.topic,\n      \"x-dlq-original-partition\": String(batch.partition),\n      \"x-dlq-original-offset\": message.offset,\n      \"x-dlq-error-class\": error.name,\n      \"x-dlq-error-message\": error.message.slice(0, 512),\n      \"x-dlq-failed-at\": new Date().toISOString()\n    }\n  }]\n});"
+        "code": "await producer.send({\n  topic: `${batch.topic}.dlq`,\n  acks: -1,\n  messages: [{\n    key: message.key,\n    value: message.value, // Preserve exact raw bytes for replay\n    headers: {\n      ...message.headers,\n      \"x-dlq-original-topic\": batch.topic,\n      \"x-dlq-original-partition\": String(batch.partition),\n      \"x-dlq-original-offset\": message.offset,\n      \"x-dlq-error-class\": error.name,\n      \"x-dlq-error-message\": error.message.slice(0, 512),\n      \"x-dlq-failed-at\": new Date().toISOString()\n    }\n  }]\n});"
       }
     },
     {
-      "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Production deployments apply Dead Letter Queue across targeted operational scenarios:",
+      "heading": "DLQ Operations, Governance & Replay",
+      "body": "Writing to a DLQ is only half the pattern; operationalizing recovery is what separates production systems from prototypes. Because DLQ messages sit idle until engineers deploy a bug fix or patch a downstream service, DLQ topics require significantly longer retention (`retention.ms = 14 to 30 days`) than standard retry topics.",
       "bullets": [
-        "**Where to Use: High-Impact Scenarios**: Optimal for Multi-tenant ingestion pipelines and webhook processors where availability is paramount, suited for environments requiring Guarantees high partition availability; one corrupt producer message never stalls millions of healthy messages.",
-        "**Where to Use: High-Throughput Scenarios**: Recommended for Core financial ledgers and strict ordering pipelines where out-of-order DLQ replay is expensive, where Prevents mass DLQ dumping if a consumer bug or systemic DB outage causes 100% of messages to fail.",
-        "**How to Use: Engineering Implementation**: Writing to a DLQ is only half the pattern; operationalizing recovery is what separates production systems from prototypes. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-        "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-      ]
-    },
-    {
-      "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "Improper implementation of Dead Letter Queue introduces operational bottlenecks and failure modes:",
-      "bullets": [
-        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: a bug deployed in consumer code can accidentally dump thousands of valid messages into the dlq before detection.",
-        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: halts partition progress until the circuit recovers or an operator intervenes.",
-        "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-        "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-      ]
-    },
-    {
-      "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Technical guidelines and evaluation criteria for Dead Letter Queue:",
-      "bullets": [
-        "**Staff+ Golden Rule**: A DLQ without alerting, retention policies, and an automated replay mechanism is just a silent data graveyard.",
-        "**Staff+ Interview Playbook**: Mention the **DLQ flood hazard**: if a downstream database credential expires and 100% of messages fail, blindly routing everything to a DLQ drains the main topic into the DLQ. Combine DLQs with a circuit breaker that pauses the consumer when error rates approach 100%."
+        "Configure immediate low-threshold alerts (e.g., `dlq_messages_in_per_sec > 0`) so poison pills are noticed within minutes.",
+        "Preserve raw `byte[]` payloads rather than re-serializing broken objects, allowing exact bit-for-bit replay.",
+        "Build a CLI or admin replay job that reads from `<topic>.dlq`, strips DLQ diagnostic headers, and republishes back to the main topic or a repair consumer."
       ]
     }
   ],

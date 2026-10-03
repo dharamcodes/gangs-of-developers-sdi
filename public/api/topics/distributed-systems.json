@@ -23,57 +23,25 @@
       "architectureDiagram": "1. SINGLE-LEADER          2. MULTI-LEADER (Multi-Region)   3. LEADERLESS (Dynamo-Style)\n  Write -> [Leader]         Write -> [Leader US]             Client ---> [Replica 1] (W=2,\n            /    \\                     ^      |                 |------> [Replica 2]  R=2,\n           v      v           (Conflict|      |Async            +------> [Replica 3]  N=3)\n        [F1]      [F2]         Merge)  |      v\n                               Write -> [Leader EU]",
       "sections": [
         {
-          "heading": "1. Architectural Fundamentals & Core Mechanics",
+          "heading": "Multi-Leader Topologies & Write Conflict Resolution",
           "body": "In globally distributed applications, routing a European user's write across the Atlantic to a US-East single leader adds 80–150ms of network RTT. Multi-Leader (Active-Active) architectures deploy a leader in each region so writes succeed locally. However, if two users concurrently update the same record in different regions, a write-write conflict occurs when the regions asynchronously replicate to each other.",
           "bullets": [
-            "**Core Architectural Principle**: Single-Leader replication serializes all writes through a single leader node, avoiding write conflicts at the cost of single-point write bottlenecks and cross-region write latency.",
-            "**Problem Space & Invariants**: Multi-Leader replication allows writes in multiple regions concurrently for low local latency, but requires deterministic conflict resolution (LWW, Version Vectors, or CRDTs).",
-            "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-          ],
-          "asciiDiagram": "1. SINGLE-LEADER          2. MULTI-LEADER (Multi-Region)   3. LEADERLESS (Dynamo-Style)\n  Write -> [Leader]         Write -> [Leader US]             Client ---> [Replica 1] (W=2,\n            /    \\                     ^      |                 |------> [Replica 2]  R=2,\n           v      v           (Conflict|      |Async            +------> [Replica 3]  N=3)\n        [F1]      [F2]         Merge)  |      v\n                               Write -> [Leader EU]"
-        },
-        {
-          "heading": "2. Architectural Patterns & Implementation Topologies",
-          "body": "Distributed architectures apply specific implementation patterns and topologies for Replication:",
-          "bullets": [
-            "**Single-Leader Replication**: Provides supports linearizable reads, unique constraints, and conflict-free serial write ordering. Best suited for Transactional relational databases, consensus state stores, and single-region systems.",
-            "**Leaderless / Multi-Leader Replication**: Provides zero failover interruption; high write availability across network partitions and regions. Best suited for Always-on shopping carts, global telemetry ingestion, and collaborative editing (CRDTs).",
             "Conflict Avoidance (Sticky Geo-Routing): Route all writes for a given `user_id` or `tenant_id` to their designated home region leader; effectively single-leader per entity.",
-            "Last-Write-Wins (LWW): Attach a wall-clock or Hybrid Logical Clock (HLC) timestamp and keep the highest timestamp: simple, but silently drops concurrent updates due to clock skew.",
-            "Read Repair: When a client reads from `R=2` replicas and sees `Replica 1` has `v5` while `Replica 2` has stale `v4`, the coordinator returns `v5` to the client and asynchronously writes `v5` back to `Replica 2`.",
-            "Anti-Entropy via Merkle Trees: Background processes exchange hierarchical cryptographic hash trees of key ranges between replicas to pinpoint and sync missing keys in O(log K) comparisons."
+            "Last-Write-Wins (LWW): Attach a wall-clock or Hybrid Logical Clock (HLC) timestamp and keep the highest timestamp, simple, but silently drops concurrent updates due to clock skew.",
+            "CRDTs (Conflict-Free Replicated Data Types): Data structures (Grow-Only Sets, PN-Counters, LWW-Element-Set) whose merge operations are commutative, associative, and idempotent, guaranteeing automatic convergence without coordination."
           ],
           "codeSnippet": {
             "title": "State-Based PN-Counter CRDT for Multi-Leader Replication",
-            "code": "// Positive-Negative Counter CRDT across 3 regional leaders (US, EU, APAC)\n// Each region only increments its OWN slot in P or N; merge takes element-wise MAX!\ninterface PNCounterState {\n  P: Record<string, number>; // Increments per region\n  N: Record<string, number>; // Decrements per region\n}\n\nfunction mergePNCounters(local: PNCounterState, remote: PNCounterState): PNCounterState {\n  const regions = new Set([.Object.keys(local.P), .Object.keys(remote.P)]);\n  const merged: PNCounterState = { P: {}, N: {} };\n  for (const r of regions) {\n    merged.P[r] = Math.max(local.P[r] ?? 0, remote.P[r] ?? 0);\n    merged.N[r] = Math.max(local.N[r] ?? 0, remote.N[r] ?? 0);\n  }\n  return merged;\n}\n// Value = sum(P) - sum(N). Commutative, Associative, Idempotent!"
+            "code": "// Positive-Negative Counter CRDT across 3 regional leaders (US, EU, APAC)\n// Each region only increments its OWN slot in P or N; merge takes element-wise MAX!\ninterface PNCounterState {\n  P: Record<string, number>; // Increments per region\n  N: Record<string, number>; // Decrements per region\n}\n\nfunction mergePNCounters(local: PNCounterState, remote: PNCounterState): PNCounterState {\n  const regions = new Set([...Object.keys(local.P), ...Object.keys(remote.P)]);\n  const merged: PNCounterState = { P: {}, N: {} };\n  for (const r of regions) {\n    merged.P[r] = Math.max(local.P[r] ?? 0, remote.P[r] ?? 0);\n    merged.N[r] = Math.max(local.N[r] ?? 0, remote.N[r] ?? 0);\n  }\n  return merged;\n}\n// Value = sum(P) - sum(N). Commutative, Associative, Idempotent!"
           }
         },
         {
-          "heading": "3. Production Strengths: Where & How to Apply",
-          "body": "Production deployments apply Replication across targeted operational scenarios:",
+          "heading": "Leaderless Replication: Read Repair, Hinted Handoff & Merkle Trees",
+          "body": "Inspired by Amazon's 2007 Dynamo paper, databases like Apache Cassandra, ScyllaDB, and Riak eliminate leaders entirely. Any node can coordinate a client request by forwarding the write or read to all `N` replicas responsible for that key.",
           "bullets": [
-            "**Where to Use: High-Impact Scenarios**: Optimal for Transactional relational databases, consensus state stores, and single-region systems, suited for environments requiring Supports linearizable reads, unique constraints, and conflict-free serial write ordering.",
-            "**Where to Use: High-Throughput Scenarios**: Recommended for Always-on shopping carts, global telemetry ingestion, and collaborative editing (CRDTs), where Zero failover interruption; high write availability across network partitions and regions.",
-            "**How to Use: Engineering Implementation**: Inspired by Amazon's 2007 Dynamo paper, databases like Apache Cassandra, ScyllaDB, and Riak eliminate leaders entirely. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-            "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-          ]
-        },
-        {
-          "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-          "body": "Improper implementation of Replication introduces operational bottlenecks and failure modes:",
-          "bullets": [
-            "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: failover downtime during leader crashes; high write latency for distant geographic regions.",
-            "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: cannot enforce strict compare-and-swap without paxos/raft; requires conflict resolution logic.",
-            "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-            "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-          ]
-        },
-        {
-          "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-          "body": "Technical guidelines and evaluation criteria for Replication:",
-          "bullets": [
-            "**Staff+ Golden Rule**: Leaderless (Dynamo-style) systems send reads and writes to multiple replicas in parallel using Quorum math (`W + R > N`) and self-heal via Read Repair and Anti-Entropy.",
-            "**Staff+ Interview Playbook**: When designing a multi-region system, always ask if you can partition users by home region ('Single-Leader per User') before jumping to full active-active Multi-Leader conflict resolution."
+            "Read Repair: When a client reads from `R=2` replicas and sees `Replica 1` has `v5` while `Replica 2` has stale `v4`, the coordinator returns `v5` to the client and asynchronously writes `v5` back to `Replica 2`.",
+            "Anti-Entropy via Merkle Trees: Background processes exchange hierarchical cryptographic hash trees of key ranges between replicas to pinpoint and sync missing keys in O(log K) comparisons.",
+            "Sloppy Quorum & Hinted Handoff: If a designated replica is unreachable during a network partition, the write is temporarily stored as a 'hint' on another healthy node and handed off once the target node recovers."
           ]
         }
       ],
@@ -95,720 +63,6 @@
       "jsonUrl": "/api/subtopics/distributed-systems/dist-replication.json"
     },
     {
-      "id": "dist-partitioning",
-      "topicId": "distributed-systems",
-      "topicTitle": "Distributed Systems",
-      "topicNumber": 6,
-      "subtopicNumber": "6.2",
-      "title": "Partitioning",
-      "subtitle": "Distributed data placement, Document-Partitioned (Local) vs Term-Partitioned (Global) secondary indexes, and rebalancing strategies.",
-      "readingTime": "8 min read",
-      "difficulty": "Advanced",
-      "keyTakeaways": [
-        "Distributed partitioning splits data across cluster nodes so storage and query load scale linearly with cluster size.",
-        "Local (Document-Partitioned) Secondary Indexes keep the index on the same node as the primary record: writes are fast (single node), but secondary reads must scatter-gather across all partitions.",
-        "Global (Term-Partitioned) Secondary Indexes partition the index itself by the indexed attribute: secondary reads hit a single partition, but writes must update multiple nodes asynchronously."
-      ],
-      "architectureDiagram": "LOCAL SECONDARY INDEX (Scatter-Gather Read)   GLOBAL SECONDARY INDEX (Single-Partition Read)\nQuery: WHERE color = 'red'                    Query: WHERE color = 'red' -> hashes to Node 1!\n       |                                             |\n  +----+----+----+                                   v\n  v         v    v                            +------------------------------+\n[Node 1] [Node 2] [Node 3]                    | Global Index Node 1 ('red')  |\n(Local)  (Local)  (Local)                     | -> Points to doc IDs across  |\n(Fast Write, Slow Fan-out Read)               |    Nodes 1, 2, 3 (Fast Read!)|\n                                              +------------------------------+",
-      "sections": [
-        {
-          "heading": "1. Architectural Fundamentals & Core Mechanics",
-          "body": "Partitioning by primary key is easy, but secondary indexes are the Achilles' heel of distributed databases. When you index a secondary field like `status` or `email` across a 50-node cluster, you face a fundamental trade-off between Local Indexes (Document-Partitioned) and Global Indexes (Term-Partitioned).",
-          "bullets": [
-            "**Core Architectural Principle**: Distributed partitioning splits data across cluster nodes so storage and query load scale linearly with cluster size.",
-            "**Problem Space & Invariants**: Local (Document-Partitioned) Secondary Indexes keep the index on the same node as the primary record: writes are fast (single node), but secondary reads must scatter-gather across all partitions.",
-            "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-          ],
-          "asciiDiagram": "LOCAL SECONDARY INDEX (Scatter-Gather Read)   GLOBAL SECONDARY INDEX (Single-Partition Read)\nQuery: WHERE color = 'red'                    Query: WHERE color = 'red' -> hashes to Node 1!\n       |                                             |\n  +----+----+----+                                   v\n  v         v    v                            +------------------------------+\n[Node 1] [Node 2] [Node 3]                    | Global Index Node 1 ('red')  |\n(Local)  (Local)  (Local)                     | -> Points to doc IDs across  |\n(Fast Write, Slow Fan-out Read)               |    Nodes 1, 2, 3 (Fast Read!)|\n                                              +------------------------------+"
-        },
-        {
-          "heading": "2. Architectural Patterns & Implementation Topologies",
-          "body": "Distributed architectures apply specific implementation patterns and topologies for Partitioning:",
-          "bullets": [
-            "**Local Secondary Index (Document-Partitioned)**: Provides single-node atomic writes; no cross-node index synchronization overhead. Best suited for Full-text search (Elasticsearch) and workloads where queries almost always include the partition key.",
-            "**Global Secondary Index (Term-Partitioned)**: Provides point lookups and range scans on the secondary index hit a single partition in o(1) network hops. Best suited for Looking up users by `email` or `phone_number` when the table is partitioned by `user_id`.",
-            "Local Secondary Index (Elasticsearch shards, MongoDB, Cassandra): Each partition maintains its own secondary index covering *only* the documents stored on that partition. Writing a document updates only 1 node, but querying by the secondary index requires querying all 50 partitions in parallel (tail latency amplification).",
-            "Global Secondary Index (DynamoDB GSI, CockroachDB): The secondary index is partitioned independently by the indexed term (`hash(email)`). A lookup by `email` goes directly to 1 node! However, inserting a single item now requires updating the primary partition AND sending network updates to the remote GSI partition(s).",
-            "Never Use `hash(key) % N_machines`: Changing `N` from 10 to 11 invalidates ~91% of keys simultaneously.",
-            "Fixed Number of Logical Partitions (Elasticsearch, Kafka, Redis Cluster): Create far more logical partitions than physical nodes at cluster creation (e.g., 1,024 partitions across 8 nodes). When Node 9 joins, stream ~113 complete logical partitions to Node 9."
-          ],
-          "codeSnippet": {
-            "title": "Compound Partition Key to Avoid Hot Partitions & Scatter-Gather",
-            "code": "// Problem: Partitioning IoT sensor events purely by `sensor_id` creates a hot partition\n// if one industrial sensor emits 50,000 events/sec.\n// Solution: Compound Partition Key combining sensor_id + time_bucket (or write shard)\nfunction buildPartitionKey(sensorId: string, timestampMs: number): string {\n  const hourBucket = new Date(timestampMs).toISOString().slice(0, 13); // '2026-09-30T15'\n  return `${sensorId}#${hourBucket}`;\n}\n\n// Now Local Secondary Indexes on this partition key can serve time-bounded\n// queries for a sensor from a SINGLE partition without scatter-gather!"
-          }
-        },
-        {
-          "heading": "3. Production Strengths: Where & How to Apply",
-          "body": "Production deployments apply Partitioning across targeted operational scenarios:",
-          "bullets": [
-            "**Where to Use: High-Impact Scenarios**: Optimal for Full-text search (Elasticsearch) and workloads where queries almost always include the partition key, suited for environments requiring Single-node atomic writes; no cross-node index synchronization overhead.",
-            "**Where to Use: High-Throughput Scenarios**: Recommended for Looking up users by `email` or `phone_number` when the table is partitioned by `user_id`, where Point lookups and range scans on the secondary index hit a single partition in O(1) network hops.",
-            "**How to Use: Engineering Implementation**: As cluster traffic grows or nodes fail, partitions must move between machines ('rebalancing'). Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-            "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-          ]
-        },
-        {
-          "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-          "body": "Improper implementation of Partitioning introduces operational bottlenecks and failure modes:",
-          "bullets": [
-            "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: secondary index queries require scatter-gather across all partitions (vulnerable to p99 tail latency).",
-            "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: writes fan out across multiple nodes; index is typically eventually consistent.",
-            "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-            "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-          ]
-        },
-        {
-          "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-          "body": "Technical guidelines and evaluation criteria for Partitioning:",
-          "bullets": [
-            "**Staff+ Golden Rule**: Global (Term-Partitioned) Secondary Indexes partition the index itself by the indexed attribute: secondary reads hit a single partition, but writes must update multiple nodes asynchronously.",
-            "**Staff+ Interview Playbook**: If your system design requires querying an entity by two different attributes (e.g., `order_id` and `user_id`), explain how a Global Secondary Index (partitioned by `user_id` and updated asynchronously) avoids scatter-gather queries."
-          ]
-        }
-      ],
-      "tradeOffs": [
-        {
-          "option": "Local Secondary Index (Document-Partitioned)",
-          "pros": "Single-node atomic writes; no cross-node index synchronization overhead.",
-          "cons": "Secondary index queries require scatter-gather across all partitions (vulnerable to p99 tail latency).",
-          "bestFor": "Full-text search (Elasticsearch) and workloads where queries almost always include the partition key."
-        },
-        {
-          "option": "Global Secondary Index (Term-Partitioned)",
-          "pros": "Point lookups and range scans on the secondary index hit a single partition in O(1) network hops.",
-          "cons": "Writes fan out across multiple nodes; index is typically eventually consistent.",
-          "bestFor": "Looking up users by `email` or `phone_number` when the table is partitioned by `user_id`."
-        }
-      ],
-      "interviewTip": "If your system design requires querying an entity by two different attributes (e.g., `order_id` and `user_id`), explain how a Global Secondary Index (partitioned by `user_id` and updated asynchronously) avoids scatter-gather queries.",
-      "jsonUrl": "/api/subtopics/distributed-systems/dist-partitioning.json"
-    },
-    {
-      "id": "dist-consistent-hashing",
-      "topicId": "distributed-systems",
-      "topicTitle": "Distributed Systems",
-      "topicNumber": 6,
-      "subtopicNumber": "6.3",
-      "title": "Consistent Hashing",
-      "subtitle": "Minimizing data movement to O(K/N) during node scaling using Hash Rings, Virtual Nodes (VNodes), and Bounded-Load Hashing.",
-      "readingTime": "8 min read",
-      "difficulty": "Intermediate",
-      "keyTakeaways": [
-        "With modular hashing (`hash(key) % N`), adding or removing 1 node forces `(N-1)/N` (~90%+) of keys to relocate; Consistent Hashing reduces movement to only `K/N` keys on average.",
-        "Both nodes and keys are hashed onto a circular 32-bit or 64-bit integer ring (`0` to `2^32 - 1`), and each key is assigned to the first node encountered moving clockwise.",
-        "Virtual Nodes (VNodes) assign each physical server 100–200 positions on the ring, preventing non-uniform data skew and spreading load evenly when a node crashes."
-      ],
-      "architectureDiagram": "CONSISTENT HASHING RING (0 . 2^32 - 1)\n                                    0 / 2^32\n                                 . - ~ ~ ~ - .\n                             . '               ' .\n                [Node C_v2]                        [Node A_v1]\n                    |                                   |\n                    |     Key 'k1' (hashes to 400)      v\n                    |     walks clockwise ---------> [Node B_v1 (pos 550)]\n                    |                                   |\n                [Node A_v2]                        [Node C_v1]\n                             .                 . '\n                               ' - . _ _ _ . - '",
-      "sections": [
-        {
-          "heading": "1. Architectural Fundamentals & Core Mechanics",
-          "body": "Consistent hashing maps both storage nodes and data keys onto the same circular keyspace `[0, 2^32 - 1]` using a fast, uniform hash function like `MurmurHash3` or `xxHash` (never cryptographic SHA-1 on hot paths if speed matters, and never weak modulo). To locate the node for `key`, you compute `h = hash(key)` and perform a binary search (`O(log V)`) over the sorted array of ring tokens to find the first node with `position >= h` (wrapping around to index `0` if `h` exceeds the highest token).",
-          "bullets": [
-            "**Core Architectural Principle**: With modular hashing (`hash(key) % N`), adding or removing 1 node forces `(N-1)/N` (~90%+) of keys to relocate; Consistent Hashing reduces movement to only `K/N` keys on average.",
-            "**Problem Space & Invariants**: Both nodes and keys are hashed onto a circular 32-bit or 64-bit integer ring (`0` to `2^32 - 1`), and each key is assigned to the first node encountered moving clockwise.",
-            "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-          ],
-          "asciiDiagram": "CONSISTENT HASHING RING (0 . 2^32 - 1)\n                                    0 / 2^32\n                                 . - ~ ~ ~ - .\n                             . '               ' .\n                [Node C_v2]                        [Node A_v1]\n                    |                                   |\n                    |     Key 'k1' (hashes to 400)      v\n                    |     walks clockwise ---------> [Node B_v1 (pos 550)]\n                    |                                   |\n                [Node A_v2]                        [Node C_v1]\n                             .                 . '\n                               ' - . _ _ _ . - '",
-          "diagramImageUrl": "/diagrams/arch-dist-consistent-hashing.svg"
-        },
-        {
-          "heading": "2. Architectural Patterns & Implementation Topologies",
-          "body": "Distributed architectures apply specific implementation patterns and topologies for Consistent Hashing:",
-          "bullets": [
-            "**Consistent Hashing with Virtual Nodes (Dynamo / Cassandra)**: Provides minimal data movement (k/n) on cluster resize; decentralized o(log v) lookup with no directory bottleneck. Best suited for Distributed caches, stateful load balancers (Envoy/Katran), and leaderless key-value stores.",
-            "**Centralized Shard Map / Fixed Hash Slots (Redis Cluster / Vitess)**: Provides explicit control over exact slot-to-node placement; no vnode binary search needed. Best suited for Managed sharded databases and clusters with <1,000 nodes.",
-            "Why Raw Nodes Fail: With only 3 physical nodes placed on the ring, random hash placement might give Node A 60% of the ring arc, Node B 30%, and Node C 10%.",
-            "Virtual Nodes (VNodes): By placing `150` virtual tokens per physical server (`NodeA#0 . NodeA#149`), the variance in key distribution drops below <5%.",
-            "Rack/AZ-Aware Placement: Walking the ring skips additional VNodes belonging to the same physical host or AZ so a single rack outage never takes down more than 1 replica.",
-            "Consistent Hashing with Bounded Loads (Vimeo / Google paper): Assigns each node a maximum capacity factor `(1 + epsilon) * average_load`. If the target node on the ring is at capacity during a hot-spot surge, the request overflows clockwise to the next node with spare capacity."
-          ],
-          "codeSnippet": {
-            "title": "Production Consistent Hash Ring with Virtual Nodes & Binary Search",
-            "code": "export class ConsistentHashRing {\n  private ringKeys: number[] = [];\n  private ringMap = new Map<number, string>();\n\n  constructor(nodes: string[], private vnodesPerServer = 150) {\n    for (const node of nodes) this.addNode(node);\n  }\n\n  addNode(node: string): void {\n    for (let i = 0; i < this.vnodesPerServer; i++) {\n      const hash = this.murmur3(`${node}#vnode_${i}`);\n      this.ringMap.set(hash, node);\n      this.ringKeys.push(hash);\n    }\n    this.ringKeys.sort((a, b) => a - b);\n  }\n\n  getNode(key: string): string {\n    const hash = this.murmur3(key);\n    // Binary search for first token >= hash\n    let low = 0, high = this.ringKeys.length - 1;\n    while (low <= high) {\n      const mid = (low + high) >>> 1;\n      if (this.ringKeys[mid] >= hash) high = mid - 1;\n      else low = mid + 1;\n    }\n    const idx = low < this.ringKeys.length ? low : 0; // Wrap around ring\n    return this.ringMap.get(this.ringKeys[idx])!;\n  }\n  private murmur3(str: string): number { /* 32-bit hash */ return 0; }\n}"
-          }
-        },
-        {
-          "heading": "3. Production Strengths: Where & How to Apply",
-          "body": "Production deployments apply Consistent Hashing across targeted operational scenarios:",
-          "bullets": [
-            "**Where to Use: High-Impact Scenarios**: Optimal for Distributed caches, stateful load balancers (Envoy/Katran), and leaderless key-value stores, suited for environments requiring Minimal data movement (K/N) on cluster resize; decentralized O(log V) lookup with no directory bottleneck.",
-            "**Where to Use: High-Throughput Scenarios**: Recommended for Managed sharded databases and clusters with <1,000 nodes, where Explicit control over exact slot-to-node placement; no VNode binary search needed.",
-            "**How to Use: Engineering Implementation**: In distributed databases like Cassandra and DynamoDB, consistent hashing also dictates replication placement. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-            "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-          ]
-        },
-        {
-          "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-          "body": "Improper implementation of Consistent Hashing introduces operational bottlenecks and failure modes:",
-          "bullets": [
-            "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: range queries across keys are inefficient; requires gossip protocol to keep ring membership synced.",
-            "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: requires cluster coordinator or slot migration orchestration when rebalancing.",
-            "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-            "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-          ]
-        },
-        {
-          "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-          "body": "Technical guidelines and evaluation criteria for Consistent Hashing:",
-          "bullets": [
-            "**Staff+ Golden Rule**: Virtual Nodes (VNodes) assign each physical server 100–200 positions on the ring, preventing non-uniform data skew and spreading load evenly when a node crashes.",
-            "**Staff+ Interview Playbook**: Always mention Virtual Nodes (VNodes) immediately after introducing Consistent Hashing, and explain the two problems VNodes solve: (1) uneven ring arc distribution with few nodes, and (2) cascading overload on a single neighbor when one node crashes."
-          ]
-        }
-      ],
-      "tradeOffs": [
-        {
-          "option": "Consistent Hashing with Virtual Nodes (Dynamo / Cassandra)",
-          "pros": "Minimal data movement (K/N) on cluster resize; decentralized O(log V) lookup with no directory bottleneck.",
-          "cons": "Range queries across keys are inefficient; requires gossip protocol to keep ring membership synced.",
-          "bestFor": "Distributed caches, stateful load balancers (Envoy/Katran), and leaderless key-value stores."
-        },
-        {
-          "option": "Centralized Shard Map / Fixed Hash Slots (Redis Cluster / Vitess)",
-          "pros": "Explicit control over exact slot-to-node placement; no VNode binary search needed.",
-          "cons": "Requires cluster coordinator or slot migration orchestration when rebalancing.",
-          "bestFor": "Managed sharded databases and clusters with <1,000 nodes."
-        }
-      ],
-      "interviewTip": "Always mention Virtual Nodes (VNodes) immediately after introducing Consistent Hashing, and explain the two problems VNodes solve: (1) uneven ring arc distribution with few nodes, and (2) cascading overload on a single neighbor when one node crashes.",
-      "jsonUrl": "/api/subtopics/distributed-systems/dist-consistent-hashing.json",
-      "diagramImageUrl": "/diagrams/arch-dist-consistent-hashing.svg"
-    },
-    {
-      "id": "dist-quorum",
-      "topicId": "distributed-systems",
-      "topicTitle": "Distributed Systems",
-      "topicNumber": 6,
-      "subtopicNumber": "6.4",
-      "title": "Quorum",
-      "subtitle": "Mastering tunable quorum math (W + R > N), Pigeonhole overlap guarantees, and why Strict Quorum still isn't Linearizable.",
-      "readingTime": "8 min read",
-      "difficulty": "Advanced",
-      "keyTakeaways": [
-        "In a system with `N` replicas, requiring `W` write acknowledgments and `R` read responses where `W + R > N` guarantees that the read set and write set overlap by at least 1 replica.",
-        "Common production tuning for `N = 3` is `W = 2, R = 2`, which tolerates 1 unavailable node for both reads and writes while ensuring every read sees the latest committed write.",
-        "Even when `W + R > N`, a leaderless quorum system is NOT strictly linearizable during concurrent writes or partial write failures unless Read Repair is synchronous."
-      ],
-      "architectureDiagram": "STRICT QUORUM OVERLAP (N = 3, W = 2, R = 2)\n                              W + R = 4 > 3 (Overlap >= 1)\n\n      Write Quorum (W = 2)                     Read Quorum (R = 2)\n  +---------------------------+           +---------------------------+\n  |  [Replica 1]  [Replica 2] |           |  [Replica 2]  [Replica 3] |\n  |   (ver = 5)    (ver = 5)  |           |   (ver = 5)    (ver = 4)  |\n  +---------------------------+           +---------------------------+\n                         \\                     /\n                          v                   v\n                    [Replica 2 is in BOTH sets!]\n             Reader takes max(ver=5, ver=4) => Returns ver=5",
-      "sections": [
-        {
-          "heading": "1. Architectural Fundamentals & Core Mechanics",
-          "body": "By the Pigeonhole Principle, if you write to `W` out of `N` nodes and read from `R` out of `N` nodes such that `W + R > N`, at least one node in the `R` responses must have participated in the most recent completed write. The coordinator attaches a version vector or timestamp to every write; on a read, it queries `R` nodes in parallel and returns the value with the highest version.",
-          "bullets": [
-            "**Core Architectural Principle**: In a system with `N` replicas, requiring `W` write acknowledgments and `R` read responses where `W + R > N` guarantees that the read set and write set overlap by at least 1 replica.",
-            "**Problem Space & Invariants**: Common production tuning for `N = 3` is `W = 2, R = 2`, which tolerates 1 unavailable node for both reads and writes while ensuring every read sees the latest committed write.",
-            "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-          ],
-          "asciiDiagram": "STRICT QUORUM OVERLAP (N = 3, W = 2, R = 2)\n                              W + R = 4 > 3 (Overlap >= 1)\n\n      Write Quorum (W = 2)                     Read Quorum (R = 2)\n  +---------------------------+           +---------------------------+\n  |  [Replica 1]  [Replica 2] |           |  [Replica 2]  [Replica 3] |\n  |   (ver = 5)    (ver = 5)  |           |   (ver = 5)    (ver = 4)  |\n  +---------------------------+           +---------------------------+\n                         \\                     /\n                          v                   v\n                    [Replica 2 is in BOTH sets!]\n             Reader takes max(ver=5, ver=4) => Returns ver=5"
-        },
-        {
-          "heading": "2. Architectural Patterns & Implementation Topologies",
-          "body": "Distributed architectures apply specific implementation patterns and topologies for Quorum:",
-          "bullets": [
-            "**Strict Quorum (`N=3, W=2, R=2`)**: Provides strong overlap guarantee without a single leader bottleneck; tolerates 1 node failure seamlessly. Best suited for Distributed key-value and wide-column stores (Cassandra `LOCAL_QUORUM`, DynamoDB).",
-            "**Weak / Eventual Quorum (`N=3, W=1, R=1`)**: Provides lowest possible latency and highest availability during multi-node outages. Best suited for Non-critical metrics, clickstream ingestion, and cached recommendations.",
-            "Balanced High Availability (`N=3, W=2, R=2`): Survives 1 dead node for both reads and writes; tail latency is bounded by the *2nd fastest* node rather than the slowest node!",
-            "Write-Optimized (`N=3, W=1, R=3`): Ultra-fast writes, but reads must wait for all 3 nodes and fail if even 1 node is down.",
-            "In-Flight Write Anomaly (Flip-Flop Reads): Suppose Writer updates `v1 -> v2` (`N=3, W=2`). Replica 1 finishes `v2`, Replica 2 is still in network flight, Replica 3 hasn't received it. Reader A reads `{Replica 1 (v2), Replica 2 (v1)}` and sees `v2`. Immediately after, Reader B reads `{Replica 2 (v1), Replica 3 (v1)}` and sees `v1`: violating linearizability unless Reader A performs *synchronous* read repair before returning!",
-            "Failed Write Not Rolled Back: If a write with `W=2` succeeds on only 1 node (`Replica 1`) and fails on the other 2, the client receives a Write Error, yet `Replica 1` keeps the uncommitted value and exposes it to subsequent `R=2` reads."
-          ],
-          "codeSnippet": {
-            "title": "Quorum Coordinator Read with Synchronous Read-Repair",
-            "code": "async function quorumRead(key: string, replicas: ReplicaClient[], R = 2): Promise<VersionedVal> {\n  // Query all N replicas in parallel, wait for first R successful responses\n  const responses = await waitForFirstK(replicas.map(r => r.read(key)), R);\n\n  // Pick response with highest version timestamp\n  const latest = responses.reduce((a, b) => (a.version >= b.version ? a : b));\n\n  // Synchronous Read-Repair on stale responders to restore linearizability\n  const staleReplicas = responses.filter(r => r.version < latest.version);\n  if (staleReplicas.length > 0) {\n    await Promise.all(staleReplicas.map(r => r.write(key, latest)));\n  }\n  return latest;\n}"
-          }
-        },
-        {
-          "heading": "3. Production Strengths: Where & How to Apply",
-          "body": "Production deployments apply Quorum across targeted operational scenarios:",
-          "bullets": [
-            "**Where to Use: High-Impact Scenarios**: Optimal for Distributed key-value and wide-column stores (Cassandra `LOCAL_QUORUM`, DynamoDB), suited for environments requiring Strong overlap guarantee without a single leader bottleneck; tolerates 1 node failure seamlessly.",
-            "**Where to Use: High-Throughput Scenarios**: Recommended for Non-critical metrics, clickstream ingestion, and cached recommendations, where Lowest possible latency and highest availability during multi-node outages.",
-            "**How to Use: Engineering Implementation**: Senior/Staff interviews often probe edge cases where `W + R > N` still exhibits non-linearizable anomalies:. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-            "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-          ]
-        },
-        {
-          "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-          "body": "Improper implementation of Quorum introduces operational bottlenecks and failure modes:",
-          "bullets": [
-            "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: requires 2 network round-trips/parallel responses; not strictly linearizable without sync read-repair or paxos.",
-            "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: high probability of reading stale data before background replication catches up.",
-            "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-            "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-          ]
-        },
-        {
-          "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-          "body": "Technical guidelines and evaluation criteria for Quorum:",
-          "bullets": [
-            "**Staff+ Golden Rule**: Even when `W + R > N`, a leaderless quorum system is NOT strictly linearizable during concurrent writes or partial write failures unless Read Repair is synchronous.",
-            "**Staff+ Interview Playbook**: Explain why `N=3, W=2, R=2` actually *improves* p99 tail latency compared to reading from a single node: because the coordinator sends requests to all 3 nodes and only waits for the fastest 2, a GC pause on the 3rd node is completely masked!"
-          ]
-        }
-      ],
-      "tradeOffs": [
-        {
-          "option": "Strict Quorum (`N=3, W=2, R=2`)",
-          "pros": "Strong overlap guarantee without a single leader bottleneck; tolerates 1 node failure seamlessly.",
-          "cons": "Requires 2 network round-trips/parallel responses; not strictly linearizable without sync read-repair or Paxos.",
-          "bestFor": "Distributed key-value and wide-column stores (Cassandra `LOCAL_QUORUM`, DynamoDB)."
-        },
-        {
-          "option": "Weak / Eventual Quorum (`N=3, W=1, R=1`)",
-          "pros": "Lowest possible latency and highest availability during multi-node outages.",
-          "cons": "High probability of reading stale data before background replication catches up.",
-          "bestFor": "Non-critical metrics, clickstream ingestion, and cached recommendations."
-        }
-      ],
-      "interviewTip": "Explain why `N=3, W=2, R=2` actually *improves* p99 tail latency compared to reading from a single node: because the coordinator sends requests to all 3 nodes and only waits for the fastest 2, a GC pause on the 3rd node is completely masked!",
-      "jsonUrl": "/api/subtopics/distributed-systems/dist-quorum.json"
-    },
-    {
-      "id": "dist-leader-election",
-      "topicId": "distributed-systems",
-      "topicTitle": "Distributed Systems",
-      "topicNumber": 6,
-      "subtopicNumber": "6.5",
-      "title": "Leader Election",
-      "subtitle": "Preventing Split-Brain using consensus leases, heartbeats, monotonic epochs, and Fencing Tokens.",
-      "readingTime": "8 min read",
-      "difficulty": "Advanced",
-      "keyTakeaways": [
-        "Leader election ensures exactly one node coordinates writes, partition assignments, or scheduled jobs at any given logical epoch.",
-        "Time-based leases alone can suffer from Split-Brain if the old leader experiences a long Stop-The-World GC pause or clock drift and continues acting as leader after its lease expired.",
-        "Monotonically increasing Epoch Numbers (Fencing Tokens) validated by the storage layer mathematically fence off zombie leaders."
-      ],
-      "architectureDiagram": "PREVENTING SPLIT-BRAIN WITH FENCING TOKENS\n  [Old Leader (Node 1)] ---> Acquires Lease (Epoch = 33)\n           |                 (Enters 15s JVM GC Pause. Lease Expires!)\n  [New Leader (Node 2)] ---> Elected Leader (Epoch = 34)\n           |---------------> Writes to Storage (Epoch = 34) --> [Storage Accepts: max_epoch=34]\n  [Old Leader Wakes Up] ---> Delayed Write   (Epoch = 33) ----> [Storage REJECTS: 33 < 34!]",
-      "sections": [
-        {
-          "heading": "1. Architectural Fundamentals & Core Mechanics",
-          "body": "Rather than implementing custom Bully or Ring election algorithms from scratch (which frequently break under asymmetric network partitions), production systems rely on a consensus store like `etcd` (Raft) or `ZooKeeper` (ZAB) or internal Raft groups. Candidates compete to create an ephemeral key or acquire a lease backed by a majority quorum. The winner must renew its lease via periodic heartbeats before the lease TTL expires.",
-          "bullets": [
-            "**Core Architectural Principle**: Leader election ensures exactly one node coordinates writes, partition assignments, or scheduled jobs at any given logical epoch.",
-            "**Problem Space & Invariants**: Time-based leases alone can suffer from Split-Brain if the old leader experiences a long Stop-The-World GC pause or clock drift and continues acting as leader after its lease expired.",
-            "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-          ],
-          "asciiDiagram": "PREVENTING SPLIT-BRAIN WITH FENCING TOKENS\n  [Old Leader (Node 1)] ---> Acquires Lease (Epoch = 33)\n           |                 (Enters 15s JVM GC Pause. Lease Expires!)\n  [New Leader (Node 2)] ---> Elected Leader (Epoch = 34)\n           |---------------> Writes to Storage (Epoch = 34) --> [Storage Accepts: max_epoch=34]\n  [Old Leader Wakes Up] ---> Delayed Write   (Epoch = 33) ----> [Storage REJECTS: 33 < 34!]"
-        },
-        {
-          "heading": "2. Architectural Patterns & Implementation Topologies",
-          "body": "Distributed architectures apply specific implementation patterns and topologies for Leader Election:",
-          "bullets": [
-            "**External Consensus Coordinator (etcd / ZooKeeper)**: Provides battle-tested linearizable lease management, watches, and monotonic revision numbers (`modrevision`). Best suited for Microservice job schedulers, Kafka/shard controllers, and primary database failover managers (Patroni).",
-            "**Embedded Raft per Partition (CockroachDB / Kafka KRaft)**: Provides zero external dependencies; scales leadership across thousands of independent partition groups. Best suited for Distributed databases and large-scale streaming brokers.",
-            "Heartbeat Timeout Balance: Too short (e.g., 100ms) causes false-positive elections during minor network jitter ('flapping'); too long (e.g., 60s) increases failover RTO downtime when a leader genuinely crashes. Typical values: 3–10 seconds.",
-            "Pre-Vote Phase in Raft: Prevents a partitioned node with an incremented term from disrupting a healthy cluster leader when the partition heals.",
-            "Monotonic Fencing Token (`epoch` / `term` / `zxid`): Every time a leader is elected, the consensus service increments a strictly monotonic integer.",
-            "Resource-Side Enforcement: The downstream storage server or database checks the token attached to every write and rejects any request whose token is smaller than the highest token already seen."
-          ],
-          "codeSnippet": {
-            "title": "Storage-Layer Fencing Token Validation Against Zombie Leaders",
-            "code": "-- Every leader election increments a monotonic epoch / fencing_token in etcd.\n-- The leader MUST pass its fencing_token on every storage mutation.\nUPDATE partition_metadata\nSET current_state = $1,\n    last_fencing_token = $2,\n    updated_at = NOW()\nWHERE partition_id = $3\n  AND last_fencing_token <= $2; -- FENCING GUARD: Reject zombie leaders with older epochs!\n\n// In application code:\nif (result.rowCount === 0) {\n  logger.error('Fencing token rejected! Stepping down immediately as zombie leader.');\n  process.exit(1);\n}"
-          }
-        },
-        {
-          "heading": "3. Production Strengths: Where & How to Apply",
-          "body": "Production deployments apply Leader Election across targeted operational scenarios:",
-          "bullets": [
-            "**Where to Use: High-Impact Scenarios**: Optimal for Microservice job schedulers, Kafka/shard controllers, and primary database failover managers (Patroni), suited for environments requiring Battle-tested linearizable lease management, watches, and monotonic revision numbers (`ModRevision`).",
-            "**Where to Use: High-Throughput Scenarios**: Recommended for Distributed databases and large-scale streaming brokers, where Zero external dependencies; scales leadership across thousands of independent partition groups.",
-            "**How to Use: Engineering Implementation**: Suppose Node 1 holds a 10-second leader lease with `epoch = 33`. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-            "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-          ]
-        },
-        {
-          "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-          "body": "Improper implementation of Leader Election introduces operational bottlenecks and failure modes:",
-          "bullets": [
-            "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: requires operating and maintaining a separate 3- or 5-node etcd/zk cluster.",
-            "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: higher implementation complexity and heartbeat traffic across partition groups.",
-            "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-            "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-          ]
-        },
-        {
-          "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-          "body": "Technical guidelines and evaluation criteria for Leader Election:",
-          "bullets": [
-            "**Staff+ Golden Rule**: Monotonically increasing Epoch Numbers (Fencing Tokens) validated by the storage layer mathematically fence off zombie leaders.",
-            "**Staff+ Interview Playbook**: Never talk about Leader Election or Distributed Locks without bringing up Martin Kleppmann's 'Fencing Tokens': explain how a GC pause can create two active leaders and how an incrementing epoch token checked by the storage engine prevents split-brain corruption."
-          ]
-        }
-      ],
-      "tradeOffs": [
-        {
-          "option": "External Consensus Coordinator (etcd / ZooKeeper)",
-          "pros": "Battle-tested linearizable lease management, watches, and monotonic revision numbers (`ModRevision`).",
-          "cons": "Requires operating and maintaining a separate 3- or 5-node etcd/ZK cluster.",
-          "bestFor": "Microservice job schedulers, Kafka/shard controllers, and primary database failover managers (Patroni)."
-        },
-        {
-          "option": "Embedded Raft per Partition (CockroachDB / Kafka KRaft)",
-          "pros": "Zero external dependencies; scales leadership across thousands of independent partition groups.",
-          "cons": "Higher implementation complexity and heartbeat traffic across partition groups.",
-          "bestFor": "Distributed databases and large-scale streaming brokers."
-        }
-      ],
-      "interviewTip": "Never talk about Leader Election or Distributed Locks without bringing up Martin Kleppmann's 'Fencing Tokens', explain how a GC pause can create two active leaders and how an incrementing epoch token checked by the storage engine prevents split-brain corruption.",
-      "jsonUrl": "/api/subtopics/distributed-systems/dist-leader-election.json"
-    },
-    {
-      "id": "dist-locks",
-      "topicId": "distributed-systems",
-      "topicTitle": "Distributed Systems",
-      "topicNumber": 6,
-      "subtopicNumber": "6.6",
-      "title": "Distributed Locks",
-      "subtitle": "Coordinating mutual exclusion across processes: Redis SET NX + Lua release, Redlock controversies, and etcd/ZooKeeper locks.",
-      "readingTime": "9 min read",
-      "difficulty": "Advanced",
-      "keyTakeaways": [
-        "Use Distributed Locks for **efficiency** (avoiding duplicate expensive work) or **correctness** (preventing concurrent mutation of shared state, which additionally requires Fencing Tokens).",
-        "A single-node Redis lock must use `SET lock_key unique_owner_token NX PX 5000` to acquire, and an atomic Lua script comparing `unique_owner_token` before `DEL` to release.",
-        "For strict correctness under failovers, prefer consensus-backed locks (`etcd`, `ZooKeeper`, or database `SELECT FOR UPDATE` / advisory locks) over asynchronous Redis replication."
-      ],
-      "architectureDiagram": "SAFE REDIS LOCK ACQUISITION & LUA RELEASE\n  [Worker A] -- 1. SET lock:job1 'uuid_A' NX PX 5000 --> [Redis]\n  [Worker A] <-- OK (Lock Acquired!) -------------------- [Redis]\n  [Worker A] -- 2. Execute Critical Section.\n  [Worker A] -- 3. EVAL Lua: if GET == 'uuid_A' then DEL -> [Redis]\n                   (Prevents deleting Worker B's lock if A's TTL expired!)",
-      "sections": [
-        {
-          "heading": "1. Architectural Fundamentals & Core Mechanics",
-          "body": "Developers often implement a distributed lock with `SETNX` followed by `EXPIRE` and a plain `DEL`. This has two fatal bugs: (1) if the client crashes between `SETNX` and `EXPIRE`, the lock is held forever (deadlock); (2) if Worker A's execution takes 6 seconds on a 5-second lock TTL, the lock expires, Worker B acquires the lock, and then Worker A finishes and calls `DEL`, deleting Worker B's active lock!",
-          "bullets": [
-            "**Core Architectural Principle**: Use Distributed Locks for **efficiency** (avoiding duplicate expensive work) or **correctness** (preventing concurrent mutation of shared state, which additionally requires Fencing Tokens).",
-            "**Problem Space & Invariants**: A single-node Redis lock must use `SET lock_key unique_owner_token NX PX 5000` to acquire, and an atomic Lua script comparing `unique_owner_token` before `DEL` to release.",
-            "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-          ],
-          "asciiDiagram": "SAFE REDIS LOCK ACQUISITION & LUA RELEASE\n  [Worker A] -- 1. SET lock:job1 'uuid_A' NX PX 5000 --> [Redis]\n  [Worker A] <-- OK (Lock Acquired!) -------------------- [Redis]\n  [Worker A] -- 2. Execute Critical Section.\n  [Worker A] -- 3. EVAL Lua: if GET == 'uuid_A' then DEL -> [Redis]\n                   (Prevents deleting Worker B's lock if A's TTL expired!)"
-        },
-        {
-          "heading": "2. Architectural Patterns & Implementation Topologies",
-          "body": "Distributed architectures apply specific implementation patterns and topologies for Distributed Locks:",
-          "bullets": [
-            "**Redis Distributed Lock (`SET NX PX` + Lua)**: Provides ultra-fast (<1ms), handles 100k+ lock ops/sec, trivial infrastructure footprint. Best suited for Deduplicating cron jobs, preventing cache stampedes, and rate-limiting concurrent user actions.",
-            "**Consensus Lock (`etcd` / `ZooKeeper`) or DB Advisory Lock**: Provides linearizable safety across node failures; provides monotonic revision tokens for fencing. Best suited for Distributed storage leadership, cluster metadata mutations, and strict correctness invariants.",
-            "Atomic Acquisition: Always combine `NX` (only set if not exists) and `PX` (millisecond TTL) in a single atomic command: `SET resource_lock <random_uuid> NX PX 5000`.",
-            "Compare-And-Delete via Lua: When releasing the lock, pass `<random_uuid>` to a Lua script that deletes the key *only if* the current value still matches `<random_uuid>`.",
-            "Locking for Efficiency (Use Redis): You want to prevent two cron pods from generating the same daily PDF report or sending a duplicate push notification. If a rare failover causes the work to run twice, it costs a few CPU cycles: single Redis lock is fast and ideal.",
-            "Locking for Correctness (Use etcd / ZooKeeper / DB Transaction): Concurrent execution would corrupt financial state or double-book inventory. Use PostgreSQL row locks/advisory locks (`pg_try_advisory_xact_lock`) or `etcd` leases with `ModRevision` fencing tokens."
-          ],
-          "codeSnippet": {
-            "title": "Production Redis Distributed Lock with Atomic Lua Release",
-            "code": "import { randomUUID } from 'crypto';\n\nexport class RedisDistributedLock {\n  private readonly releaseLua = `\n    if redis.call('GET', KEYS[1]) == ARGV[1] then\n      return redis.call('DEL', KEYS[1])\n    else\n      return 0\n    end\n  `;\n\n  async acquire(key: string, ttlMs: number): Promise<string | null> {\n    const token = randomUUID();\n    const res = await redis.set(`lock:${key}`, token, 'PX', ttlMs, 'NX');\n    return res === 'OK' ? token : null;\n  }\n\n  async release(key: string, token: string): Promise<boolean> {\n    const res = await redis.eval(this.releaseLua, 1, `lock:${key}`, token);\n    return res === 1;\n  }\n}"
-          }
-        },
-        {
-          "heading": "3. Production Strengths: Where & How to Apply",
-          "body": "Production deployments apply Distributed Locks across targeted operational scenarios:",
-          "bullets": [
-            "**Where to Use: High-Impact Scenarios**: Optimal for Deduplicating cron jobs, preventing cache stampedes, and rate-limiting concurrent user actions, suited for environments requiring Ultra-fast (<1ms), handles 100k+ lock ops/sec, trivial infrastructure footprint.",
-            "**Where to Use: High-Throughput Scenarios**: Recommended for Distributed storage leadership, cluster metadata mutations, and strict correctness invariants, where Linearizable safety across node failures; provides monotonic revision tokens for fencing.",
-            "**How to Use: Engineering Implementation**: What happens if the single Redis primary crashes right after granting a lock to Worker A, before replicating that key to its async replica? The promoted replica will grant the same lock to Worker B! Salvatore Sanfilippo (antirez) proposed `Redlock` (acquiring locks across 3 of 5 independent Redis masters). Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-            "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-          ]
-        },
-        {
-          "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-          "body": "Improper implementation of Distributed Locks introduces operational bottlenecks and failure modes:",
-          "bullets": [
-            "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: async failover can violate mutual exclusion; does not generate monotonic fencing tokens.",
-            "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: lower throughput (~5k–15k writes/sec per consensus group) and higher latency due to quorum disk fsync.",
-            "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-            "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-          ]
-        },
-        {
-          "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-          "body": "Technical guidelines and evaluation criteria for Distributed Locks:",
-          "bullets": [
-            "**Staff+ Golden Rule**: For strict correctness under failovers, prefer consensus-backed locks (`etcd`, `ZooKeeper`, or database `SELECT FOR UPDATE` / advisory locks) over asynchronous Redis replication.",
-            "**Staff+ Interview Playbook**: Ask yourself and the interviewer: 'Are we locking for Efficiency or for Correctness?' And if you already have a PostgreSQL database storing the entity being mutated, remember that a simple `SELECT . FOR UPDATE` or `UNIQUE` constraint on the DB row often eliminates the need for an external distributed lock altogether!"
-          ]
-        }
-      ],
-      "tradeOffs": [
-        {
-          "option": "Redis Distributed Lock (`SET NX PX` + Lua)",
-          "pros": "Ultra-fast (<1ms), handles 100k+ lock ops/sec, trivial infrastructure footprint.",
-          "cons": "Async failover can violate mutual exclusion; does not generate monotonic fencing tokens.",
-          "bestFor": "Deduplicating cron jobs, preventing cache stampedes, and rate-limiting concurrent user actions."
-        },
-        {
-          "option": "Consensus Lock (`etcd` / `ZooKeeper`) or DB Advisory Lock",
-          "pros": "Linearizable safety across node failures; provides monotonic revision tokens for fencing.",
-          "cons": "Lower throughput (~5k–15k writes/sec per consensus group) and higher latency due to quorum disk fsync.",
-          "bestFor": "Distributed storage leadership, cluster metadata mutations, and strict correctness invariants."
-        }
-      ],
-      "interviewTip": "Ask yourself and the interviewer: 'Are we locking for Efficiency or for Correctness?' And if you already have a PostgreSQL database storing the entity being mutated, remember that a simple `SELECT . FOR UPDATE` or `UNIQUE` constraint on the DB row often eliminates the need for an external distributed lock altogether!",
-      "jsonUrl": "/api/subtopics/distributed-systems/dist-locks.json"
-    },
-    {
-      "id": "dist-consensus",
-      "topicId": "distributed-systems",
-      "topicTitle": "Distributed Systems",
-      "topicNumber": 6,
-      "subtopicNumber": "6.7",
-      "title": "Consensus: Raft/Paxos basics",
-      "subtitle": "How Replicated State Machines achieve linearizable fault-tolerant agreement using Raft Terms, Log Replication, and Quorum Safety.",
-      "readingTime": "10 min read",
-      "difficulty": "Staff+",
-      "keyTakeaways": [
-        "Consensus algorithms (Raft, Multi-Paxos, ZAB) allow a cluster of `2f + 1` nodes to act as a single coherent Replicated State Machine, tolerating up to `f` node failures.",
-        "Raft decomposes consensus into three sub-problems: Leader Election (`RequestVote`), Log Replication (`AppendEntries`), and Safety (only nodes with all committed entries can win election).",
-        "Adding more nodes to a consensus group increases fault tolerance (5 nodes survive 2 failures vs 3 nodes surviving 1), but *decreases* write throughput because every write must replicate to more nodes."
-      ],
-      "architectureDiagram": "RAFT REPLICATED STATE MACHINE (N = 3, Quorum = 2)\n  Client --- 1. Command ('SET x=5') ---> [Leader (Term 4)]\n                                           |  (2. Append to Local Log: idx=8, term=4)\n                    +----------------------+----------------------+\n                    | AppendEntries RPC                           | AppendEntries RPC\n                    v                                             v\n          [Follower A (Term 4)]                         [Follower B (Network Slow)]\n          (3. Appends idx=8 & ACKs!)                    (Still in flight.)\n                    |\n  Client <-- 4. Majority (2/3) Reached! Leader Commits idx=8 & Replies to Client",
-      "sections": [
-        {
-          "heading": "1. Architectural Fundamentals & Core Mechanics",
-          "body": "Raft divides time into monotonically increasing logical **Terms** (acting as a logical clock). At any time, each node is in one of three states: **Leader**, **Follower**, or **Candidate**. Under normal operation, the Leader sends periodic `AppendEntries` heartbeats to Followers. If a Follower hears nothing within its randomized election timeout (`150ms–300ms`), it increments `currentTerm`, transitions to Candidate, votes for itself, and requests votes from peers via `RequestVote` RPCs.",
-          "bullets": [
-            "**Core Architectural Principle**: Consensus algorithms (Raft, Multi-Paxos, ZAB) allow a cluster of `2f + 1` nodes to act as a single coherent Replicated State Machine, tolerating up to `f` node failures.",
-            "**Problem Space & Invariants**: Raft decomposes consensus into three sub-problems: Leader Election (`RequestVote`), Log Replication (`AppendEntries`), and Safety (only nodes with all committed entries can win election).",
-            "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-          ],
-          "asciiDiagram": "RAFT REPLICATED STATE MACHINE (N = 3, Quorum = 2)\n  Client --- 1. Command ('SET x=5') ---> [Leader (Term 4)]\n                                           |  (2. Append to Local Log: idx=8, term=4)\n                    +----------------------+----------------------+\n                    | AppendEntries RPC                           | AppendEntries RPC\n                    v                                             v\n          [Follower A (Term 4)]                         [Follower B (Network Slow)]\n          (3. Appends idx=8 & ACKs!)                    (Still in flight.)\n                    |\n  Client <-- 4. Majority (2/3) Reached! Leader Commits idx=8 & Replies to Client"
-        },
-        {
-          "heading": "2. Architectural Patterns & Implementation Topologies",
-          "body": "Distributed architectures apply specific implementation patterns and topologies for Consensus: Raft/Paxos basics:",
-          "bullets": [
-            "**3-Node Raft / Paxos Group (Quorum = 2)**: Provides lowest write latency and network fan-out; tolerates 1 node failure. Best suited for Single-region high-speed consensus groups (etcd, Kafka KRaft, TiKV shards).",
-            "**5-Node Raft / Paxos Group (Quorum = 3)**: Provides tolerates 2 simultaneous node failures; remains fault-tolerant even during rolling upgrades. Best suited for Mission-critical control planes, global metadata stores, and multi-region spanner deployments.",
-            "Randomized Election Timeouts: By picking a random timeout between 150ms and 300ms, almost always one node times out first and wins a majority before any peer wakes up: preventing split votes.",
-            "Two-Phase Log Commit (`AppendEntries`): When the Leader receives a write, it appends the entry to its local WAL (uncommitted) and sends `AppendEntries` to all Followers in parallel. Once a majority (`floor(N/2) + 1`) persist the entry, the Leader advances `commitIndex`, applies the command to its State Machine, and notifies Followers on the next heartbeat.",
-            "ReadIndex Optimization: The Leader records its current `commitIndex`, sends a lightweight heartbeat round to a majority of peers to confirm it is still the active Leader, waits until its state machine has applied at least `ReadIndex`, and serves the read without writing to the Raft log.",
-            "Leader Leases (Clock-Bounded): Using bounded clock drift (like Google Spanner's TrueTime or CockroachDB's Raft leases), the Leader serves local reads with 0 network hops while its lease is guaranteed not to have expired on peers."
-          ],
-          "codeSnippet": {
-            "title": "Raft RequestVote Log Up-To-Date Safety Check",
-            "code": "interface RequestVoteArgs {\n  term: number;\n  candidateId: string;\n  lastLogIndex: number;\n  lastLogTerm: number;\n}\n\nfunction canGrantVote(voter: RaftNodeState, req: RequestVoteArgs): boolean {\n  if (req.term < voter.currentTerm) return false;\n  const votedOk = voter.votedFor === null || voter.votedFor === req.candidateId;\n\n  // Raft Safety Property: Candidate's log must be at least as up-to-date as voter's log\n  const myLastTerm = voter.log[voter.log.length - 1].term;\n  const myLastIdx = voter.log.length - 1;\n  const logIsUpToDate =\n    req.lastLogTerm > myLastTerm ||\n    (req.lastLogTerm === myLastTerm && req.lastLogIndex >= myLastIdx);\n\n  return votedOk && logIsUpToDate;\n}"
-          }
-        },
-        {
-          "heading": "3. Production Strengths: Where & How to Apply",
-          "body": "Production deployments apply Consensus: Raft/Paxos basics across targeted operational scenarios:",
-          "bullets": [
-            "**Where to Use: High-Impact Scenarios**: Optimal for Single-region high-speed consensus groups (etcd, Kafka KRaft, TiKV shards), suited for environments requiring Lowest write latency and network fan-out; tolerates 1 node failure.",
-            "**Where to Use: High-Throughput Scenarios**: Recommended for Mission-critical control planes, global metadata stores, and multi-region spanner deployments, where Tolerates 2 simultaneous node failures; remains fault-tolerant even during rolling upgrades.",
-            "**How to Use: Engineering Implementation**: A subtle trap in Raft: if a client sends a Read request to the Leader, can the Leader immediately return its local in-memory state? No! If the Leader was silently partitioned from the rest of the cluster 2 seconds ago, the other nodes may have already elected a new Leader in a higher Term and mutated the key. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-            "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-          ]
-        },
-        {
-          "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-          "body": "Improper implementation of Consensus: Raft/Paxos basics introduces operational bottlenecks and failure modes:",
-          "bullets": [
-            "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: during planned maintenance on 1 node, a single unexpected crash on the remaining 2 halts the group.",
-            "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: higher network replication overhead and quorum commit latency.",
-            "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-            "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-          ]
-        },
-        {
-          "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-          "body": "Technical guidelines and evaluation criteria for Consensus: Raft/Paxos basics:",
-          "bullets": [
-            "**Staff+ Golden Rule**: Adding more nodes to a consensus group increases fault tolerance (5 nodes survive 2 failures vs 3 nodes surviving 1), but *decreases* write throughput because every write must replicate to more nodes.",
-            "**Staff+ Interview Playbook**: Never say 'We'll add more nodes to our ZooKeeper/etcd cluster to scale write throughput.' Consensus groups replicate *every* write to all nodes; to scale writes horizontally, partition the keyspace into multiple independent Raft groups ('Multi-Raft', used by CockroachDB and TiKV)."
-          ]
-        }
-      ],
-      "tradeOffs": [
-        {
-          "option": "3-Node Raft / Paxos Group (Quorum = 2)",
-          "pros": "Lowest write latency and network fan-out; tolerates 1 node failure.",
-          "cons": "During planned maintenance on 1 node, a single unexpected crash on the remaining 2 halts the group.",
-          "bestFor": "Single-region high-speed consensus groups (etcd, Kafka KRaft, TiKV shards)."
-        },
-        {
-          "option": "5-Node Raft / Paxos Group (Quorum = 3)",
-          "pros": "Tolerates 2 simultaneous node failures; remains fault-tolerant even during rolling upgrades.",
-          "cons": "Higher network replication overhead and quorum commit latency.",
-          "bestFor": "Mission-critical control planes, global metadata stores, and multi-region spanner deployments."
-        }
-      ],
-      "interviewTip": "Never say 'We'll add more nodes to our ZooKeeper/etcd cluster to scale write throughput.' Consensus groups replicate *every* write to all nodes; to scale writes horizontally, partition the keyspace into multiple independent Raft groups ('Multi-Raft', used by CockroachDB and TiKV).",
-      "jsonUrl": "/api/subtopics/distributed-systems/dist-consensus.json"
-    },
-    {
-      "id": "dist-eventual-consistency",
-      "topicId": "distributed-systems",
-      "topicTitle": "Distributed Systems",
-      "topicNumber": 6,
-      "subtopicNumber": "6.8",
-      "title": "Eventual Consistency",
-      "subtitle": "Spectrum of consistency models (Linearizability, Causal, Eventual), Vector Clocks, and PACELC theorem trade-offs.",
-      "readingTime": "9 min read",
-      "difficulty": "Intermediate",
-      "keyTakeaways": [
-        "Eventual Consistency guarantees only that if no new updates are made to an item, all replicas will eventually converge to the same value.",
-        "The PACELC theorem extends CAP: if there is a Partition (P), trade off Availability (A) vs Consistency (C); Else (E) during normal operation, trade off Latency (L) vs Consistency (C).",
-        "Causal Consistency is the strongest consistency model that remains available under network partitions, preserving 'happens-before' (`A -> B`) ordering via Lamport/Vector Clocks."
-      ],
-      "architectureDiagram": "CONSISTENCY SPECTRUM & VECTOR CLOCKS\n  Strongest (Highest Latency) <-------------------> Weakest (Lowest Latency)\n  [Linearizable] -> [Sequential] -> [Causal] -> [Read-Your-Writes] -> [Eventual]\n\n  VECTOR CLOCK CAUSALITY DETECTION:\n  v1 = {A:1, B:0}  --(depends on)--> v2 = {A:1, B:1}   (v1 < v2: v2 overwrites v1)\n  vA = {A:2, B:0}  || (concurrent) || vB = {A:1, B:1}  (Neither dominates -> Conflict!)",
-      "sections": [
-        {
-          "heading": "1. Architectural Fundamentals & Core Mechanics",
-          "body": "In a distributed system, network partitions (`P`) are inevitable physical realities, so CAP really asks whether a system chooses **CP** (reject requests on the minority side of a partition to preserve linearizable consistency) or **AP** (accept writes/reads on both sides and resolve divergence later). Daniel Abadi's **PACELC** theorem adds the crucial insight that even when the network is healthy (`E = Else`), synchronous replication for strong consistency (`C`) directly increases request latency (`L`).",
-          "bullets": [
-            "**Core Architectural Principle**: Eventual Consistency guarantees only that if no new updates are made to an item, all replicas will eventually converge to the same value.",
-            "**Problem Space & Invariants**: The PACELC theorem extends CAP: if there is a Partition (P), trade off Availability (A) vs Consistency (C); Else (E) during normal operation, trade off Latency (L) vs Consistency (C).",
-            "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-          ],
-          "asciiDiagram": "CONSISTENCY SPECTRUM & VECTOR CLOCKS\n  Strongest (Highest Latency) <-------------------> Weakest (Lowest Latency)\n  [Linearizable] -> [Sequential] -> [Causal] -> [Read-Your-Writes] -> [Eventual]\n\n  VECTOR CLOCK CAUSALITY DETECTION:\n  v1 = {A:1, B:0}  --(depends on)--> v2 = {A:1, B:1}   (v1 < v2: v2 overwrites v1)\n  vA = {A:2, B:0}  || (concurrent) || vB = {A:1, B:1}  (Neither dominates -> Conflict!)"
-        },
-        {
-          "heading": "2. Architectural Patterns & Implementation Topologies",
-          "body": "Distributed architectures apply specific implementation patterns and topologies for Eventual Consistency:",
-          "bullets": [
-            "**Linearizability (CP / PC/EC)**: Provides zero stale reads or anomalous ordering; straightforward application programming model. Best suited for Locking, leader election, unique username registration, and financial ledger debits.",
-            "**Eventual / Causal Consistency (AP / PA/EL)**: Provides sub-10ms local regional reads/writes; survives cross-region network cuts with 100% availability. Best suited for Social feeds, shopping carts, collaborative documents, and DNS/CDN propagation.",
-            "Linearizability (Strong / Atomic Consistency): Appears as if there is only a single copy of the data and every operation takes effect atomically at a single point in time between its invocation and response.",
-            "Causal Consistency: Operations that are causally related (e.g., a question and its reply) are seen by every node in the same order; concurrent unrelated operations may be seen in different orders.",
-            "Sibling Resolution (Amazon Shopping Cart): When Vector Clocks detect concurrent writes, both versions ('siblings') are returned to the client or merged via set-union so no items added to a cart are lost.",
-            "Hybrid Logical Clocks (HLC): Used by CockroachDB and MongoDB; combines physical wall-clock bits with a logical counter in a single 64-bit integer, tracking causality without unbounded vector growth."
-          ],
-          "codeSnippet": {
-            "title": "Vector Clock Comparison to Detect Concurrent Conflicts vs Causal Ancestors",
-            "code": "type VectorClock = Record<string, number>;\n\nexport function compareVectorClocks(a: VectorClock, b: VectorClock): 'BEFORE' | 'AFTER' | 'CONCURRENT' | 'EQUAL' {\n  const nodes = new Set([.Object.keys(a), .Object.keys(b)]);\n  let aLess = false, bLess = false;\n\n  for (const node of nodes) {\n    const va = a[node] ?? 0;\n    const vb = b[node] ?? 0;\n    if (va < vb) aLess = true;\n    if (vb < va) bLess = true;\n  }\n  if (aLess && bLess) return 'CONCURRENT'; // Sibling conflict! Must merge.\n  if (aLess) return 'BEFORE';              // 'a' is causal ancestor of 'b'\n  if (bLess) return 'AFTER';               // 'b' is causal ancestor of 'a'\n  return 'EQUAL';\n}"
-          }
-        },
-        {
-          "heading": "3. Production Strengths: Where & How to Apply",
-          "body": "Production deployments apply Eventual Consistency across targeted operational scenarios:",
-          "bullets": [
-            "**Where to Use: High-Impact Scenarios**: Optimal for Locking, leader election, unique username registration, and financial ledger debits, suited for environments requiring Zero stale reads or anomalous ordering; straightforward application programming model.",
-            "**Where to Use: High-Throughput Scenarios**: Recommended for Social feeds, shopping carts, collaborative documents, and DNS/CDN propagation, where Sub-10ms local regional reads/writes; survives cross-region network cuts with 100% availability.",
-            "**How to Use: Engineering Implementation**: Physical wall clocks (`NTP`) across servers can drift by tens of milliseconds, making wall-clock Last-Write-Wins unsafe for fine-grained causality. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-            "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-          ]
-        },
-        {
-          "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-          "body": "Improper implementation of Eventual Consistency introduces operational bottlenecks and failure modes:",
-          "bullets": [
-            "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: higher latency (quorum rtt) in normal operation; unavailable on minority partition.",
-            "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: requires client-side or crdt merge logic to handle concurrent conflicting updates.",
-            "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-            "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-          ]
-        },
-        {
-          "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-          "body": "Technical guidelines and evaluation criteria for Eventual Consistency:",
-          "bullets": [
-            "**Staff+ Golden Rule**: Causal Consistency is the strongest consistency model that remains available under network partitions, preserving 'happens-before' (`A -> B`) ordering via Lamport/Vector Clocks.",
-            "**Staff+ Interview Playbook**: Instead of saying 'CAP theorem says pick 2 of 3', explain that because network partitions (P) are unavoidable in distributed hardware, you choose between CP and AP during a partition: and cite PACELC to explain why you trade Latency vs Consistency even when the network is healthy."
-          ]
-        }
-      ],
-      "tradeOffs": [
-        {
-          "option": "Linearizability (CP / PC/EC)",
-          "pros": "Zero stale reads or anomalous ordering; straightforward application programming model.",
-          "cons": "Higher latency (quorum RTT) in normal operation; unavailable on minority partition.",
-          "bestFor": "Locking, leader election, unique username registration, and financial ledger debits."
-        },
-        {
-          "option": "Eventual / Causal Consistency (AP / PA/EL)",
-          "pros": "Sub-10ms local regional reads/writes; survives cross-region network cuts with 100% availability.",
-          "cons": "Requires client-side or CRDT merge logic to handle concurrent conflicting updates.",
-          "bestFor": "Social feeds, shopping carts, collaborative documents, and DNS/CDN propagation."
-        }
-      ],
-      "interviewTip": "Instead of saying 'CAP theorem says pick 2 of 3', explain that because network partitions (P) are unavoidable in distributed hardware, you choose between CP and AP during a partition, and cite PACELC to explain why you trade Latency vs Consistency even when the network is healthy.",
-      "jsonUrl": "/api/subtopics/distributed-systems/dist-eventual-consistency.json"
-    },
-    {
-      "id": "dist-transactions",
-      "topicId": "distributed-systems",
-      "topicTitle": "Distributed Systems",
-      "topicNumber": 6,
-      "subtopicNumber": "6.9",
-      "title": "Distributed Transactions",
-      "subtitle": "Atomic commitment across shards and services: Two-Phase Commit (2PC), coordinator blocking bottlenecks, and Google Percolator / Spanner.",
-      "readingTime": "9 min read",
-      "difficulty": "Advanced",
-      "keyTakeaways": [
-        "Two-Phase Commit (2PC) achieves atomic all-or-nothing commits across multiple database shards using a Prepare (Voting) phase and a Commit phase.",
-        "2PC is a **blocking protocol**: if a participant votes `YES` in Phase 1 and the Coordinator crashes before broadcasting Phase 2, the participant cannot unilaterally abort or commit: holding locks indefinitely.",
-        "Modern Distributed SQL databases (Google Spanner, CockroachDB) combine 2PC across shards with Raft/Paxos consensus groups inside each shard soneither the coordinator nor participants are single points of failure."
-      ],
-      "architectureDiagram": "TWO-PHASE COMMIT (2PC) PROTOCOL\n  Coordinator                         Shard A (Wallet)          Shard B (Orders)\n       |--- 1a. PREPARE (Tx 99) ----------->|                         |\n       |--- 1b. PREPARE (Tx 99) ------------|------------------------>|\n       |                               (Locks Row &              (Locks Row &\n       |                                fsyncs Undo/Redo)         fsyncs Undo/Redo)\n       |<-- 2a. VOTE_YES -------------------|                         |\n       |<-- 2b. VOTE_YES -------------------|-------------------------|\n  [Writes COMMIT to Coordinator WAL]        |                         |\n       |--- 3a. GLOBAL_COMMIT ------------->| (Releases Lock)         |\n       |--- 3b. GLOBAL_COMMIT --------------|------------------------>| (Releases Lock)",
-      "sections": [
-        {
-          "heading": "1. Architectural Fundamentals & Core Mechanics",
-          "body": "When a single transaction must atomically update data living on two separate physical shards (or two separate databases via XA), a Transaction Coordinator orchestrates Two-Phase Commit (2PC). In **Phase 1 (Prepare)**, the coordinator asks all participants if they *can* commit. Voting `YES` is a binding promise: the participant must acquire all locks, validate constraints, and flush its redo/undo log records to disk before replying `YES`. In **Phase 2 (Commit/Abort)**, if all participants voted `YES`, the coordinator writes a commit decision to its own WAL and tells all participants to commit; if any voted `NO` or timed out, it tells all to roll back.",
-          "bullets": [
-            "**Core Architectural Principle**: Two-Phase Commit (2PC) achieves atomic all-or-nothing commits across multiple database shards using a Prepare (Voting) phase and a Commit phase.",
-            "**Problem Space & Invariants**: 2PC is a **blocking protocol**: if a participant votes `YES` in Phase 1 and the Coordinator crashes before broadcasting Phase 2, the participant cannot unilaterally abort or commit: holding locks indefinitely.",
-            "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-          ],
-          "asciiDiagram": "TWO-PHASE COMMIT (2PC) PROTOCOL\n  Coordinator                         Shard A (Wallet)          Shard B (Orders)\n       |--- 1a. PREPARE (Tx 99) ----------->|                         |\n       |--- 1b. PREPARE (Tx 99) ------------|------------------------>|\n       |                               (Locks Row &              (Locks Row &\n       |                                fsyncs Undo/Redo)         fsyncs Undo/Redo)\n       |<-- 2a. VOTE_YES -------------------|                         |\n       |<-- 2b. VOTE_YES -------------------|-------------------------|\n  [Writes COMMIT to Coordinator WAL]        |                         |\n       |--- 3a. GLOBAL_COMMIT ------------->| (Releases Lock)         |\n       |--- 3b. GLOBAL_COMMIT --------------|------------------------>| (Releases Lock)"
-        },
-        {
-          "heading": "2. Architectural Patterns & Implementation Topologies",
-          "body": "Distributed architectures apply specific implementation patterns and topologies for Distributed Transactions:",
-          "bullets": [
-            "**Two-Phase Commit (2PC / XA / Distributed SQL)**: Provides provides strict acid atomicity and serializability across multiple shards; no compensating logic needed. Best suited for Cross-shard financial transfers within the same Distributed SQL database (Spanner/CockroachDB).",
-            "**Asynchronous Saga Pattern (Compensating Transactions)**: Provides no distributed locks held across network calls; decouples availability of independent microservices. Best suited for Cross-microservice workflows spanning heterogeneous databases or external third-party APIs.",
-            "Why Participants Cannot Back Out After Voting YES: Once a participant replies `YES`, it enters an 'in-doubt' state. If the Coordinator crashes right after collecting votes, the participant doesn't know whether the other shard already received `GLOBAL_COMMIT`. It must hold its row locks and wait until the Coordinator recovers!",
-            "Latency Multiplication: 2PC requires multiple synchronous network round-trips and multiple sequential disk `fsync` barriers across all participating nodes, amplifying lock hold duration by 5–10x.",
-            "High-Availability Coordinator: Both the Coordinator and every Participant shard are replicated across 3–5 nodes via Raft/Paxos. If one physical machine crashes during Phase 1, the Raft group elects a new leader in milliseconds and completes the 2PC without blocking!",
-            "Google Percolator / Parallel Commits: CockroachDB pipelines the Coordinator commit record and Participant intent staging in parallel, cutting distributed commit latency to a single consensus round-trip."
-          ],
-          "codeSnippet": {
-            "title": "Coordinator Recovery Logic for In-Doubt 2PC Transactions",
-            "code": "// When a 2PC Coordinator restarts after a crash, it scans its durable WAL:\nasync function recoverCoordinatorTransactions(walRecords: CoordinatorLogEntry[]) {\n  for (const tx of walRecords) {\n    if (tx.state === 'COMMITTED') {\n      // Phase 2 decision was logged before crash: retry COMMIT until all participants ACK\n      await broadcastWithRetry(tx.participants, 'GLOBAL_COMMIT', tx.txId);\n    } else if (tx.state === 'PREPARING') {\n      // Crash happened before all votes were collected/logged: safe to ABORT everywhere\n      await broadcastWithRetry(tx.participants, 'GLOBAL_ABORT', tx.txId);\n    }\n  }\n}"
-          }
-        },
-        {
-          "heading": "3. Production Strengths: Where & How to Apply",
-          "body": "Production deployments apply Distributed Transactions across targeted operational scenarios:",
-          "bullets": [
-            "**Where to Use: High-Impact Scenarios**: Optimal for Cross-shard financial transfers within the same Distributed SQL database (Spanner/CockroachDB), suited for environments requiring Provides strict ACID atomicity and serializability across multiple shards; no compensating logic needed.",
-            "**Where to Use: High-Throughput Scenarios**: Recommended for Cross-microservice workflows spanning heterogeneous databases or external third-party APIs, where No distributed locks held across network calls; decouples availability of independent microservices.",
-            "**How to Use: Engineering Implementation**: If 2PC is slow and fragile when a single Coordinator machine crashes, how do Google Spanner and CockroachDB run distributed ACID transactions at massive scale? Instead of running 2PC across fragile single machines, they run **2PC across Raft/Paxos Consensus Groups**. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-            "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-          ]
-        },
-        {
-          "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-          "body": "Improper implementation of Distributed Transactions introduces operational bottlenecks and failure modes:",
-          "bullets": [
-            "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: holds locks across network round-trips; couples availability of all participating shards.",
-            "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: lacks isolation (intermediate state is visible); requires writing idempotent compensating actions.",
-            "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-            "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-          ]
-        },
-        {
-          "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-          "body": "Technical guidelines and evaluation criteria for Distributed Transactions:",
-          "bullets": [
-            "**Staff+ Golden Rule**: Modern Distributed SQL databases (Google Spanner, CockroachDB) combine 2PC across shards with Raft/Paxos consensus groups inside each shard soneither the coordinator nor participants are single points of failure.",
-            "**Staff+ Interview Playbook**: In a microservice architecture where Order Service, Payment Service, and Inventory Service each own private databases, advise *against* XA / 2PC across services (because holding DB locks over HTTP/RPC kills availability) and propose the Saga Pattern instead."
-          ]
-        }
-      ],
-      "tradeOffs": [
-        {
-          "option": "Two-Phase Commit (2PC / XA / Distributed SQL)",
-          "pros": "Provides strict ACID atomicity and serializability across multiple shards; no compensating logic needed.",
-          "cons": "Holds locks across network round-trips; couples availability of all participating shards.",
-          "bestFor": "Cross-shard financial transfers within the same Distributed SQL database (Spanner/CockroachDB)."
-        },
-        {
-          "option": "Asynchronous Saga Pattern (Compensating Transactions)",
-          "pros": "No distributed locks held across network calls; decouples availability of independent microservices.",
-          "cons": "Lacks isolation (intermediate state is visible); requires writing idempotent compensating actions.",
-          "bestFor": "Cross-microservice workflows spanning heterogeneous databases or external third-party APIs."
-        }
-      ],
-      "interviewTip": "In a microservice architecture where Order Service, Payment Service, and Inventory Service each own private databases, advise *against* XA / 2PC across services (because holding DB locks over HTTP/RPC kills availability) and propose the Saga Pattern instead.",
-      "jsonUrl": "/api/subtopics/distributed-systems/dist-transactions.json"
-    },
-    {
       "id": "dist-saga-pattern",
       "topicId": "distributed-systems",
       "topicTitle": "Distributed Systems",
@@ -821,63 +75,30 @@
       "keyTakeaways": [
         "A Saga is a sequence of local ACID transactions (`T1, T2, T3`) where each step commits immediately in its local database and publishes an event or reply to trigger the next step.",
         "If step `T3` fails, the Saga executes backward **Compensating Transactions** (`C2, C1`) that semantically undo the committed effects of prior steps (since locks were already released).",
-        "Because Sagas lack the **Isolation** ('I' in ACID) of 2PC, intermediate states are visible to other transactions: use Semantic Locks (`status = 'PENDING_APPROVAL'`) to prevent dirty reads/anomalies."
+        "Because Sagas lack the **Isolation** ('I' in ACID) of 2PC, intermediate states are visible to other transactions, use Semantic Locks (`status = 'PENDING_APPROVAL'`) to prevent dirty reads/anomalies."
       ],
-      "architectureDiagram": "ORCHESTRATED SAGA WITH COMPENSATING ROLLBACK\n                     +--------------------------------+\n                     |   Order Saga Orchestrator      |\n                     |   (Temporal / Step Functions)  |\n                     +--------------------------------+\n                       /              |               \\\n      1. ReserveStock /    2. Charge  |    3. Compensation (If #2 Fails!)\n       (Commits T1)  v     (Fails!)   v     ReleaseStock (Commits C1)\n          +---------------+   +---------------+   +---------------+\n          | Inventory Svc |   |  Payment Svc  |   | Inventory Svc |\n          +---------------+   +---------------+   +---------------+",
+      "architectureDiagram": "                ORCHESTRATED SAGA WITH COMPENSATING ROLLBACK\n                     +--------------------------------+\n                     |   Order Saga Orchestrator      |\n                     |   (Temporal / Step Functions)  |\n                     +--------------------------------+\n                       /              |               \\\n      1. ReserveStock /    2. Charge  |    3. Compensation (If #2 Fails!)\n       (Commits T1)  v     (Fails!)   v     ReleaseStock (Commits C1)\n          +---------------+   +---------------+   +---------------+\n          | Inventory Svc |   |  Payment Svc  |   | Inventory Svc |\n          +---------------+   +---------------+   +---------------+",
       "sections": [
         {
-          "heading": "1. Architectural Fundamentals & Core Mechanics",
+          "heading": "Choreography vs Orchestration",
           "body": "There are two ways to coordinate a Saga across microservices: **Choreography** (event-driven peer-to-peer) and **Orchestration** (central state machine coordinator).",
           "bullets": [
-            "**Core Architectural Principle**: A Saga is a sequence of local ACID transactions (`T1, T2, T3`) where each step commits immediately in its local database and publishes an event or reply to trigger the next step.",
-            "**Problem Space & Invariants**: If step `T3` fails, the Saga executes backward **Compensating Transactions** (`C2, C1`) that semantically undo the committed effects of prior steps (since locks were already released).",
-            "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-          ],
-          "asciiDiagram": "ORCHESTRATED SAGA WITH COMPENSATING ROLLBACK\n                     +--------------------------------+\n                     |   Order Saga Orchestrator      |\n                     |   (Temporal / Step Functions)  |\n                     +--------------------------------+\n                       /              |               \\\n      1. ReserveStock /    2. Charge  |    3. Compensation (If #2 Fails!)\n       (Commits T1)  v     (Fails!)   v     ReleaseStock (Commits C1)\n          +---------------+   +---------------+   +---------------+\n          | Inventory Svc |   |  Payment Svc  |   | Inventory Svc |\n          +---------------+   +---------------+   +---------------+",
-          "diagramImageUrl": "/diagrams/arch-dist-saga-pattern.svg"
-        },
-        {
-          "heading": "2. Architectural Patterns & Implementation Topologies",
-          "body": "Distributed architectures apply specific implementation patterns and topologies for Saga Pattern:",
-          "bullets": [
-            "**Orchestration Saga (Temporal / AWS Step Functions / State Table)**: Provides centralized visibility into workflow state, timeouts, and retries; zero cyclic dependencies between services. Best suited for Complex checkout, travel booking (Flight + Hotel + Car), and payment settlement flows.",
-            "**Choreography Saga (Pub/Sub Event Chain)**: Provides loose coupling with no central coordinator bottleneck; easy to add passive side-effect listeners. Best suited for Simple 2- to 3-step workflows (e.g., User Signup -> Send Welcome Email -> Provision Trial).",
             "Choreography (Event-Driven): `OrderService` emits `OrderCreated` -> `InventoryService` listens, reserves stock, emits `StockReserved` -> `PaymentService` listens, charges card. Simple for 2–3 steps, but becomes a tangled cyclic nightmare to debug or modify past 4+ services.",
             "Orchestration (Command-Driven / Temporal): A dedicated Saga Orchestrator persists a durable state machine (`OrderWorkflow`) and explicitly commands `InventoryService.reserve()`, waits for the reply, then commands `PaymentService.charge()`. If payment fails, the Orchestrator invokes `InventoryService.release()`.",
-            "Semantic Lock Countermeasure: Instead of immediately deducting `stock_count` or crediting a wallet balance, `T1` sets a visible flag (`status = 'PENDING'`, `reserved_stock += 1`). Concurrent readers know the item is in an uncommitted saga.",
-            "Idempotent & Out-of-Order Compensations: What if a network delay causes the `CancelReservation` compensation message to arrive at `InventoryService` *before* the original `ReserveItems` request arrives? The service must record a tombstone for the `idempotencyKey` so when `ReserveItems` belatedly arrives, it is immediately rejected!"
+            "Pivot, Compensatable, and Retriable Transactions: Structure every Saga around a single **Pivot Transaction** (the point of no return, e.g., capturing payment). Steps before the pivot must be **Compensatable** (can be undone); steps after the pivot must be **Retriable** (guaranteed to eventually succeed via idempotent retries)."
           ],
           "codeSnippet": {
             "title": "Durable Saga Orchestrator State Machine with Idempotent Compensation",
             "code": "async function executeCheckoutSaga(orderId: string, req: CheckoutRequest) {\n  const compensations: Array<() => Promise<void>> = [];\n  try {\n    // Step 1: Compensatable Transaction (Semantic Lock: status = RESERVED)\n    await inventoryService.reserveItems({ idempotencyKey: `${orderId}:inv`, items: req.items });\n    compensations.push(() =>\n      inventoryService.releaseReservation({ idempotencyKey: `${orderId}:inv_undo` })\n    );\n\n    // Step 2: Pivot Transaction (Charge Payment)\n    await paymentService.chargeCard({ idempotencyKey: `${orderId}:pay`, amount: req.total });\n\n    // Step 3: Retriable Transaction (Confirm Order & Commit Stock)\n    await retryUntilSuccess(() =>\n      orderService.markConfirmed({ idempotencyKey: `${orderId}:confirm`, orderId })\n    );\n  } catch (err) {\n    // Execute compensating transactions in reverse LIFO order\n    for (const compensate of compensations.reverse()) {\n      await retryUntilSuccess(compensate);\n    }\n    await orderService.markCancelled({ orderId, reason: (err as Error).message });\n  }\n}"
-          }
+          },
+          "diagramImageUrl": "/diagrams/arch-dist-saga-pattern.svg"
         },
         {
-          "heading": "3. Production Strengths: Where & How to Apply",
-          "body": "Production deployments apply Saga Pattern across targeted operational scenarios:",
+          "heading": "Handling Lack of Isolation: Semantic Locks & Commutative Updates",
+          "body": "Because `T1` commits to the Inventory DB immediately before `T2` runs in the Payment DB, other concurrent users can see the effects of `T1`. If `T2` fails and `C1` compensates, concurrent transactions may have acted on transient state ('Dirty Read' at the business level).",
           "bullets": [
-            "**Where to Use: High-Impact Scenarios**: Optimal for Complex checkout, travel booking (Flight + Hotel + Car), and payment settlement flows, suited for environments requiring Centralized visibility into workflow state, timeouts, and retries; zero cyclic dependencies between services.",
-            "**Where to Use: High-Throughput Scenarios**: Recommended for Simple 2- to 3-step workflows (e.g., User Signup -> Send Welcome Email -> Provision Trial), where Loose coupling with no central coordinator bottleneck; easy to add passive side-effect listeners.",
-            "**How to Use: Engineering Implementation**: Because `T1` commits to the Inventory DB immediately before `T2` runs in the Payment DB, other concurrent users can see the effects of `T1`. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-            "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-          ]
-        },
-        {
-          "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-          "body": "Improper implementation of Saga Pattern introduces operational bottlenecks and failure modes:",
-          "bullets": [
-            "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: requires an orchestrator state store; risk of putting too much domain logic in the orchestrator.",
-            "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: hard to trace end-to-end flow or handle multi-step rollbacks across >3 services.",
-            "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-            "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-          ]
-        },
-        {
-          "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-          "body": "Technical guidelines and evaluation criteria for Saga Pattern:",
-          "bullets": [
-            "**Staff+ Golden Rule**: Because Sagas lack the **Isolation** ('I' in ACID) of 2PC, intermediate states are visible to other transactions: use Semantic Locks (`status = 'PENDING_APPROVAL'`) to prevent dirty reads/anomalies.",
-            "**Staff+ Interview Playbook**: When designing Uber, Airbnb, or E-Commerce Checkout, use an Orchestrated Saga and explicitly mention 'Semantic Locks' (e.g., placing a 10-minute `RESERVED` hold on inventory during checkout before payment completes)."
+            "Semantic Lock Countermeasure: Instead of immediately deducting `stock_count` or crediting a wallet balance, `T1` sets a visible flag (`status = 'PENDING'`, `reserved_stock += 1`). Concurrent readers know the item is in an uncommitted saga.",
+            "Idempotent & Out-of-Order Compensations: What if a network delay causes the `CancelReservation` compensation message to arrive at `InventoryService` *before* the original `ReserveItems` request arrives? The service must record a tombstone for the `idempotencyKey` so when `ReserveItems` belatedly arrives, it is immediately rejected!"
           ]
         }
       ],
@@ -914,28 +135,15 @@
         "The Transactional Outbox pattern inserts both the business entity AND an event row into an `outbox_events` table inside the **exact same local ACID transaction**.",
         "A separate Message Relay (either a polling worker using `FOR UPDATE SKIP LOCKED` or Debezium CDC tailing the DB WAL) asynchronously publishes outbox rows to Kafka."
       ],
-      "architectureDiagram": "TRANSACTIONAL OUTBOX PATTERN\n  [Order Service]\n        |\n        |  BEGIN LOCAL ACID TRANSACTION\n        |---> 1a. INSERT INTO orders (id, status) VALUES ('ord_1', 'PAID');\n        |---> 1b. INSERT INTO outbox_events (id, topic, payload) VALUES (.);\n        |  COMMIT; (Atomic: Both succeed or both roll back!)\n                                  |\n                     (2. Tail WAL via Debezium CDC\n                         OR Poll via SKIP LOCKED)\n                                  v\n                         [Outbox Relay Worker]\n                                  |\n                     (3. Publish with Idempotent Producer)\n                                  v\n                           [Kafka Broker]",
+      "architectureDiagram": "                  TRANSACTIONAL OUTBOX PATTERN\n  [Order Service]\n        |\n        |  BEGIN LOCAL ACID TRANSACTION\n        |---> 1a. INSERT INTO orders (id, status) VALUES ('ord_1', 'PAID');\n        |---> 1b. INSERT INTO outbox_events (id, topic, payload) VALUES (...);\n        |  COMMIT; (Atomic: Both succeed or both roll back!)\n                                  |\n                     (2. Tail WAL via Debezium CDC\n                         OR Poll via SKIP LOCKED)\n                                  v\n                         [Outbox Relay Worker]\n                                  |\n                     (3. Publish with Idempotent Producer)\n                                  v\n                           [Kafka Broker]",
       "sections": [
         {
-          "heading": "1. Architectural Fundamentals & Core Mechanics",
+          "heading": "Why Dual Writes Are Broken & How Outbox Solves It",
           "body": "Suppose your `OrderService` needs to save a new order in PostgreSQL and publish an `OrderCreated` event to Kafka. If you commit to PostgreSQL first and the pod is OOM-killed 1ms before `kafka.send()` completes, the order exists in the DB but Downstream Inventory/Notification services never hear about it. Conversely, if you publish to Kafka first and the PostgreSQL commit fails due to a constraint error, downstream services process a phantom order that doesn't exist! The Transactional Outbox solves this by piggybacking on the local database's ACID transaction.",
           "bullets": [
-            "**Core Architectural Principle**: Never dual-write directly to a database and a message broker (`await db.save(); await kafka.send()`): if the process crashes or Kafka times out after the DB commit, the system enters permanent inconsistency.",
-            "**Problem Space & Invariants**: The Transactional Outbox pattern inserts both the business entity AND an event row into an `outbox_events` table inside the **exact same local ACID transaction**.",
-            "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-          ],
-          "asciiDiagram": "TRANSACTIONAL OUTBOX PATTERN\n  [Order Service]\n        |\n        |  BEGIN LOCAL ACID TRANSACTION\n        |---> 1a. INSERT INTO orders (id, status) VALUES ('ord_1', 'PAID');\n        |---> 1b. INSERT INTO outbox_events (id, topic, payload) VALUES (.);\n        |  COMMIT; (Atomic: Both succeed or both roll back!)\n                                  |\n                     (2. Tail WAL via Debezium CDC\n                         OR Poll via SKIP LOCKED)\n                                  v\n                         [Outbox Relay Worker]\n                                  |\n                     (3. Publish with Idempotent Producer)\n                                  v\n                           [Kafka Broker]"
-        },
-        {
-          "heading": "2. Architectural Patterns & Implementation Topologies",
-          "body": "Distributed architectures apply specific implementation patterns and topologies for Transactional Outbox:",
-          "bullets": [
-            "**Debezium CDC Log Tailer on Outbox Table**: Provides sub-50ms latency; zero polling query load on the primary database; preserves strict wal commit order. Best suited for High-throughput microservice fleets already standardized on Kafka.",
-            "**SQL Polling Relay Worker (`FOR UPDATE SKIP LOCKED`)**: Provides no cdc infrastructure needed; easy to implement in 30 lines of application code. Best suited for Low-to-medium throughput services (<2,000 events/sec) or non-Kafka brokers (SQS/RabbitMQ).",
-            "Single Atomic Commit: Writing to `orders` and `outbox_events` in the same database uses a standard local transaction: no slow cross-system 2PC required.",
+            "Single Atomic Commit: Writing to `orders` and `outbox_events` in the same database uses a standard local transaction, no slow cross-system 2PC required.",
             "Guaranteed At-Least-Once Delivery: Once the DB transaction commits, the event is durable on disk in `outbox_events`. The relay worker retries publishing to Kafka until Kafka acknowledges receipt.",
-            "Polling Publisher (`SELECT . FOR UPDATE SKIP LOCKED`): Simple to run with zero extra infrastructure; works well up to ~1,000–5,000 events/sec, though polling adds slight DB query overhead.",
-            "Transaction Log Tailer (Debezium CDC): Reads committed inserts directly from PostgreSQL's WAL or MySQL's binlog with near-zero read load on the database! Tip: even with Debezium, clean up old `outbox_events` rows via partitioning or immediately delete after insert (`INSERT` followed by `DELETE` still emits the WAL insert record!)."
+            "Zero Impact from Broker Outages: If Kafka goes down for 15 minutes, user-facing API writes continue succeeding at full speed while events buffer safely in the `outbox_events` table."
           ],
           "codeSnippet": {
             "title": "Transactional Outbox Write + SKIP LOCKED Polling Relay",
@@ -943,31 +151,12 @@
           }
         },
         {
-          "heading": "3. Production Strengths: Where & How to Apply",
-          "body": "Production deployments apply Transactional Outbox across targeted operational scenarios:",
+          "heading": "Transaction Log Mining (Debezium CDC) vs Polling Relay",
+          "body": "There are two ways to move records from the `outbox_events` table into Kafka:",
           "bullets": [
-            "**Where to Use: High-Impact Scenarios**: Optimal for High-throughput microservice fleets already standardized on Kafka, suited for environments requiring Sub-50ms latency; zero polling query load on the primary database; preserves strict WAL commit order.",
-            "**Where to Use: High-Throughput Scenarios**: Recommended for Low-to-medium throughput services (<2,000 events/sec) or non-Kafka brokers (SQS/RabbitMQ), where No CDC infrastructure needed; easy to implement in 30 lines of application code.",
-            "**How to Use: Engineering Implementation**: There are two ways to move records from the `outbox_events` table into Kafka:. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-            "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-          ]
-        },
-        {
-          "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-          "body": "Improper implementation of Transactional Outbox introduces operational bottlenecks and failure modes:",
-          "bullets": [
-            "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: requires operating kafka connect and debezium connectors; coupled to db replication slots.",
-            "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: adds polling cpu/io overhead and mvcc dead-tuple churn on the database.",
-            "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-            "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-          ]
-        },
-        {
-          "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-          "body": "Technical guidelines and evaluation criteria for Transactional Outbox:",
-          "bullets": [
-            "**Staff+ Golden Rule**: A separate Message Relay (either a polling worker using `FOR UPDATE SKIP LOCKED` or Debezium CDC tailing the DB WAL) asynchronously publishes outbox rows to Kafka.",
-            "**Staff+ Interview Playbook**: Whenever your architecture diagram shows a service writing to a DB and publishing an event to Kafka/SQS, draw or mention the 'Transactional Outbox Pattern': interviewers frequently test whether candidates fall into the Dual-Write trap."
+            "Polling Publisher (`SELECT ... FOR UPDATE SKIP LOCKED`): Simple to run with zero extra infrastructure; works well up to ~1,000–5,000 events/sec, though polling adds slight DB query overhead.",
+            "Transaction Log Tailer (Debezium CDC): Reads committed inserts directly from PostgreSQL's WAL or MySQL's binlog with near-zero read load on the database! Tip: even with Debezium, clean up old `outbox_events` rows via partitioning or immediately delete after insert (`INSERT` followed by `DELETE` still emits the WAL insert record!).",
+            "Downstream Deduplication (Transactional Inbox): Because the relay can crash after publishing to Kafka but before marking the outbox row sent, downstream consumers may receive the same `event_id` twice and must deduplicate."
           ]
         }
       ],
@@ -1003,28 +192,15 @@
         "In practice, 'Effectively-Once' (Exactly-Once Processing) is achieved by combining **At-Least-Once Delivery** with **Idempotent Side-Effects** (via an Idempotency Key or Transactional Inbox table).",
         "In message consumers, always disable `enable.auto.commit` and commit the consumer offset **only after** the downstream business logic and database write have durably succeeded."
       ],
-      "architectureDiagram": "WHY NETWORK RETRIES REQUIRE IDEMPOTENT CONSUMERS\n  [Producer / Queue] ---- 1. Deliver Msg (id='msg_42') ----> [Consumer Service]\n                                                                     | (Commits DB Write\n  [Producer / Queue] <--- 2. ACK Lost in Network Partition! X -------+  & Inbox 'msg_42')\n          |\n   (Timeout Expires)\n          |\n          +-------------- 3. Redeliver Msg (id='msg_42') --> [Consumer Service]\n                                                             (Checks Inbox: 'msg_42' exists!\n                                                              Skips duplicate side-effect & ACKs)",
+      "architectureDiagram": "               WHY NETWORK RETRIES REQUIRE IDEMPOTENT CONSUMERS\n  [Producer / Queue] ---- 1. Deliver Msg (id='msg_42') ----> [Consumer Service]\n                                                                     | (Commits DB Write\n  [Producer / Queue] <--- 2. ACK Lost in Network Partition! X -------+  & Inbox 'msg_42')\n          |\n   (Timeout Expires)\n          |\n          +-------------- 3. Redeliver Msg (id='msg_42') --> [Consumer Service]\n                                                             (Checks Inbox: 'msg_42' exists!\n                                                              Skips duplicate side-effect & ACKs)",
       "sections": [
         {
-          "heading": "1. Architectural Fundamentals & Core Mechanics",
+          "heading": "At-Most-Once, At-Least-Once, and Effectively-Once",
           "body": "Every distributed communication channel, whether an HTTP call, gRPC stream, or Kafka/SQS consumer, must choose how to handle network timeouts and worker crashes:",
           "bullets": [
-            "**Core Architectural Principle**: Because an ACK packet over a network can always be lost after the receiver processed a message, **At-Least-Once** retry logic inevitably produces duplicate deliveries.",
-            "**Problem Space & Invariants**: In practice, 'Effectively-Once' (Exactly-Once Processing) is achieved by combining **At-Least-Once Delivery** with **Idempotent Side-Effects** (via an Idempotency Key or Transactional Inbox table).",
-            "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-          ],
-          "asciiDiagram": "WHY NETWORK RETRIES REQUIRE IDEMPOTENT CONSUMERS\n  [Producer / Queue] ---- 1. Deliver Msg (id='msg_42') ----> [Consumer Service]\n                                                                     | (Commits DB Write\n  [Producer / Queue] <--- 2. ACK Lost in Network Partition! X -------+  & Inbox 'msg_42')\n          |\n   (Timeout Expires)\n          |\n          +-------------- 3. Redeliver Msg (id='msg_42') --> [Consumer Service]\n                                                             (Checks Inbox: 'msg_42' exists!\n                                                              Skips duplicate side-effect & ACKs)"
-        },
-        {
-          "heading": "2. Architectural Patterns & Implementation Topologies",
-          "body": "Distributed architectures apply specific implementation patterns and topologies for Exactly-once vs At-least-once:",
-          "bullets": [
-            "**At-Least-Once Delivery + Transactional Inbox / Idempotency Key**: Provides works across any message broker and database; guarantees zero data loss and zero duplicate side-effects. Best suited for Payment processing, order fulfillment, wallet ledger credits, and webhook consumers.",
-            "**At-Most-Once Delivery (Auto-Commit Before Processing)**: Provides highest throughput; zero deduplication state storage overhead. Best suited for High-volume telemetry logs, CPU metrics, and non-critical analytics.",
             "At-Most-Once (Fire and Forget): Commit the consumer offset *before* processing the message (or never retry failed sends). Zero duplicates, but if the worker crashes mid-processing, the message is permanently lost.",
             "At-Least-Once (Retry until ACK): Retry sending/processing until a positive acknowledgment is received, and commit offsets *after* processing completes. Zero data loss, but duplicates occur whenever a worker crashes right after committing to its DB and before committing its Kafka offset.",
-            "Idempotent Producer (`enable.idempotence = true`): Assigns each producer instance a `PID` (Producer ID) and attaches a monotonically increasing `sequence_number` to every batch per partition. If the broker receives a retry with an already-committed `(PID, seq)`, it deduplicates it in memory and returns an ACK without appending twice.",
-            "Transactional Coordinator across Partitions (`isolation.level = read_committed`): Allows a stream processor (like Kafka Streams or Flink) to atomically write output records to multiple Kafka partitions AND commit the input consumer offsets to `__consumer_offsets` via an internal 2PC marker."
+            "Effectively-Once (At-Least-Once + Idempotency): You cannot violate the Two Generals' Problem over an unreliable network, so messages *will* arrive more than once, but by deduplicating via a unique `idempotency_key` inside the consumer's database transaction, the observable state change happens **exactly once**!"
           ],
           "codeSnippet": {
             "title": "Transactional Inbox Pattern for Effectively-Once Consumer Processing",
@@ -1032,31 +208,12 @@
           }
         },
         {
-          "heading": "3. Production Strengths: Where & How to Apply",
-          "body": "Production deployments apply Exactly-once vs At-least-once across targeted operational scenarios:",
+          "heading": "How Kafka's Native 'Exactly-Once Semantics' (EOS) Actually Works",
+          "body": "When engineers say 'Kafka supports Exactly-Once Semantics (EOS)', it is vital to understand the exact boundary of that guarantee. Kafka EOS guarantees exact-once processing only for **Kafka-to-Kafka** (`consume -> transform -> produce`) topologies using two mechanisms:",
           "bullets": [
-            "**Where to Use: High-Impact Scenarios**: Optimal for Payment processing, order fulfillment, wallet ledger credits, and webhook consumers, suited for environments requiring Works across any message broker and database; guarantees zero data loss and zero duplicate side-effects.",
-            "**Where to Use: High-Throughput Scenarios**: Recommended for High-volume telemetry logs, CPU metrics, and non-critical analytics, where Highest throughput; zero deduplication state storage overhead.",
-            "**How to Use: Engineering Implementation**: When engineers say 'Kafka supports Exactly-Once Semantics (EOS)', it is vital to understand the exact boundary of that guarantee. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-            "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-          ]
-        },
-        {
-          "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-          "body": "Improper implementation of Exactly-once vs At-least-once introduces operational bottlenecks and failure modes:",
-          "bullets": [
-            "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: requires storing processed `event_id` keys in an inbox table (with periodic ttl cleanup).",
-            "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: worker crashes or deployments silently drop in-flight messages.",
-            "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-            "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-          ]
-        },
-        {
-          "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-          "body": "Technical guidelines and evaluation criteria for Exactly-once vs At-least-once:",
-          "bullets": [
-            "**Staff+ Golden Rule**: In message consumers, always disable `enable.auto.commit` and commit the consumer offset **only after** the downstream business logic and database write have durably succeeded.",
-            "**Staff+ Interview Playbook**: If an interviewer asks for 'Exactly-Once delivery', clarify that over an asynchronous network you design for **At-Least-Once delivery + Idempotent Consumer (Effectively-Once state mutation)** using an `idempotency_key` or `processed_events` inbox table inside the same DB transaction."
+            "Idempotent Producer (`enable.idempotence = true`): Assigns each producer instance a `PID` (Producer ID) and attaches a monotonically increasing `sequence_number` to every batch per partition. If the broker receives a retry with an already-committed `(PID, seq)`, it deduplicates it in memory and returns an ACK without appending twice.",
+            "Transactional Coordinator across Partitions (`isolation.level = read_committed`): Allows a stream processor (like Kafka Streams or Flink) to atomically write output records to multiple Kafka partitions AND commit the input consumer offsets to `__consumer_offsets` via an internal 2PC marker.",
+            "External Side-Effects Caveat: When your consumer calls an external API (like Stripe, SendGrid, or PostgreSQL), Kafka's internal transaction coordinator cannot roll back that external system, you still need an **Idempotency Key** or **Transactional Inbox**!"
           ]
         }
       ],
@@ -1076,6 +233,462 @@
       ],
       "interviewTip": "If an interviewer asks for 'Exactly-Once delivery', clarify that over an asynchronous network you design for **At-Least-Once delivery + Idempotent Consumer (Effectively-Once state mutation)** using an `idempotency_key` or `processed_events` inbox table inside the same DB transaction.",
       "jsonUrl": "/api/subtopics/distributed-systems/dist-delivery-semantics.json"
+    },
+    {
+      "id": "dist-partitioning",
+      "topicId": "distributed-systems",
+      "topicTitle": "Distributed Systems",
+      "topicNumber": 6,
+      "subtopicNumber": "6.2",
+      "title": "Partitioning",
+      "subtitle": "Distributed data placement, Document-Partitioned (Local) vs Term-Partitioned (Global) secondary indexes, and rebalancing strategies.",
+      "readingTime": "8 min read",
+      "difficulty": "Advanced",
+      "keyTakeaways": [
+        "Distributed partitioning splits data across cluster nodes so storage and query load scale linearly with cluster size.",
+        "Local (Document-Partitioned) Secondary Indexes keep the index on the same node as the primary record: writes are fast (single node), but secondary reads must scatter-gather across all partitions.",
+        "Global (Term-Partitioned) Secondary Indexes partition the index itself by the indexed attribute: secondary reads hit a single partition, but writes must update multiple nodes asynchronously."
+      ],
+      "architectureDiagram": "LOCAL SECONDARY INDEX (Scatter-Gather Read)   GLOBAL SECONDARY INDEX (Single-Partition Read)\nQuery: WHERE color = 'red'                    Query: WHERE color = 'red' -> hashes to Node 1!\n       |                                             |\n  +----+----+----+                                   v\n  v         v    v                            +------------------------------+\n[Node 1] [Node 2] [Node 3]                    | Global Index Node 1 ('red')  |\n(Local)  (Local)  (Local)                     | -> Points to doc IDs across  |\n(Fast Write, Slow Fan-out Read)               |    Nodes 1, 2, 3 (Fast Read!)|\n                                              +------------------------------+",
+      "sections": [
+        {
+          "heading": "Secondary Indexing in Partitioned Distributed Systems",
+          "body": "Partitioning by primary key is easy, but secondary indexes are the Achilles' heel of distributed databases. When you index a secondary field like `status` or `email` across a 50-node cluster, you face a fundamental trade-off between Local Indexes (Document-Partitioned) and Global Indexes (Term-Partitioned).",
+          "bullets": [
+            "Local Secondary Index (Elasticsearch shards, MongoDB, Cassandra): Each partition maintains its own secondary index covering *only* the documents stored on that partition. Writing a document updates only 1 node, but querying by the secondary index requires querying all 50 partitions in parallel (tail latency amplification).",
+            "Global Secondary Index (DynamoDB GSI, CockroachDB): The secondary index is partitioned independently by the indexed term (`hash(email)`). A lookup by `email` goes directly to 1 node! However, inserting a single item now requires updating the primary partition AND sending network updates to the remote GSI partition(s).",
+            "Asynchronous GSI Updates: To avoid slow distributed 2PC transactions on every write, systems like DynamoDB update Global Secondary Indexes asynchronously within a few milliseconds."
+          ],
+          "codeSnippet": {
+            "title": "Compound Partition Key to Avoid Hot Partitions & Scatter-Gather",
+            "code": "// Problem: Partitioning IoT sensor events purely by `sensor_id` creates a hot partition\n// if one industrial sensor emits 50,000 events/sec.\n// Solution: Compound Partition Key combining sensor_id + time_bucket (or write shard)\nfunction buildPartitionKey(sensorId: string, timestampMs: number): string {\n  const hourBucket = new Date(timestampMs).toISOString().slice(0, 13); // '2026-09-30T15'\n  return `${sensorId}#${hourBucket}`;\n}\n\n// Now Local Secondary Indexes on this partition key can serve time-bounded\n// queries for a sensor from a SINGLE partition without scatter-gather!"
+          }
+        },
+        {
+          "heading": "Rebalancing Partitions Safely Under Load",
+          "body": "As cluster traffic grows or nodes fail, partitions must move between machines ('rebalancing'). Naive rebalancing strategies can saturate network bandwidth or render routing tables inconsistent during the migration.",
+          "bullets": [
+            "Never Use `hash(key) % N_machines`: Changing `N` from 10 to 11 invalidates ~91% of keys simultaneously.",
+            "Fixed Number of Logical Partitions (Elasticsearch, Kafka, Redis Cluster): Create far more logical partitions than physical nodes at cluster creation (e.g., 1,024 partitions across 8 nodes). When Node 9 joins, stream ~113 complete logical partitions to Node 9.",
+            "Dynamic Range Splitting (HBase, TiKV, CockroachDB): Start with 1 range partition; whenever a partition exceeds 64MB (or a QPS threshold), split it in half at the median key and migrate one half to another node."
+          ]
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Local Secondary Index (Document-Partitioned)",
+          "pros": "Single-node atomic writes; no cross-node index synchronization overhead.",
+          "cons": "Secondary index queries require scatter-gather across all partitions (vulnerable to p99 tail latency).",
+          "bestFor": "Full-text search (Elasticsearch) and workloads where queries almost always include the partition key."
+        },
+        {
+          "option": "Global Secondary Index (Term-Partitioned)",
+          "pros": "Point lookups and range scans on the secondary index hit a single partition in O(1) network hops.",
+          "cons": "Writes fan out across multiple nodes; index is typically eventually consistent.",
+          "bestFor": "Looking up users by `email` or `phone_number` when the table is partitioned by `user_id`."
+        }
+      ],
+      "interviewTip": "If your system design requires querying an entity by two different attributes (e.g., `order_id` and `user_id`), explain how a Global Secondary Index (partitioned by `user_id` and updated asynchronously) avoids scatter-gather queries.",
+      "jsonUrl": "/api/subtopics/distributed-systems/dist-partitioning.json"
+    },
+    {
+      "id": "dist-consistent-hashing",
+      "topicId": "distributed-systems",
+      "topicTitle": "Distributed Systems",
+      "topicNumber": 6,
+      "subtopicNumber": "6.3",
+      "title": "Consistent Hashing",
+      "subtitle": "Minimizing data movement to O(K/N) during node scaling using Hash Rings, Virtual Nodes (VNodes), and Bounded-Load Hashing.",
+      "readingTime": "8 min read",
+      "difficulty": "Intermediate",
+      "keyTakeaways": [
+        "With modular hashing (`hash(key) % N`), adding or removing 1 node forces `(N-1)/N` (~90%+) of keys to relocate; Consistent Hashing reduces movement to only `K/N` keys on average.",
+        "Both nodes and keys are hashed onto a circular 32-bit or 64-bit integer ring (`0` to `2^32 - 1`), and each key is assigned to the first node encountered moving clockwise.",
+        "Virtual Nodes (VNodes) assign each physical server 100–200 positions on the ring, preventing non-uniform data skew and spreading load evenly when a node crashes."
+      ],
+      "architectureDiagram": "                     CONSISTENT HASHING RING (0 .. 2^32 - 1)\n                                    0 / 2^32\n                                 . - ~ ~ ~ - .\n                             . '               ' .\n                [Node C_v2]                        [Node A_v1]\n                    |                                   |\n                    |     Key 'k1' (hashes to 400)      v\n                    |     walks clockwise ---------> [Node B_v1 (pos 550)]\n                    |                                   |\n                [Node A_v2]                        [Node C_v1]\n                             .                 . '\n                               ' - . _ _ _ . - '",
+      "sections": [
+        {
+          "heading": "Ring Mechanics & The Power of Virtual Nodes (VNodes)",
+          "body": "Consistent hashing maps both storage nodes and data keys onto the same circular keyspace `[0, 2^32 - 1]` using a fast, uniform hash function like `MurmurHash3` or `xxHash` (never cryptographic SHA-1 on hot paths if speed matters, and never weak modulo). To locate the node for `key`, you compute `h = hash(key)` and perform a binary search (`O(log V)`) over the sorted array of ring tokens to find the first node with `position >= h` (wrapping around to index `0` if `h` exceeds the highest token).",
+          "bullets": [
+            "Why Raw Nodes Fail: With only 3 physical nodes placed on the ring, random hash placement might give Node A 60% of the ring arc, Node B 30%, and Node C 10%.",
+            "Virtual Nodes (VNodes): By placing `150` virtual tokens per physical server (`NodeA#0 .. NodeA#149`), the variance in key distribution drops below <5%.",
+            "Graceful Rebuilding on Failure: When Physical Node B dies, its 150 VNode arcs are absorbed equally by all remaining physical nodes rather than dumping 100% of Node B's traffic onto a single clockwise neighbor!",
+            "Heterogeneous Hardware: A 64-core server can be assigned 300 VNodes while a 16-core server gets 75 VNodes."
+          ],
+          "codeSnippet": {
+            "title": "Production Consistent Hash Ring with Virtual Nodes & Binary Search",
+            "code": "export class ConsistentHashRing {\n  private ringKeys: number[] = [];\n  private ringMap = new Map<number, string>();\n\n  constructor(nodes: string[], private vnodesPerServer = 150) {\n    for (const node of nodes) this.addNode(node);\n  }\n\n  addNode(node: string): void {\n    for (let i = 0; i < this.vnodesPerServer; i++) {\n      const hash = this.murmur3(`${node}#vnode_${i}`);\n      this.ringMap.set(hash, node);\n      this.ringKeys.push(hash);\n    }\n    this.ringKeys.sort((a, b) => a - b);\n  }\n\n  getNode(key: string): string {\n    const hash = this.murmur3(key);\n    // Binary search for first token >= hash\n    let low = 0, high = this.ringKeys.length - 1;\n    while (low <= high) {\n      const mid = (low + high) >>> 1;\n      if (this.ringKeys[mid] >= hash) high = mid - 1;\n      else low = mid + 1;\n    }\n    const idx = low < this.ringKeys.length ? low : 0; // Wrap around ring\n    return this.ringMap.get(this.ringKeys[idx])!;\n  }\n  private murmur3(str: string): number { /* 32-bit hash */ return 0; }\n}"
+          },
+          "diagramImageUrl": "/diagrams/arch-dist-consistent-hashing.svg"
+        },
+        {
+          "heading": "Replication on the Ring & Bounded-Load Consistent Hashing",
+          "body": "In distributed databases like Cassandra and DynamoDB, consistent hashing also dictates replication placement. To store `N=3` replicas of a key, the coordinator writes to the primary VNode owner and then walks clockwise along the ring to pick the next 2 VNodes that belong to *distinct physical racks/availability zones*.",
+          "bullets": [
+            "Rack/AZ-Aware Placement: Walking the ring skips additional VNodes belonging to the same physical host or AZ so a single rack outage never takes down more than 1 replica.",
+            "Consistent Hashing with Bounded Loads (Vimeo / Google paper): Assigns each node a maximum capacity factor `(1 + epsilon) * average_load`. If the target node on the ring is at capacity during a hot-spot surge, the request overflows clockwise to the next node with spare capacity."
+          ]
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Consistent Hashing with Virtual Nodes (Dynamo / Cassandra)",
+          "pros": "Minimal data movement (K/N) on cluster resize; decentralized O(log V) lookup with no directory bottleneck.",
+          "cons": "Range queries across keys are inefficient; requires gossip protocol to keep ring membership synced.",
+          "bestFor": "Distributed caches, stateful load balancers (Envoy/Katran), and leaderless key-value stores."
+        },
+        {
+          "option": "Centralized Shard Map / Fixed Hash Slots (Redis Cluster / Vitess)",
+          "pros": "Explicit control over exact slot-to-node placement; no VNode binary search needed.",
+          "cons": "Requires cluster coordinator or slot migration orchestration when rebalancing.",
+          "bestFor": "Managed sharded databases and clusters with <1,000 nodes."
+        }
+      ],
+      "interviewTip": "Always mention Virtual Nodes (VNodes) immediately after introducing Consistent Hashing, and explain the two problems VNodes solve: (1) uneven ring arc distribution with few nodes, and (2) cascading overload on a single neighbor when one node crashes.",
+      "jsonUrl": "/api/subtopics/distributed-systems/dist-consistent-hashing.json",
+      "diagramImageUrl": "/diagrams/arch-dist-consistent-hashing.svg"
+    },
+    {
+      "id": "dist-quorum",
+      "topicId": "distributed-systems",
+      "topicTitle": "Distributed Systems",
+      "topicNumber": 6,
+      "subtopicNumber": "6.4",
+      "title": "Quorum",
+      "subtitle": "Mastering tunable quorum math (W + R > N), Pigeonhole overlap guarantees, and why Strict Quorum still isn't Linearizable.",
+      "readingTime": "8 min read",
+      "difficulty": "Advanced",
+      "keyTakeaways": [
+        "In a system with `N` replicas, requiring `W` write acknowledgments and `R` read responses where `W + R > N` guarantees that the read set and write set overlap by at least 1 replica.",
+        "Common production tuning for `N = 3` is `W = 2, R = 2`, which tolerates 1 unavailable node for both reads and writes while ensuring every read sees the latest committed write.",
+        "Even when `W + R > N`, a leaderless quorum system is NOT strictly linearizable during concurrent writes or partial write failures unless Read Repair is synchronous."
+      ],
+      "architectureDiagram": "                   STRICT QUORUM OVERLAP (N = 3, W = 2, R = 2)\n                              W + R = 4 > 3 (Overlap >= 1)\n\n      Write Quorum (W = 2)                     Read Quorum (R = 2)\n  +---------------------------+           +---------------------------+\n  |  [Replica 1]  [Replica 2] |           |  [Replica 2]  [Replica 3] |\n  |   (ver = 5)    (ver = 5)  |           |   (ver = 5)    (ver = 4)  |\n  +---------------------------+           +---------------------------+\n                         \\                     /\n                          v                   v\n                    [Replica 2 is in BOTH sets!]\n             Reader takes max(ver=5, ver=4) => Returns ver=5",
+      "sections": [
+        {
+          "heading": "Tunable Quorum Configurations (N, W, R)",
+          "body": "By the Pigeonhole Principle, if you write to `W` out of `N` nodes and read from `R` out of `N` nodes such that `W + R > N`, at least one node in the `R` responses must have participated in the most recent completed write. The coordinator attaches a version vector or timestamp to every write; on a read, it queries `R` nodes in parallel and returns the value with the highest version.",
+          "bullets": [
+            "Balanced High Availability (`N=3, W=2, R=2`): Survives 1 dead node for both reads and writes; tail latency is bounded by the *2nd fastest* node rather than the slowest node!",
+            "Write-Optimized (`N=3, W=1, R=3`): Ultra-fast writes, but reads must wait for all 3 nodes and fail if even 1 node is down.",
+            "Read-Optimized (`N=3, W=3, R=1`): Ultra-fast single-node reads, but writes block if any of the 3 nodes is unreachable.",
+            "Write-Write Conflict Ordering (`W > N / 2`): Ensuring `W` is a strict majority prevents two concurrent conflicting writes from both succeeding on disjoint subsets."
+          ],
+          "codeSnippet": {
+            "title": "Quorum Coordinator Read with Synchronous Read-Repair",
+            "code": "async function quorumRead(key: string, replicas: ReplicaClient[], R = 2): Promise<VersionedVal> {\n  // Query all N replicas in parallel, wait for first R successful responses\n  const responses = await waitForFirstK(replicas.map(r => r.read(key)), R);\n\n  // Pick response with highest version timestamp\n  const latest = responses.reduce((a, b) => (a.version >= b.version ? a : b));\n\n  // Synchronous Read-Repair on stale responders to restore linearizability\n  const staleReplicas = responses.filter(r => r.version < latest.version);\n  if (staleReplicas.length > 0) {\n    await Promise.all(staleReplicas.map(r => r.write(key, latest)));\n  }\n  return latest;\n}"
+          }
+        },
+        {
+          "heading": "Edge Cases: Why W + R > N Is Not Automatically Linearizable",
+          "body": "Senior/Staff interviews often probe edge cases where `W + R > N` still exhibits non-linearizable anomalies:",
+          "bullets": [
+            "In-Flight Write Anomaly (Flip-Flop Reads): Suppose Writer updates `v1 -> v2` (`N=3, W=2`). Replica 1 finishes `v2`, Replica 2 is still in network flight, Replica 3 hasn't received it. Reader A reads `{Replica 1 (v2), Replica 2 (v1)}` and sees `v2`. Immediately after, Reader B reads `{Replica 2 (v1), Replica 3 (v1)}` and sees `v1`, violating linearizability unless Reader A performs *synchronous* read repair before returning!",
+            "Failed Write Not Rolled Back: If a write with `W=2` succeeds on only 1 node (`Replica 1`) and fails on the other 2, the client receives a Write Error, yet `Replica 1` keeps the uncommitted value and exposes it to subsequent `R=2` reads.",
+            "Sloppy Quorum Violation: If Hinted Handoff accepts writes on fallback nodes outside the home `N` nodes during a partition, `W + R > N` no longer guarantees intersection until hints replay."
+          ]
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Strict Quorum (`N=3, W=2, R=2`)",
+          "pros": "Strong overlap guarantee without a single leader bottleneck; tolerates 1 node failure seamlessly.",
+          "cons": "Requires 2 network round-trips/parallel responses; not strictly linearizable without sync read-repair or Paxos.",
+          "bestFor": "Distributed key-value and wide-column stores (Cassandra `LOCAL_QUORUM`, DynamoDB)."
+        },
+        {
+          "option": "Weak / Eventual Quorum (`N=3, W=1, R=1`)",
+          "pros": "Lowest possible latency and highest availability during multi-node outages.",
+          "cons": "High probability of reading stale data before background replication catches up.",
+          "bestFor": "Non-critical metrics, clickstream ingestion, and cached recommendations."
+        }
+      ],
+      "interviewTip": "Explain why `N=3, W=2, R=2` actually *improves* p99 tail latency compared to reading from a single node: because the coordinator sends requests to all 3 nodes and only waits for the fastest 2, a GC pause on the 3rd node is completely masked!",
+      "jsonUrl": "/api/subtopics/distributed-systems/dist-quorum.json"
+    },
+    {
+      "id": "dist-leader-election",
+      "topicId": "distributed-systems",
+      "topicTitle": "Distributed Systems",
+      "topicNumber": 6,
+      "subtopicNumber": "6.5",
+      "title": "Leader Election",
+      "subtitle": "Preventing Split-Brain using consensus leases, heartbeats, monotonic epochs, and Fencing Tokens.",
+      "readingTime": "8 min read",
+      "difficulty": "Advanced",
+      "keyTakeaways": [
+        "Leader election ensures exactly one node coordinates writes, partition assignments, or scheduled jobs at any given logical epoch.",
+        "Time-based leases alone can suffer from Split-Brain if the old leader experiences a long Stop-The-World GC pause or clock drift and continues acting as leader after its lease expired.",
+        "Monotonically increasing Epoch Numbers (Fencing Tokens) validated by the storage layer mathematically fence off zombie leaders."
+      ],
+      "architectureDiagram": "                PREVENTING SPLIT-BRAIN WITH FENCING TOKENS\n  [Old Leader (Node 1)] ---> Acquires Lease (Epoch = 33)\n           |                 (Enters 15s JVM GC Pause... Lease Expires!)\n  [New Leader (Node 2)] ---> Elected Leader (Epoch = 34)\n           |---------------> Writes to Storage (Epoch = 34) --> [Storage Accepts: max_epoch=34]\n  [Old Leader Wakes Up] ---> Delayed Write   (Epoch = 33) ----> [Storage REJECTS: 33 < 34!]",
+      "sections": [
+        {
+          "heading": "How Leader Election Works (etcd / ZooKeeper / Raft)",
+          "body": "Rather than implementing custom Bully or Ring election algorithms from scratch (which frequently break under asymmetric network partitions), production systems rely on a consensus store like `etcd` (Raft) or `ZooKeeper` (ZAB) or internal Raft groups. Candidates compete to create an ephemeral key or acquire a lease backed by a majority quorum. The winner must renew its lease via periodic heartbeats before the lease TTL expires.",
+          "bullets": [
+            "Heartbeat Timeout Balance: Too short (e.g., 100ms) causes false-positive elections during minor network jitter ('flapping'); too long (e.g., 60s) increases failover RTO downtime when a leader genuinely crashes. Typical values: 3–10 seconds.",
+            "Pre-Vote Phase in Raft: Prevents a partitioned node with an incremented term from disrupting a healthy cluster leader when the partition heals.",
+            "Watch / Notification Pattern: Standby followers register a watch on the leader key in etcd/ZooKeeper instead of polling in a tight loop, waking up immediately when the ephemeral node vanishes."
+          ],
+          "codeSnippet": {
+            "title": "Storage-Layer Fencing Token Validation Against Zombie Leaders",
+            "code": "-- Every leader election increments a monotonic epoch / fencing_token in etcd.\n-- The leader MUST pass its fencing_token on every storage mutation.\nUPDATE partition_metadata\nSET current_state = $1,\n    last_fencing_token = $2,\n    updated_at = NOW()\nWHERE partition_id = $3\n  AND last_fencing_token <= $2; -- FENCING GUARD: Reject zombie leaders with older epochs!\n\n// In application code:\nif (result.rowCount === 0) {\n  logger.error('Fencing token rejected! Stepping down immediately as zombie leader.');\n  process.exit(1);\n}"
+          }
+        },
+        {
+          "heading": "The Zombie Leader Problem & Fencing Tokens",
+          "body": "Suppose Node 1 holds a 10-second leader lease with `epoch = 33`. It prepares a write to the storage system, but right before the TCP packet leaves the NIC, Node 1 suffers a 15-second Stop-The-World garbage collection pause (or virtual machine live migration freeze). Meanwhile, the lease expires, Node 2 is elected leader with `epoch = 34`, and Node 2 writes to storage. Then Node 1 wakes up, still believing its lease is valid, and flushes its delayed packet, corrupting Node 2's state!",
+          "bullets": [
+            "Monotonic Fencing Token (`epoch` / `term` / `zxid`): Every time a leader is elected, the consensus service increments a strictly monotonic integer.",
+            "Resource-Side Enforcement: The downstream storage server or database checks the token attached to every write and rejects any request whose token is smaller than the highest token already seen.",
+            "Lease Check Before Side-Effects: Even with monotonic clocks (`CLOCK_MONOTONIC`), only downstream fencing guarantees linearizable safety against network delays."
+          ]
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "External Consensus Coordinator (etcd / ZooKeeper)",
+          "pros": "Battle-tested linearizable lease management, watches, and monotonic revision numbers (`ModRevision`).",
+          "cons": "Requires operating and maintaining a separate 3- or 5-node etcd/ZK cluster.",
+          "bestFor": "Microservice job schedulers, Kafka/shard controllers, and primary database failover managers (Patroni)."
+        },
+        {
+          "option": "Embedded Raft per Partition (CockroachDB / Kafka KRaft)",
+          "pros": "Zero external dependencies; scales leadership across thousands of independent partition groups.",
+          "cons": "Higher implementation complexity and heartbeat traffic across partition groups.",
+          "bestFor": "Distributed databases and large-scale streaming brokers."
+        }
+      ],
+      "interviewTip": "Never talk about Leader Election or Distributed Locks without bringing up Martin Kleppmann's 'Fencing Tokens', explain how a GC pause can create two active leaders and how an incrementing epoch token checked by the storage engine prevents split-brain corruption.",
+      "jsonUrl": "/api/subtopics/distributed-systems/dist-leader-election.json"
+    },
+    {
+      "id": "dist-locks",
+      "topicId": "distributed-systems",
+      "topicTitle": "Distributed Systems",
+      "topicNumber": 6,
+      "subtopicNumber": "6.6",
+      "title": "Distributed Locks",
+      "subtitle": "Coordinating mutual exclusion across processes: Redis SET NX + Lua release, Redlock controversies, and etcd/ZooKeeper locks.",
+      "readingTime": "9 min read",
+      "difficulty": "Advanced",
+      "keyTakeaways": [
+        "Use Distributed Locks for **efficiency** (avoiding duplicate expensive work) or **correctness** (preventing concurrent mutation of shared state, which additionally requires Fencing Tokens).",
+        "A single-node Redis lock must use `SET lock_key unique_owner_token NX PX 5000` to acquire, and an atomic Lua script comparing `unique_owner_token` before `DEL` to release.",
+        "For strict correctness under failovers, prefer consensus-backed locks (`etcd`, `ZooKeeper`, or database `SELECT FOR UPDATE` / advisory locks) over asynchronous Redis replication."
+      ],
+      "architectureDiagram": "               SAFE REDIS LOCK ACQUISITION & LUA RELEASE\n  [Worker A] -- 1. SET lock:job1 'uuid_A' NX PX 5000 --> [Redis]\n  [Worker A] <-- OK (Lock Acquired!) -------------------- [Redis]\n  [Worker A] -- 2. Execute Critical Section...\n  [Worker A] -- 3. EVAL Lua: if GET == 'uuid_A' then DEL -> [Redis]\n                   (Prevents deleting Worker B's lock if A's TTL expired!)",
+      "sections": [
+        {
+          "heading": "Anatomy of a Correct Redis Lock & Why Naive `DEL` Is Broken",
+          "body": "Developers often implement a distributed lock with `SETNX` followed by `EXPIRE` and a plain `DEL`. This has two fatal bugs: (1) if the client crashes between `SETNX` and `EXPIRE`, the lock is held forever (deadlock); (2) if Worker A's execution takes 6 seconds on a 5-second lock TTL, the lock expires, Worker B acquires the lock, and then Worker A finishes and calls `DEL`, deleting Worker B's active lock!",
+          "bullets": [
+            "Atomic Acquisition: Always combine `NX` (only set if not exists) and `PX` (millisecond TTL) in a single atomic command: `SET resource_lock <random_uuid> NX PX 5000`.",
+            "Compare-And-Delete via Lua: When releasing the lock, pass `<random_uuid>` to a Lua script that deletes the key *only if* the current value still matches `<random_uuid>`.",
+            "Watchdog Auto-Renewal: Libraries like Redisson run a background watchdog timer every `TTL / 3` ms to extend the lock TTL via Lua if the owning thread is still alive and working."
+          ],
+          "codeSnippet": {
+            "title": "Production Redis Distributed Lock with Atomic Lua Release",
+            "code": "import { randomUUID } from 'crypto';\n\nexport class RedisDistributedLock {\n  private readonly releaseLua = `\n    if redis.call('GET', KEYS[1]) == ARGV[1] then\n      return redis.call('DEL', KEYS[1])\n    else\n      return 0\n    end\n  `;\n\n  async acquire(key: string, ttlMs: number): Promise<string | null> {\n    const token = randomUUID();\n    const res = await redis.set(`lock:${key}`, token, 'PX', ttlMs, 'NX');\n    return res === 'OK' ? token : null;\n  }\n\n  async release(key: string, token: string): Promise<boolean> {\n    const res = await redis.eval(this.releaseLua, 1, `lock:${key}`, token);\n    return res === 1;\n  }\n}"
+          }
+        },
+        {
+          "heading": "Redlock vs Consensus Stores (Efficiency vs Correctness)",
+          "body": "What happens if the single Redis primary crashes right after granting a lock to Worker A, before replicating that key to its async replica? The promoted replica will grant the same lock to Worker B! Salvatore Sanfilippo (antirez) proposed `Redlock` (acquiring locks across 3 of 5 independent Redis masters). However, Martin Kleppmann demonstrated that Redlock relies on timing assumptions that can break under clock jumps or GC pauses, and lacks built-in monotonic fencing tokens.",
+          "bullets": [
+            "Locking for Efficiency (Use Redis): You want to prevent two cron pods from generating the same daily PDF report or sending a duplicate push notification. If a rare failover causes the work to run twice, it costs a few CPU cycles, single Redis lock is fast and ideal.",
+            "Locking for Correctness (Use etcd / ZooKeeper / DB Transaction): Concurrent execution would corrupt financial state or double-book inventory. Use PostgreSQL row locks/advisory locks (`pg_try_advisory_xact_lock`) or `etcd` leases with `ModRevision` fencing tokens."
+          ]
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Redis Distributed Lock (`SET NX PX` + Lua)",
+          "pros": "Ultra-fast (<1ms), handles 100k+ lock ops/sec, trivial infrastructure footprint.",
+          "cons": "Async failover can violate mutual exclusion; does not generate monotonic fencing tokens.",
+          "bestFor": "Deduplicating cron jobs, preventing cache stampedes, and rate-limiting concurrent user actions."
+        },
+        {
+          "option": "Consensus Lock (`etcd` / `ZooKeeper`) or DB Advisory Lock",
+          "pros": "Linearizable safety across node failures; provides monotonic revision tokens for fencing.",
+          "cons": "Lower throughput (~5k–15k writes/sec per consensus group) and higher latency due to quorum disk fsync.",
+          "bestFor": "Distributed storage leadership, cluster metadata mutations, and strict correctness invariants."
+        }
+      ],
+      "interviewTip": "Ask yourself and the interviewer: 'Are we locking for Efficiency or for Correctness?' And if you already have a PostgreSQL database storing the entity being mutated, remember that a simple `SELECT ... FOR UPDATE` or `UNIQUE` constraint on the DB row often eliminates the need for an external distributed lock altogether!",
+      "jsonUrl": "/api/subtopics/distributed-systems/dist-locks.json"
+    },
+    {
+      "id": "dist-consensus",
+      "topicId": "distributed-systems",
+      "topicTitle": "Distributed Systems",
+      "topicNumber": 6,
+      "subtopicNumber": "6.7",
+      "title": "Consensus: Raft/Paxos basics",
+      "subtitle": "How Replicated State Machines achieve linearizable fault-tolerant agreement using Raft Terms, Log Replication, and Quorum Safety.",
+      "readingTime": "10 min read",
+      "difficulty": "Staff+",
+      "keyTakeaways": [
+        "Consensus algorithms (Raft, Multi-Paxos, ZAB) allow a cluster of `2f + 1` nodes to act as a single coherent Replicated State Machine, tolerating up to `f` node failures.",
+        "Raft decomposes consensus into three sub-problems: Leader Election (`RequestVote`), Log Replication (`AppendEntries`), and Safety (only nodes with all committed entries can win election).",
+        "Adding more nodes to a consensus group increases fault tolerance (5 nodes survive 2 failures vs 3 nodes surviving 1), but *decreases* write throughput because every write must replicate to more nodes."
+      ],
+      "architectureDiagram": "                     RAFT REPLICATED STATE MACHINE (N = 3, Quorum = 2)\n  Client --- 1. Command ('SET x=5') ---> [Leader (Term 4)]\n                                           |  (2. Append to Local Log: idx=8, term=4)\n                    +----------------------+----------------------+\n                    | AppendEntries RPC                           | AppendEntries RPC\n                    v                                             v\n          [Follower A (Term 4)]                         [Follower B (Network Slow)]\n          (3. Appends idx=8 & ACKs!)                    (Still in flight...)\n                    |\n  Client <-- 4. Majority (2/3) Reached! Leader Commits idx=8 & Replies to Client",
+      "sections": [
+        {
+          "heading": "How Raft Works: Terms, Elections, and Log Replication",
+          "body": "Raft divides time into monotonically increasing logical **Terms** (acting as a logical clock). At any time, each node is in one of three states: **Leader**, **Follower**, or **Candidate**. Under normal operation, the Leader sends periodic `AppendEntries` heartbeats to Followers. If a Follower hears nothing within its randomized election timeout (`150ms–300ms`), it increments `currentTerm`, transitions to Candidate, votes for itself, and requests votes from peers via `RequestVote` RPCs.",
+          "bullets": [
+            "Randomized Election Timeouts: By picking a random timeout between 150ms and 300ms, almost always one node times out first and wins a majority before any peer wakes up, preventing split votes.",
+            "Two-Phase Log Commit (`AppendEntries`): When the Leader receives a write, it appends the entry to its local WAL (uncommitted) and sends `AppendEntries` to all Followers in parallel. Once a majority (`floor(N/2) + 1`) persist the entry, the Leader advances `commitIndex`, applies the command to its State Machine, and notifies Followers on the next heartbeat.",
+            "Election Safety Restriction: A voter denies its vote to a Candidate if the Candidate's log is less up-to-date than the voter's own log (comparing `lastLogTerm` first, then `lastLogIndex`). Since any committed entry resides on a majority of nodes, and any election winner must also gather a majority of votes, the two majorities must intersect!"
+          ],
+          "codeSnippet": {
+            "title": "Raft RequestVote Log Up-To-Date Safety Check",
+            "code": "interface RequestVoteArgs {\n  term: number;\n  candidateId: string;\n  lastLogIndex: number;\n  lastLogTerm: number;\n}\n\nfunction canGrantVote(voter: RaftNodeState, req: RequestVoteArgs): boolean {\n  if (req.term < voter.currentTerm) return false;\n  const votedOk = voter.votedFor === null || voter.votedFor === req.candidateId;\n\n  // Raft Safety Property: Candidate's log must be at least as up-to-date as voter's log\n  const myLastTerm = voter.log[voter.log.length - 1].term;\n  const myLastIdx = voter.log.length - 1;\n  const logIsUpToDate =\n    req.lastLogTerm > myLastTerm ||\n    (req.lastLogTerm === myLastTerm && req.lastLogIndex >= myLastIdx);\n\n  return votedOk && logIsUpToDate;\n}"
+          }
+        },
+        {
+          "heading": "Linearizable Reads in Consensus Systems (ReadIndex & LeaseRead)",
+          "body": "A subtle trap in Raft: if a client sends a Read request to the Leader, can the Leader immediately return its local in-memory state? No! If the Leader was silently partitioned from the rest of the cluster 2 seconds ago, the other nodes may have already elected a new Leader in a higher Term and mutated the key. Serving from the partitioned old Leader would return a stale read.",
+          "bullets": [
+            "ReadIndex Optimization: The Leader records its current `commitIndex`, sends a lightweight heartbeat round to a majority of peers to confirm it is still the active Leader, waits until its state machine has applied at least `ReadIndex`, and serves the read without writing to the Raft log.",
+            "Leader Leases (Clock-Bounded): Using bounded clock drift (like Google Spanner's TrueTime or CockroachDB's Raft leases), the Leader serves local reads with 0 network hops while its lease is guaranteed not to have expired on peers.",
+            "Why Odd Cluster Sizes (3 or 5)? A 4-node cluster requires a majority of 3 nodes, meaning it can only tolerate 1 node failure (the exact same fault tolerance as a 3-node cluster), while requiring more nodes to acknowledge writes!"
+          ]
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "3-Node Raft / Paxos Group (Quorum = 2)",
+          "pros": "Lowest write latency and network fan-out; tolerates 1 node failure.",
+          "cons": "During planned maintenance on 1 node, a single unexpected crash on the remaining 2 halts the group.",
+          "bestFor": "Single-region high-speed consensus groups (etcd, Kafka KRaft, TiKV shards)."
+        },
+        {
+          "option": "5-Node Raft / Paxos Group (Quorum = 3)",
+          "pros": "Tolerates 2 simultaneous node failures; remains fault-tolerant even during rolling upgrades.",
+          "cons": "Higher network replication overhead and quorum commit latency.",
+          "bestFor": "Mission-critical control planes, global metadata stores, and multi-region spanner deployments."
+        }
+      ],
+      "interviewTip": "Never say 'We'll add more nodes to our ZooKeeper/etcd cluster to scale write throughput.' Consensus groups replicate *every* write to all nodes; to scale writes horizontally, partition the keyspace into multiple independent Raft groups ('Multi-Raft', used by CockroachDB and TiKV).",
+      "jsonUrl": "/api/subtopics/distributed-systems/dist-consensus.json"
+    },
+    {
+      "id": "dist-eventual-consistency",
+      "topicId": "distributed-systems",
+      "topicTitle": "Distributed Systems",
+      "topicNumber": 6,
+      "subtopicNumber": "6.8",
+      "title": "Eventual Consistency",
+      "subtitle": "Spectrum of consistency models (Linearizability, Causal, Eventual), Vector Clocks, and PACELC theorem trade-offs.",
+      "readingTime": "9 min read",
+      "difficulty": "Intermediate",
+      "keyTakeaways": [
+        "Eventual Consistency guarantees only that if no new updates are made to an item, all replicas will eventually converge to the same value.",
+        "The PACELC theorem extends CAP: if there is a Partition (P), trade off Availability (A) vs Consistency (C); Else (E) during normal operation, trade off Latency (L) vs Consistency (C).",
+        "Causal Consistency is the strongest consistency model that remains available under network partitions, preserving 'happens-before' (`A -> B`) ordering via Lamport/Vector Clocks."
+      ],
+      "architectureDiagram": "                     CONSISTENCY SPECTRUM & VECTOR CLOCKS\n  Strongest (Highest Latency) <-------------------> Weakest (Lowest Latency)\n  [Linearizable] -> [Sequential] -> [Causal] -> [Read-Your-Writes] -> [Eventual]\n\n  VECTOR CLOCK CAUSALITY DETECTION:\n  v1 = {A:1, B:0}  --(depends on)--> v2 = {A:1, B:1}   (v1 < v2: v2 overwrites v1)\n  vA = {A:2, B:0}  || (concurrent) || vB = {A:1, B:1}  (Neither dominates -> Conflict!)",
+      "sections": [
+        {
+          "heading": "CAP, PACELC, and the Consistency Hierarchy",
+          "body": "In a distributed system, network partitions (`P`) are inevitable physical realities, so CAP really asks whether a system chooses **CP** (reject requests on the minority side of a partition to preserve linearizable consistency) or **AP** (accept writes/reads on both sides and resolve divergence later). Daniel Abadi's **PACELC** theorem adds the crucial insight that even when the network is healthy (`E = Else`), synchronous replication for strong consistency (`C`) directly increases request latency (`L`).",
+          "bullets": [
+            "Linearizability (Strong / Atomic Consistency): Appears as if there is only a single copy of the data and every operation takes effect atomically at a single point in time between its invocation and response.",
+            "Causal Consistency: Operations that are causally related (e.g., a question and its reply) are seen by every node in the same order; concurrent unrelated operations may be seen in different orders.",
+            "Tunable Consistency per Operation: You don't have to pick one model for the entire company, use Linearizable/CP for password resets and billing, and Eventual/AP for post view counts and recommendations."
+          ],
+          "codeSnippet": {
+            "title": "Vector Clock Comparison to Detect Concurrent Conflicts vs Causal Ancestors",
+            "code": "type VectorClock = Record<string, number>;\n\nexport function compareVectorClocks(a: VectorClock, b: VectorClock): 'BEFORE' | 'AFTER' | 'CONCURRENT' | 'EQUAL' {\n  const nodes = new Set([...Object.keys(a), ...Object.keys(b)]);\n  let aLess = false, bLess = false;\n\n  for (const node of nodes) {\n    const va = a[node] ?? 0;\n    const vb = b[node] ?? 0;\n    if (va < vb) aLess = true;\n    if (vb < va) bLess = true;\n  }\n  if (aLess && bLess) return 'CONCURRENT'; // Sibling conflict! Must merge.\n  if (aLess) return 'BEFORE';              // 'a' is causal ancestor of 'b'\n  if (bLess) return 'AFTER';               // 'b' is causal ancestor of 'a'\n  return 'EQUAL';\n}"
+          }
+        },
+        {
+          "heading": "Tracking Causality with Vector Clocks & Hybrid Logical Clocks",
+          "body": "Physical wall clocks (`NTP`) across servers can drift by tens of milliseconds, making wall-clock Last-Write-Wins unsafe for fine-grained causality. **Vector Clocks** maintain an array of logical counters `[NodeA: c1, NodeB: c2, ...]`. If every counter in `V1` is `<=` the corresponding counter in `V2` (and at least one is strictly `<`), `V1` causally preceded `V2` and can be safely overwritten. If `V1` has a higher counter for Node A while `V2` has a higher counter for Node B, the writes happened **concurrently** without knowing about each other!",
+          "bullets": [
+            "Sibling Resolution (Amazon Shopping Cart): When Vector Clocks detect concurrent writes, both versions ('siblings') are returned to the client or merged via set-union so no items added to a cart are lost.",
+            "Hybrid Logical Clocks (HLC): Used by CockroachDB and MongoDB; combines physical wall-clock bits with a logical counter in a single 64-bit integer, tracking causality without unbounded vector growth."
+          ]
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Linearizability (CP / PC/EC)",
+          "pros": "Zero stale reads or anomalous ordering; straightforward application programming model.",
+          "cons": "Higher latency (quorum RTT) in normal operation; unavailable on minority partition.",
+          "bestFor": "Locking, leader election, unique username registration, and financial ledger debits."
+        },
+        {
+          "option": "Eventual / Causal Consistency (AP / PA/EL)",
+          "pros": "Sub-10ms local regional reads/writes; survives cross-region network cuts with 100% availability.",
+          "cons": "Requires client-side or CRDT merge logic to handle concurrent conflicting updates.",
+          "bestFor": "Social feeds, shopping carts, collaborative documents, and DNS/CDN propagation."
+        }
+      ],
+      "interviewTip": "Instead of saying 'CAP theorem says pick 2 of 3', explain that because network partitions (P) are unavoidable in distributed hardware, you choose between CP and AP during a partition, and cite PACELC to explain why you trade Latency vs Consistency even when the network is healthy.",
+      "jsonUrl": "/api/subtopics/distributed-systems/dist-eventual-consistency.json"
+    },
+    {
+      "id": "dist-transactions",
+      "topicId": "distributed-systems",
+      "topicTitle": "Distributed Systems",
+      "topicNumber": 6,
+      "subtopicNumber": "6.9",
+      "title": "Distributed Transactions",
+      "subtitle": "Atomic commitment across shards and services: Two-Phase Commit (2PC), coordinator blocking bottlenecks, and Google Percolator / Spanner.",
+      "readingTime": "9 min read",
+      "difficulty": "Advanced",
+      "keyTakeaways": [
+        "Two-Phase Commit (2PC) achieves atomic all-or-nothing commits across multiple database shards using a Prepare (Voting) phase and a Commit phase.",
+        "2PC is a **blocking protocol**: if a participant votes `YES` in Phase 1 and the Coordinator crashes before broadcasting Phase 2, the participant cannot unilaterally abort or commit, holding locks indefinitely.",
+        "Modern Distributed SQL databases (Google Spanner, CockroachDB) combine 2PC across shards with Raft/Paxos consensus groups inside each shard soneither the coordinator nor participants are single points of failure."
+      ],
+      "architectureDiagram": "                     TWO-PHASE COMMIT (2PC) PROTOCOL\n  Coordinator                         Shard A (Wallet)          Shard B (Orders)\n       |--- 1a. PREPARE (Tx 99) ----------->|                         |\n       |--- 1b. PREPARE (Tx 99) ------------|------------------------>|\n       |                               (Locks Row &              (Locks Row &\n       |                                fsyncs Undo/Redo)         fsyncs Undo/Redo)\n       |<-- 2a. VOTE_YES -------------------|                         |\n       |<-- 2b. VOTE_YES -------------------|-------------------------|\n  [Writes COMMIT to Coordinator WAL]        |                         |\n       |--- 3a. GLOBAL_COMMIT ------------->| (Releases Lock)         |\n       |--- 3b. GLOBAL_COMMIT --------------|------------------------>| (Releases Lock)",
+      "sections": [
+        {
+          "heading": "Anatomy of Two-Phase Commit (2PC) & The Uncertainty Window",
+          "body": "When a single transaction must atomically update data living on two separate physical shards (or two separate databases via XA), a Transaction Coordinator orchestrates Two-Phase Commit (2PC). In **Phase 1 (Prepare)**, the coordinator asks all participants if they *can* commit. Voting `YES` is a binding promise: the participant must acquire all locks, validate constraints, and flush its redo/undo log records to disk before replying `YES`. In **Phase 2 (Commit/Abort)**, if all participants voted `YES`, the coordinator writes a commit decision to its own WAL and tells all participants to commit; if any voted `NO` or timed out, it tells all to roll back.",
+          "bullets": [
+            "Why Participants Cannot Back Out After Voting YES: Once a participant replies `YES`, it enters an 'in-doubt' state. If the Coordinator crashes right after collecting votes, the participant doesn't know whether the other shard already received `GLOBAL_COMMIT`. It must hold its row locks and wait until the Coordinator recovers!",
+            "Latency Multiplication: 2PC requires multiple synchronous network round-trips and multiple sequential disk `fsync` barriers across all participating nodes, amplifying lock hold duration by 5–10x.",
+            "Three-Phase Commit (3PC): Attempts to remove blocking by adding a `Pre-Commit` phase and timeouts, but fails in asynchronous networks with partitions (FLP Impossibility)."
+          ],
+          "codeSnippet": {
+            "title": "Coordinator Recovery Logic for In-Doubt 2PC Transactions",
+            "code": "// When a 2PC Coordinator restarts after a crash, it scans its durable WAL:\nasync function recoverCoordinatorTransactions(walRecords: CoordinatorLogEntry[]) {\n  for (const tx of walRecords) {\n    if (tx.state === 'COMMITTED') {\n      // Phase 2 decision was logged before crash: retry COMMIT until all participants ACK\n      await broadcastWithRetry(tx.participants, 'GLOBAL_COMMIT', tx.txId);\n    } else if (tx.state === 'PREPARING') {\n      // Crash happened before all votes were collected/logged: safe to ABORT everywhere\n      await broadcastWithRetry(tx.participants, 'GLOBAL_ABORT', tx.txId);\n    }\n  }\n}"
+          }
+        },
+        {
+          "heading": "How Spanner & CockroachDB Make 2PC Fault-Tolerant",
+          "body": "If 2PC is slow and fragile when a single Coordinator machine crashes, how do Google Spanner and CockroachDB run distributed ACID transactions at massive scale? Instead of running 2PC across fragile single machines, they run **2PC across Raft/Paxos Consensus Groups**.",
+          "bullets": [
+            "High-Availability Coordinator: Both the Coordinator and every Participant shard are replicated across 3–5 nodes via Raft/Paxos. If one physical machine crashes during Phase 1, the Raft group elects a new leader in milliseconds and completes the 2PC without blocking!",
+            "Google Percolator / Parallel Commits: CockroachDB pipelines the Coordinator commit record and Participant intent staging in parallel, cutting distributed commit latency to a single consensus round-trip."
+          ]
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Two-Phase Commit (2PC / XA / Distributed SQL)",
+          "pros": "Provides strict ACID atomicity and serializability across multiple shards; no compensating logic needed.",
+          "cons": "Holds locks across network round-trips; couples availability of all participating shards.",
+          "bestFor": "Cross-shard financial transfers within the same Distributed SQL database (Spanner/CockroachDB)."
+        },
+        {
+          "option": "Asynchronous Saga Pattern (Compensating Transactions)",
+          "pros": "No distributed locks held across network calls; decouples availability of independent microservices.",
+          "cons": "Lacks isolation (intermediate state is visible); requires writing idempotent compensating actions.",
+          "bestFor": "Cross-microservice workflows spanning heterogeneous databases or external third-party APIs."
+        }
+      ],
+      "interviewTip": "In a microservice architecture where Order Service, Payment Service, and Inventory Service each own private databases, advise *against* XA / 2PC across services (because holding DB locks over HTTP/RPC kills availability) and propose the Saga Pattern instead.",
+      "jsonUrl": "/api/subtopics/distributed-systems/dist-transactions.json"
     }
   ]
 }

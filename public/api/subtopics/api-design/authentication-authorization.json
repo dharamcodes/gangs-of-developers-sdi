@@ -11,30 +11,17 @@
   "keyTakeaways": [
     "**Authentication (AuthN)** verifies identity (passwords, passkeys, OIDC, mTLS), whereas **Authorization (AuthZ)** enforces permissions (RBAC, ABAC, Google Zanzibar ReBAC).",
     "Use a hybrid token strategy: short-lived (5–15 min) **Stateless JWT Access Tokens** verified locally via asymmetric public keys (RS256/EdDSA), paired with long-lived (7–30 day) **Stateful Refresh Tokens** that can be revoked in the database.",
-    "Never use symmetric `HS256` secrets across 50 microservices: if any one service leaks the secret, an attacker can forge admin tokens! Always use asymmetric `RS256` or `EdDSA` where only the Auth Service holds the Private Key and others verify with the Public Key (JWKS)."
+    "Never use symmetric `HS256` secrets across 50 microservices, if any one service leaks the secret, an attacker can forge admin tokens! Always use asymmetric `RS256` or `EdDSA` where only the Auth Service holds the Private Key and others verify with the Public Key (JWKS)."
   ],
   "architectureDiagram": "HYBRID ACCESS + REFRESH TOKEN ARCHITECTURE\n[ Client App ]\n   | 1. Login / Refresh (Using Stateful Refresh Token in HttpOnly Cookie)\n   v\n[ Auth Service (Holds Private Key + Refresh Token DB) ]\n   | 2. Issues Short-Lived 10-min JWT Access Token (Signed with Private Key)\n   v\n[ Client App ] --- 3. API Call + Bearer JWT ---> [ API Gateway / Microservice ]\n                                                 (Verifies Signature in 0.1ms\n                                                  using cached Public JWKS!\n                                                  Zero Auth DB lookup needed!)",
   "sections": [
     {
-      "heading": "1. Architectural Fundamentals & Core Mechanics",
+      "heading": "Authentication: Stateful Sessions vs Stateless JWTs + Refresh Tokens",
       "body": "Traditional web apps used **Stateful Session IDs**: on login, the server inserts a random ID into Redis/Postgres and returns `Set-Cookie: sid=xyz; HttpOnly; Secure; SameSite=Strict`. Every subsequent API request requires a Redis lookup to resolve `sid -> user_id`, which makes instant revocation trivial (`DEL session:xyz`), but creates a central bottleneck at 500,000 QPS. **JSON Web Tokens (JWTs)** (`Header.Payload.Signature`) encode the user's ID, roles, and expiration (`exp`) directly into a cryptographically signed payload. Any microservice can verify a JWT's signature in `<0.1ms` CPU time using the Auth server's cached public key (`/.well-known/jwks.json`) with **zero database or network calls**.",
       "bullets": [
-        "**Core Architectural Principle**: **Authentication (AuthN)** verifies identity (passwords, passkeys, OIDC, mTLS), whereas **Authorization (AuthZ)** enforces permissions (RBAC, ABAC, Google Zanzibar ReBAC).",
-        "**Problem Space & Invariants**: Use a hybrid token strategy: short-lived (5–15 min) **Stateless JWT Access Tokens** verified locally via asymmetric public keys (RS256/EdDSA), paired with long-lived (7–30 day) **Stateful Refresh Tokens** that can be revoked in the database.",
-        "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-      ],
-      "asciiDiagram": "HYBRID ACCESS + REFRESH TOKEN ARCHITECTURE\n[ Client App ]\n   | 1. Login / Refresh (Using Stateful Refresh Token in HttpOnly Cookie)\n   v\n[ Auth Service (Holds Private Key + Refresh Token DB) ]\n   | 2. Issues Short-Lived 10-min JWT Access Token (Signed with Private Key)\n   v\n[ Client App ] --- 3. API Call + Bearer JWT ---> [ API Gateway / Microservice ]\n                                                 (Verifies Signature in 0.1ms\n                                                  using cached Public JWKS!\n                                                  Zero Auth DB lookup needed!)"
-    },
-    {
-      "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "Distributed architectures apply specific implementation patterns and topologies for Authentication / Authorization:",
-      "bullets": [
-        "**Short-Lived Stateless JWT (10m) + Stateful Refresh Token (30d)**: Provides zero database/network lookups on 99% of api calls, scales horizontally across global regions, supports immediate revocation on refresh or via tiny 10m blocklist. Best suited for Distributed microservice architectures, mobile apps, SPAs, and high-QPS global APIs.",
-        "**Opaque Stateful Session Cookies (Redis Lookup on Every Request)**: Provides instantaneous 0-second session revocation and permission updates, tiny cookie size, no cryptographic token payload exposed to client. Best suited for Monolithic web applications, banking portals requiring instant session kill-switches, and BFF-terminated browser sessions.",
         "The JWT Revocation Problem: Because stateless JWTs aren't checked against a database, if a user is banned or logs out, their JWT remains valid until `exp`. Solution: Keep Access JWTs very short-lived (`5–15 minutes`) and pair them with a stateful, revocable **Refresh Token** (rotated on use).",
         "Emergency Immediate Revocation: For critical security events (compromised account), broadcast only the revoked token's `jti` (or `user_id + revoked_at` timestamp) to a tiny Redis blocklist with a 15-minute TTL matching the Access Token's remaining lifespan.",
-        "RBAC (Role-Based Access Control): Users are assigned Roles (`Admin`, `BillingManager`), and Roles grant Permissions (`invoices:refund`). Simple and covers 80% of B2B SaaS needs.",
-        "ABAC (Attribute-Based Access Control): Evaluates dynamic attributes of the user, resource, and environment (e.g., 'Allow if `user.department == doc.department` AND `request.ip` is on corporate VPN', enforced via OPA / Cedar)."
+        "OAuth 2.0 + PKCE & OIDC: OAuth 2.0 is a *delegated authorization* framework (Authorization Code Flow with PKCE prevents interception on mobile/SPAs); OpenID Connect (OIDC) layers *identity authentication* (`id_token`) on top of OAuth 2.0."
       ],
       "codeSnippet": {
         "title": "Asymmetric EdDSA/RS256 JWT Claims & RBAC/ABAC Policy Check",
@@ -42,31 +29,12 @@
       }
     },
     {
-      "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Production deployments apply Authentication / Authorization across targeted operational scenarios:",
+      "heading": "Authorization Models: RBAC, ABAC, and ReBAC (Google Zanzibar)",
+      "body": "Once Authentication proves *who* the caller is (`sub: usr_01HQ99A`), Authorization determines *whether* they can perform action `X` on resource `Y`. As systems grow from simple internal tools to Google Drive or GitHub scale, authorization models evolve from flat roles to relationship graphs.",
       "bullets": [
-        "**Where to Use: High-Impact Scenarios**: Optimal for Distributed microservice architectures, mobile apps, SPAs, and high-QPS global APIs, suited for environments requiring Zero database/network lookups on 99% of API calls, scales horizontally across global regions, supports immediate revocation on refresh or via tiny 10m blocklist.",
-        "**Where to Use: High-Throughput Scenarios**: Recommended for Monolithic web applications, banking portals requiring instant session kill-switches, and BFF-terminated browser sessions, where Instantaneous 0-second session revocation and permission updates, tiny cookie size, no cryptographic token payload exposed to client.",
-        "**How to Use: Engineering Implementation**: Once Authentication proves *who* the caller is (`sub: usr_01HQ99A`), Authorization determines *whether* they can perform action `X` on resource `Y`. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-        "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-      ]
-    },
-    {
-      "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "Improper implementation of Authentication / Authorization introduces operational bottlenecks and failure modes:",
-      "bullets": [
-        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: slightly larger http header (~600-800 bytes vs 32-byte session id); up to 10-minute window for non-blocklisted permission changes to propagate.",
-        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: every single api request hits the central redis session cluster; requires cross-region redis replication for global deployments.",
-        "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-        "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-      ]
-    },
-    {
-      "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Technical guidelines and evaluation criteria for Authentication / Authorization:",
-      "bullets": [
-        "**Staff+ Golden Rule**: Never use symmetric `HS256` secrets across 50 microservices: if any one service leaks the secret, an attacker can forge admin tokens! Always use asymmetric `RS256` or `EdDSA` where only the Auth Service holds the Private Key and others verify with the Public Key (JWKS).",
-        "**Staff+ Interview Playbook**: Always emphasize using **Asymmetric Signing (`RS256` or `EdDSA`)** for JWTs in microservices: the Auth Service signs tokens with its closely guarded **Private Key**, while API Gateways and microservices verify tokens using the **Public Key** exposed via a JWKS endpoint."
+        "RBAC (Role-Based Access Control): Users are assigned Roles (`Admin`, `BillingManager`), and Roles grant Permissions (`invoices:refund`). Simple and covers 80% of B2B SaaS needs.",
+        "ABAC (Attribute-Based Access Control): Evaluates dynamic attributes of the user, resource, and environment (e.g., 'Allow if `user.department == doc.department` AND `request.ip` is on corporate VPN', enforced via OPA / Cedar).",
+        "ReBAC (Relationship-Based Access Control: Google Zanzibar / SpiceDB / OpenFGA): Models permissions as tuples `(User, Relation, Object)`, e.g., `user:alice is viewer of folder:eng`, and `doc:spec_1 has parent folder:eng`, enabling fast recursive graph checks for Google Docs, Notion, or GitHub."
       ]
     }
   ],

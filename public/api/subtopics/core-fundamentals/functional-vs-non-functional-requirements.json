@@ -16,25 +16,12 @@
   "architectureDiagram": "+-------------------------------------------------------------------+\n|                     SYSTEM DESIGN REQUIREMENTS                    |\n+---------------------------------+---------------------------------+\n                                  |\n              +-------------------+-------------------+\n              |                                       |\n              v                                       v\n+---------------------------+           +---------------------------+\n|  FUNCTIONAL REQUIREMENTS  |           | NON-FUNCTIONAL REQ (NFRs) |\n|      (\"What it does\")     |           |   (\"How well it does it\") |\n+---------------------------+           +---------------------------+\n| - Post a tweet / photo    |           | - Availability: 99.99%    |\n| - Follow another user     |           | - Read p99 < 150ms        |\n| - Fetch home timeline     |           | - Eventual Consistency    |\n| - Search by hashtag       |           | - Scale: 50k writes/sec   |\n+-------------+-------------+           +-------------+-------------+\n              |                                       |\n              v                                       v\n     [ API & Data Model ]                  [ Distributed Topology ]",
   "sections": [
     {
-      "heading": "1. Architectural Fundamentals & Core Mechanics",
+      "heading": "Why Non-Functional Requirements Drive Architecture",
       "body": "In a small CRUD application, functional requirements dominate engineering effort. At scale, non-functional requirements (NFRs), also known as quality attributes or '-ilities', are the primary drivers of architectural complexity. Anyone can build a timeline query using a SQL JOIN for 1,000 users; doing it for 300 million daily active users with sub-200ms p99 latency forces you to introduce fan-out-on-write caches, celebrity hybrid fan-out, and read-optimized stores.",
       "bullets": [
-        "**Core Architectural Principle**: Functional requirements define user-visible features and API behaviors, while non-functional requirements (NFRs) dictate architecture.",
-        "**Problem Space & Invariants**: Two systems with identical functional requirements (e.g., 'post a message') require radically different architectures when NFRs shift from 100 DAU to 500M DAU.",
-        "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-      ],
-      "asciiDiagram": "+-------------------------------------------------------------------+\n|                     SYSTEM DESIGN REQUIREMENTS                    |\n+---------------------------------+---------------------------------+\n                                  |\n              +-------------------+-------------------+\n              |                                       |\n              v                                       v\n+---------------------------+           +---------------------------+\n|  FUNCTIONAL REQUIREMENTS  |           | NON-FUNCTIONAL REQ (NFRs) |\n|      (\"What it does\")     |           |   (\"How well it does it\") |\n+---------------------------+           +---------------------------+\n| - Post a tweet / photo    |           | - Availability: 99.99%    |\n| - Follow another user     |           | - Read p99 < 150ms        |\n| - Fetch home timeline     |           | - Eventual Consistency    |\n| - Search by hashtag       |           | - Scale: 50k writes/sec   |\n+-------------+-------------+           +-------------+-------------+\n              |                                       |\n              v                                       v\n     [ API & Data Model ]                  [ Distributed Topology ]"
-    },
-    {
-      "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "Distributed architectures apply specific implementation patterns and topologies for Functional vs Non-Functional Requirements:",
-      "bullets": [
-        "**Strict NFRs (99.999% SLA, Strong Consistency)**: Provides zero data anomalies, simple mental model for application developers, enterprise-grade trust. Best suited for Financial ledgers, billing systems, inventory reservation, and authentication services.",
-        "**Relaxed NFRs (99.9% SLA, Eventual Consistency)**: Provides ultra-fast local reads/writes, resilient to network partitions, dramatically lower cloud spend. Best suited for Social media feeds, view counters, product recommendations, and activity streams.",
         "Functional Requirements: Deterministic business rules, API endpoints, state transitions, and user workflows.",
         "Non-Functional Requirements: Scalability, availability, latency targets, consistency guarantees, durability, security, and cost ceilings.",
-        "Read-heavy (100:1 read/write) + Eventual Consistency -> Multi-tier caching (CDN + Redis) and read replicas.",
-        "Strict zero-data-loss (RPO = 0) + Strong Consistency -> Quorum or synchronous replication with Write-Ahead Logging (WAL) and fsync."
+        "Extended / Out-of-Scope Requirements: Analytics pipelines, fraud detection, and GDPR compliance that should be explicitly scoped in or out."
       ],
       "codeSnippet": {
         "title": "Structured Interview Requirement Specification",
@@ -42,31 +29,12 @@
       }
     },
     {
-      "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Production deployments apply Functional vs Non-Functional Requirements across targeted operational scenarios:",
+      "heading": "Translating NFRs into Concrete Architectural Choices",
+      "body": "Every NFR statement maps directly to a set of infrastructure patterns. When you state an NFR in an interview, immediately pair it with the architectural consequence so the interviewer sees your causal reasoning rather than a memorized checklist.",
       "bullets": [
-        "**Where to Use: High-Impact Scenarios**: Optimal for Financial ledgers, billing systems, inventory reservation, and authentication services, suited for environments requiring Zero data anomalies, simple mental model for application developers, enterprise-grade trust.",
-        "**Where to Use: High-Throughput Scenarios**: Recommended for Social media feeds, view counters, product recommendations, and activity streams, where Ultra-fast local reads/writes, resilient to network partitions, dramatically lower cloud spend.",
-        "**How to Use: Engineering Implementation**: Every NFR statement maps directly to a set of infrastructure patterns. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-        "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-      ]
-    },
-    {
-      "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "Improper implementation of Functional vs Non-Functional Requirements introduces operational bottlenecks and failure modes:",
-      "bullets": [
-        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: high write latency across regions, 3x-5x infrastructure cost, complex consensus protocols (raft/paxos).",
-        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: users may briefly see stale data, requires conflict resolution (lww or crdts) in the app layer.",
-        "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-        "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-      ]
-    },
-    {
-      "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Technical guidelines and evaluation criteria for Functional vs Non-Functional Requirements:",
-      "bullets": [
-        "**Staff+ Golden Rule**: Always quantify NFRs during the first 5 minutes of a system design interview using concrete metrics (p99 latency, availability nines, RPO/RTO).",
-        "**Staff+ Interview Playbook**: Never ask the interviewer 'What are the non-functional requirements?' Instead, propose sensible defaults based on the domain: 'Since this is a social feed, I suggest optimizing for high availability and sub-200ms p99 read latency with eventual consistency, rather than strong consistency. Does that align with your expectations?'"
+        "Read-heavy (100:1 read/write) + Eventual Consistency -> Multi-tier caching (CDN + Redis) and read replicas.",
+        "Strict zero-data-loss (RPO = 0) + Strong Consistency -> Quorum or synchronous replication with Write-Ahead Logging (WAL) and fsync.",
+        "Ultra-low latency (< 50ms globally) -> Edge compute, Geo-DNS routing, and multi-region active-active replication."
       ]
     }
   ],

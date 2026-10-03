@@ -16,25 +16,12 @@
   "architectureDiagram": "Producer (acks=all)\n    |\n    | 1. Write Record (Offset 42)\n    v\n+------------------------+     2. Follower Fetch      +--------------------------+\n| Broker 1 (Leader, ISR) | <------------------------- | Broker 2 (Follower, ISR) |\n| LEO: 43, HW: 42        |                            | LEO: 43                  |\n+------------------------+                            +--------------------------+\n    ^                                                 +--------------------------+\n    |-------------------------- 2. Follower Fetch --- | Broker 3 (Follower, ISR) |\n    |                                                 | LEO: 43                  |\n    v 3. ACK to Producer (once >= min.insync.replicas=2 have written)\nConsumers can only read up to High Watermark (HW = 42)",
   "sections": [
     {
-      "heading": "1. Architectural Fundamentals & Core Mechanics",
+      "heading": "Leader, Followers, ISR, and High Watermark",
       "body": "Kafka achieves fault tolerance by replicating each partition across multiple brokers across distinct availability zones (racks). One broker is elected as the partition **Leader**, while the others act as **Followers**. Followers behave like specialized consumers: they pull batches of records from the leader in strict offset order and append them to their local log. A follower that stays caught up within `replica.lag.time.max.ms` (default 30s) remains in the **In-Sync Replicas (ISR)** set. If a follower stalls or disconnects, the leader shrinks the ISR by evicting that follower.",
       "bullets": [
-        "**Core Architectural Principle**: Every partition has one Leader replica and `R - 1` Follower replicas that continuously fetch and replicate the leader's log.",
-        "**Problem Space & Invariants**: The In-Sync Replica (ISR) set contains replicas that are fully caught up with the leader within `replica.lag.time.max.ms`.",
-        "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-      ],
-      "asciiDiagram": "Producer (acks=all)\n    |\n    | 1. Write Record (Offset 42)\n    v\n+------------------------+     2. Follower Fetch      +--------------------------+\n| Broker 1 (Leader, ISR) | <------------------------- | Broker 2 (Follower, ISR) |\n| LEO: 43, HW: 42        |                            | LEO: 43                  |\n+------------------------+                            +--------------------------+\n    ^                                                 +--------------------------+\n    |-------------------------- 2. Follower Fetch --- | Broker 3 (Follower, ISR) |\n    |                                                 | LEO: 43                  |\n    v 3. ACK to Producer (once >= min.insync.replicas=2 have written)\nConsumers can only read up to High Watermark (HW = 42)"
-    },
-    {
-      "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "Distributed architectures apply specific implementation patterns and topologies for Replication:",
-      "bullets": [
-        "**acks = 1 (Leader Only)**: Provides lower write latency (1 network rtt to leader without waiting for cross-az follower fetches). Best suited for Application logs, clickstreams, and non-critical metrics.",
-        "**acks = all + min.insync.replicas = 2 (RF = 3)**: Guarantees zero data loss across broker crashes; tolerates 1 broker down with zero downtime. Best suited for Payments, orders, core domain events, and audit logs.",
         "**High Watermark (HW)**: The offset of the last record replicated across ALL current members of the ISR. Consumers are strictly forbidden from reading past the HW to prevent reading uncommitted records that could vanish on leader failover.",
         "**Leader Epoch**: A monotonic counter incremented on each leader election to prevent split-brain log divergence and truncation errors (replacing naive HW truncation).",
-        "`acks=0`: Fire-and-forget; producer doesn't wait for network response. Maximum throughput, zero durability.",
-        "`acks=1`: Leader writes to its local page cache and responds immediately before followers fetch. Data is lost if the leader crashes before replication."
+        "**Unclean Leader Election**: Setting `unclean.leader.election.enabled=false` guarantees an out-of-sync replica can never become leader and overwrite committed data."
       ],
       "codeSnippet": {
         "title": "Zero-Data-Loss Durability Configuration",
@@ -42,31 +29,12 @@
       }
     },
     {
-      "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Production deployments apply Replication across targeted operational scenarios:",
+      "heading": "The `acks` vs `min.insync.replicas` Matrix",
+      "body": "A common misconception is that setting `acks=all` alone guarantees durability. `acks=all` instructs the leader to wait for all *current* ISR members to acknowledge the write. If 2 out of 3 brokers crash, the ISR shrinks to just `[Leader]`. At that point, `acks=all` is satisfied by the single surviving leader! If that leader's disk subsequently dies, data is lost. Setting `min.insync.replicas=2` closes this loophole: if the ISR size drops below 2, the leader rejects new writes with `NotEnoughReplicasException`, trading write availability for strict durability.",
       "bullets": [
-        "**Where to Use: High-Impact Scenarios**: Optimal for Application logs, clickstreams, and non-critical metrics, suited for environments requiring Lower write latency (1 network RTT to leader without waiting for cross-AZ follower fetches).",
-        "**Where to Use: High-Throughput Scenarios**: Recommended for Payments, orders, core domain events, and audit logs, where Guarantees zero data loss across broker crashes; tolerates 1 broker down with zero downtime.",
-        "**How to Use: Engineering Implementation**: A common misconception is that setting `acks=all` alone guarantees durability. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-        "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-      ]
-    },
-    {
-      "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "Improper implementation of Replication introduces operational bottlenecks and failure modes:",
-      "bullets": [
-        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: committed messages are permanently lost if the leader broker crashes milliseconds after sending the ack.",
-        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: higher tail write latency due to cross-az replication round trip; rejects writes if 2 of 3 replicas fail.",
-        "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-        "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-      ]
-    },
-    {
-      "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Technical guidelines and evaluation criteria for Replication:",
-      "bullets": [
-        "**Staff+ Golden Rule**: The golden durability triad is `replication.factor = 3`, `min.insync.replicas = 2`, and producer `acks = all`.",
-        "**Staff+ Interview Playbook**: Memorize the formula **RF=3, min.insync.replicas=2, acks=all, unclean.leader.election.enabled=false**. In any Staff+ interview involving Kafka durability, reciting why all four settings are needed together is an instant strong signal."
+        "`acks=0`: Fire-and-forget; producer doesn't wait for network response. Maximum throughput, zero durability.",
+        "`acks=1`: Leader writes to its local page cache and responds immediately before followers fetch. Data is lost if the leader crashes before replication.",
+        "`acks=all` (`-1`) + `min.insync.replicas=2` + `RF=3`: Survives any single broker failure with zero data loss and full read/write availability."
       ]
     }
   ],

@@ -16,58 +16,26 @@
   "architectureDiagram": "VERTICAL SCALING (Scale Up)          HORIZONTAL SCALING (Scale Out)\n+-------------------------+          +---------+    +---------------+\n|   Single Giant Server   |          |         |--->| App Server 01 |\n|  128 vCPU / 2 TB RAM    |          |  Load   |    +---------------+\n|  +-------------------+  |   VS.    | Balancer|--->| App Server 02 |\n|  |  Monolith / DB    |  |          |         |    +---------------+\n|  +-------------------+  |          |         |--->| App Server 03 |\n+-------------------------+          +---------+    +---------------+\nHard ceiling & SPOF risk             Elastic & Fault-tolerant",
   "sections": [
     {
-      "heading": "1. Architectural Fundamentals & Core Mechanics",
+      "heading": "The Mechanics of Vertical vs Horizontal Scaling",
       "body": "Scalability measures a system's ability to handle growing load by adding resources. Vertical scaling adds CPU, RAM, or faster NVMe disks to an existing node. Horizontal scaling adds more commodity nodes to a pool behind a load balancer or partitioning router. While stateless web tiers scale horizontally with trivial effort, stateful databases require careful sharding, replication, and rebalancing to scale out.",
       "bullets": [
-        "**Core Architectural Principle**: Vertical scaling (scale-up) is operationally simple and eliminates network hop overhead, but hits hard hardware ceilings and creates a Single Point of Failure (SPOF).",
-        "**Problem Space & Invariants**: Horizontal scaling (scale-out) provides near-infinite elasticity and fault isolation, but demands stateless services and data partitioning.",
-        "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-      ],
-      "asciiDiagram": "VERTICAL SCALING (Scale Up)          HORIZONTAL SCALING (Scale Out)\n+-------------------------+          +---------+    +---------------+\n|   Single Giant Server   |          |         |--->| App Server 01 |\n|  128 vCPU / 2 TB RAM    |          |  Load   |    +---------------+\n|  +-------------------+  |   VS.    | Balancer|--->| App Server 02 |\n|  |  Monolith / DB    |  |          |         |    +---------------+\n|  +-------------------+  |          |         |--->| App Server 03 |\n+-------------------------+          +---------+    +---------------+\nHard ceiling & SPOF risk             Elastic & Fault-tolerant",
-      "diagramImageUrl": "/diagrams/arch-scalability-vertical-vs-horizontal.svg"
-    },
-    {
-      "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "Distributed architectures apply specific implementation patterns and topologies for Scalability: Vertical vs Horizontal:",
-      "bullets": [
-        "**Vertical Scaling (Scale Up)**: Provides zero distributed systems complexity, acid transactions work natively in memory, no cross-node network serialization. Best suited for Early-to-mid stage relational databases, in-memory graph processing, and workloads with tight transactional coupling.",
-        "**Horizontal Scaling (Scale Out)**: Provides linear capacity growth using commodity vms, automatic self-healing when nodes die, elastic scale-to-zero or burst capability. Best suited for Stateless API/web tiers, high-throughput NoSQL stores (Cassandra/DynamoDB), and event streaming clusters (Kafka).",
         "Stateless Tier Prerequisite: Externalize session state to Redis or JWTs so any horizontal node can serve any request.",
         "NUMA & Lock Contention: Even on a 256-core machine, vertical scaling suffers diminishing returns due to CPU cache coherence overhead and kernel lock contention.",
-        "Stage 1: Vertical scale-up of primary database + horizontal auto-scaling of stateless API servers.",
-        "Stage 2: Offload 80-95% of reads via Redis caching and read replicas."
+        "Autoscaling Speed: Horizontal scaling relies on container spin-up times and AMI boot metrics (CPU > 70%, request queue depth)."
       ],
       "codeSnippet": {
         "title": "Stateless Service Pattern Enabling Horizontal Scale",
         "code": "// BAD: In-memory session pins user to a single vertical box\nconst localSessions = new Map<string, UserSession>();\n\n// GOOD: Externalized state in Redis Cluster allows N horizontal replicas\nexport async function authenticateRequest(req: Request, redis: RedisClient) {\n  const sessionId = req.headers.get(\"x-session-id\");\n  if (!sessionId) throw new Error(\"Unauthorized\");\n  // Any of the 500 stateless pods can validate this session in <1ms\n  const payload = await redis.get(`session:${sessionId}`);\n  return payload ? JSON.parse(payload) : null;\n}"
-      }
+      },
+      "diagramImageUrl": "/diagrams/arch-scalability-vertical-vs-horizontal.svg"
     },
     {
-      "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Production deployments apply Scalability: Vertical vs Horizontal across targeted operational scenarios:",
+      "heading": "Pragmatic Scaling Progression in Production",
+      "body": "Premature horizontal sharding of databases is one of the costliest engineering mistakes. A single modern AWS RDS instance (`db.r7g.16xlarge` with 64 vCPUs and 512 GB RAM) can comfortably handle 25,000+ simple queries per second. In practice, teams scale vertically first, add read replicas second, introduce caching third, and shard horizontally only when write throughput or storage volume exceeds single-node physics.",
       "bullets": [
-        "**Where to Use: High-Impact Scenarios**: Optimal for Early-to-mid stage relational databases, in-memory graph processing, and workloads with tight transactional coupling, suited for environments requiring Zero distributed systems complexity, ACID transactions work natively in memory, no cross-node network serialization.",
-        "**Where to Use: High-Throughput Scenarios**: Recommended for Stateless API/web tiers, high-throughput NoSQL stores (Cassandra/DynamoDB), and event streaming clusters (Kafka), where Linear capacity growth using commodity VMs, automatic self-healing when nodes die, elastic scale-to-zero or burst capability.",
-        "**How to Use: Engineering Implementation**: Premature horizontal sharding of databases is one of the costliest engineering mistakes. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-        "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-      ]
-    },
-    {
-      "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "Improper implementation of Scalability: Vertical vs Horizontal introduces operational bottlenecks and failure modes:",
-      "bullets": [
-        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: hard physical limits (~24tb ram max), non-linear cloud pricing, requires downtime or failover to resize, single point of failure.",
-        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: introduces network partitions, distributed joins, clock skew, deployment orchestration, and data rebalancing headaches.",
-        "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-        "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-      ]
-    },
-    {
-      "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Technical guidelines and evaluation criteria for Scalability: Vertical vs Horizontal:",
-      "bullets": [
-        "**Staff+ Golden Rule**: Modern architectures combine both: horizontally scaled stateless microservices paired with vertically beefy, horizontally sharded database nodes.",
-        "**Staff+ Interview Playbook**: Show architectural maturity by noting that stateless services should be scaled horizontally from day one for high availability, whereas relational databases should be scaled vertically (plus read replicas) until write volume provably exceeds ~10k-20k writes/sec."
+        "Stage 1: Vertical scale-up of primary database + horizontal auto-scaling of stateless API servers.",
+        "Stage 2: Offload 80-95% of reads via Redis caching and read replicas.",
+        "Stage 3: Horizontal partitioning (sharding) by tenant or entity ID when write IOPS saturate the largest instance."
       ]
     }
   ],

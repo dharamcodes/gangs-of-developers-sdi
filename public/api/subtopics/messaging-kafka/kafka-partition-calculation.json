@@ -16,25 +16,12 @@
   "architectureDiagram": "Target Peak Throughput (T = 100 MB/s)\n       |\n       +---> Producer Capacity per Partition (Wp = 25 MB/s) ---> T / Wp = 4 Partitions\n       |\n       +---> Consumer Capacity per Partition (Rc = 5 MB/s)  ---> T / Rc = 20 Partitions\n                                                                       |\n                                                                       v\n                                              Chosen Partitions = max(4, 20) x 1.5 Headroom = 30 Partitions",
   "sections": [
     {
-      "heading": "1. Architectural Fundamentals & Core Mechanics",
+      "heading": "The Throughput Sizing Formula",
       "body": "In system design interviews, picking a random number of partitions looks arbitrary. Instead, compute the partition count systematically from peak throughput ($T$), single-partition producer write throughput ($W_p$), and single-consumer-thread read throughput ($R_c$). Because a single partition's sequential log can easily absorb $10\\text{--}50\\text{ MB/s}$ on the producer side, the calculation is almost always dominated by how fast a single consumer instance can process and persist records ($R_c$).",
       "bullets": [
-        "**Core Architectural Principle**: Partition count is determined by the maximum of required producer write parallelism and consumer read parallelism: $P = \\max(T / W_p, T / R_c)$.",
-        "**Problem Space & Invariants**: Consumer throughput per partition ($R_c$) is typically the true bottleneck due to downstream database or RPC latency.",
-        "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-      ],
-      "asciiDiagram": "Target Peak Throughput (T = 100 MB/s)\n       |\n       +---> Producer Capacity per Partition (Wp = 25 MB/s) ---> T / Wp = 4 Partitions\n       |\n       +---> Consumer Capacity per Partition (Rc = 5 MB/s)  ---> T / Rc = 20 Partitions\n                                                                       |\n                                                                       v\n                                              Chosen Partitions = max(4, 20) x 1.5 Headroom = 30 Partitions"
-    },
-    {
-      "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "Distributed architectures apply specific implementation patterns and topologies for Kafka Partition Calculation:",
-      "bullets": [
-        "**Conservative Partition Count (12–30 per Topic)**: Provides high producer batching compression, minimal broker metadata overhead, fast failover elections. Best suited for 95% of standard domain microservice topics handling < 20,000 msgs/sec.",
-        "**High Partition Count (100–500+ per Topic)**: Provides allows massive consumer group fleets to process high-latency workloads in parallel. Best suited for Firehose telemetry topics, clickstreams, or heavy ML feature pipelines (> 100,000 msgs/sec).",
         "**Step 1 (Peak Throughput $T$)**: Multiply peak messages/sec by average compressed message size (e.g., $50,000\\text{ msg/s} \\times 2\\text{ KB} = 100\\text{ MB/s}$).",
         "**Step 2 (Consumer Rate $R_c$)**: If one consumer thread takes $10\\text{ ms}$ to process a batch of $50$ records ($5,000\\text{ msg/s} = 10\\text{ MB/s}$), then $T / R_c = 100 / 10 = 10$ partitions minimum.",
-        "**Controller Failover Latency**: When a broker crashes cleanly or uncleanly, the KRaft/Controller must elect a new leader for every partition led by that broker (~1–2ms per partition in ZooKeeper, much faster in KRaft, but still bounded across thousands of partitions).",
-        "**Producer Memory Fragmentation**: Producers maintain a separate batch buffer per active partition (`batch.size` = 16KB–64KB). 1,000 partitions means 1,000 smaller batches, reducing compression ratios and exhausting `buffer.memory`."
+        "**Step 3 (Broker Alignment & Growth)**: Round up to a multiple of the broker count (e.g., 6 brokers $\\rightarrow$ 12 or 24 partitions) to ensure even leader distribution and headroom for $2\\times$ traffic growth."
       ],
       "codeSnippet": {
         "title": "Back-of-the-Envelope Partition Sizing Calculator",
@@ -42,31 +29,12 @@
       }
     },
     {
-      "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Production deployments apply Kafka Partition Calculation across targeted operational scenarios:",
+      "heading": "Why Not Create 10,000 Partitions per Topic?",
+      "body": "If partitions increase parallelism, why not give every topic 1,000 partitions just in case? Each partition replica carries tangible operational overhead on the cluster.",
       "bullets": [
-        "**Where to Use: High-Impact Scenarios**: Optimal for 95% of standard domain microservice topics handling < 20,000 msgs/sec, suited for environments requiring High producer batching compression, minimal broker metadata overhead, fast failover elections.",
-        "**Where to Use: High-Throughput Scenarios**: Recommended for Firehose telemetry topics, clickstreams, or heavy ML feature pipelines (> 100,000 msgs/sec), where Allows massive consumer group fleets to process high-latency workloads in parallel.",
-        "**How to Use: Engineering Implementation**: If partitions increase parallelism, why not give every topic 1,000 partitions just in case? Each partition replica carries tangible operational overhead on the cluster. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-        "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-      ]
-    },
-    {
-      "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "Improper implementation of Kafka Partition Calculation introduces operational bottlenecks and failure modes:",
-      "bullets": [
-        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: caps maximum horizontal scale-out of any single consumer group to 12–30 pods.",
-        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: higher end-to-end replication overhead, larger client memory footprint, and slower rebalances.",
-        "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-        "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-      ]
-    },
-    {
-      "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Technical guidelines and evaluation criteria for Kafka Partition Calculation:",
-      "bullets": [
-        "**Staff+ Golden Rule**: Excessive partitions increase broker memory overhead, file descriptors, and controller leader-election recovery time.",
-        "**Staff+ Interview Playbook**: Show your math explicitly during the interview: 'At 50k events/sec and 2,500 events/sec per consumer worker, we need 20 partitions minimum; across a 6-broker cluster, I'll provision **30 or 36 partitions** for balanced leaders and 1.5x headroom.'"
+        "**Controller Failover Latency**: When a broker crashes cleanly or uncleanly, the KRaft/Controller must elect a new leader for every partition led by that broker (~1–2ms per partition in ZooKeeper, much faster in KRaft, but still bounded across thousands of partitions).",
+        "**Producer Memory Fragmentation**: Producers maintain a separate batch buffer per active partition (`batch.size` = 16KB–64KB). 1,000 partitions means 1,000 smaller batches, reducing compression ratios and exhausting `buffer.memory`.",
+        "**File Descriptors & Page Cache**: Every partition segment requires open `.log`, `.index`, and `.timeindex` file handles on the broker OS."
       ]
     }
   ],

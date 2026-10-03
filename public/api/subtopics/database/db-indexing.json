@@ -13,28 +13,15 @@
     "LSM-Trees (Log-Structured Merge-Trees) turn random disk writes into sequential append-only writes in MemTables and SSTables.",
     "Composite indexes follow the leftmost prefix rule: an index on (A, B, C) accelerates queries on (A) and (A, B), but cannot be used for (B, C) alone."
   ],
-  "architectureDiagram": "B+ TREE INDEX STRUCTURE\n                 +-------------------------------+\n                 |   Internal Node: [ 25 | 60 ]  |\n                 +-------------------------------+\n                  /              |              \\\n                 v               v               v\n      +---------------+  +---------------+  +---------------+\n      | Leaf: 10, 18  |->| Leaf: 25, 42  |->| Leaf: 60, 88  | (Doubly Linked\n      +---------------+  +---------------+  +---------------+  for Range Scans)\n          |      |           |      |           |      |\n          v      v           v      v           v      v\n       [Heap/Clustered Data Pages on Disk (8KB / 16KB Blocks)]",
+  "architectureDiagram": "                      B+ TREE INDEX STRUCTURE\n                 +-------------------------------+\n                 |   Internal Node: [ 25 | 60 ]  |\n                 +-------------------------------+\n                  /              |              \\\n                 v               v               v\n      +---------------+  +---------------+  +---------------+\n      | Leaf: 10, 18  |->| Leaf: 25, 42  |->| Leaf: 60, 88  | (Doubly Linked\n      +---------------+  +---------------+  +---------------+  for Range Scans)\n          |      |           |      |           |      |\n          v      v           v      v           v      v\n       [Heap/Clustered Data Pages on Disk (8KB / 16KB Blocks)]",
   "sections": [
     {
-      "heading": "1. Architectural Fundamentals & Core Mechanics",
+      "heading": "B+ Trees vs LSM-Trees Under the Hood",
       "body": "B+ Trees (used by PostgreSQL and MySQL InnoDB) maintain balanced pages on disk (typically 8KB–16KB) with high fanout (hundreds of keys per node). A 3- to 4-level B+ Tree can index billions of rows while keeping internal nodes cached in RAM, requiring at most 1 disk I/O per lookup. Conversely, LSM-Trees (RocksDB, Cassandra) buffer writes in an in-memory red-black/skip-list (`MemTable`) and a disk `WAL`, flushing immutable sorted `SSTables` and compacting them in the background.",
       "bullets": [
-        "**Core Architectural Principle**: B+ Trees store data pointers only in leaf nodes linked sequentially, delivering O(log N) point lookups and fast range scans.",
-        "**Problem Space & Invariants**: LSM-Trees (Log-Structured Merge-Trees) turn random disk writes into sequential append-only writes in MemTables and SSTables.",
-        "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-      ],
-      "asciiDiagram": "B+ TREE INDEX STRUCTURE\n                 +-------------------------------+\n                 |   Internal Node: [ 25 | 60 ]  |\n                 +-------------------------------+\n                  /              |              \\\n                 v               v               v\n      +---------------+  +---------------+  +---------------+\n      | Leaf: 10, 18  |->| Leaf: 25, 42  |->| Leaf: 60, 88  | (Doubly Linked\n      +---------------+  +---------------+  +---------------+  for Range Scans)\n          |      |           |      |           |      |\n          v      v           v      v           v      v\n       [Heap/Clustered Data Pages on Disk (8KB / 16KB Blocks)]"
-    },
-    {
-      "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "Distributed architectures apply specific implementation patterns and topologies for Indexing:",
-      "bullets": [
-        "**B+ Tree Storage Engine (PostgreSQL, InnoDB)**: Provides predictable low-latency reads, fast range scans, minimal read amplification. Best suited for Read-heavy OLTP workloads requiring low p99 read latency.",
-        "**LSM-Tree Storage Engine (RocksDB, Cassandra)**: Provides sequential disk writes yield massive ingestion throughput and better compression. Best suited for Write-intensive workloads like event logs, messaging, and time-series metrics.",
         "Clustered Index (InnoDB Primary Key): Leaf nodes hold the actual row payload; secondary indexes store the primary key value, requiring a second lookup ('bookmark lookup') unless covered.",
         "Heap Table (PostgreSQL): All indexes are secondary and point to `ctid` (physical page and tuple offset) in the heap.",
-        "Equality Before Range: In composite indexes, always order equality predicates (`=`) before inequality or range predicates (`>`, `<`, `BETWEEN`).",
-        "GIN / Inverted Indexes: Used for full-text search and JSONB containment queries where keys map to posting lists of row IDs."
+        "Bloom Filters: LSM engines attach Bloom filters to each SSTable to skip disk reads when a key is definitely absent."
       ],
       "codeSnippet": {
         "title": "Composite & Covering Index Optimization in PostgreSQL",
@@ -42,31 +29,12 @@
       }
     },
     {
-      "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Production deployments apply Indexing across targeted operational scenarios:",
+      "heading": "Selectivity, Cardinality, and Write Amplification",
+      "body": "Every additional index speeds up matching `SELECT` queries but slows down `INSERT`, `UPDATE`, and `DELETE` operations because the storage engine must update every affected B+ Tree and risk page splits. Low-cardinality columns (like `is_deleted` boolean) make poor standalone B-Tree indexes unless defined as a partial/filtered index (e.g., `WHERE status = 'PENDING'`) targeting a small subset of rows.",
       "bullets": [
-        "**Where to Use: High-Impact Scenarios**: Optimal for Read-heavy OLTP workloads requiring low p99 read latency, suited for environments requiring Predictable low-latency reads, fast range scans, minimal read amplification.",
-        "**Where to Use: High-Throughput Scenarios**: Recommended for Write-intensive workloads like event logs, messaging, and time-series metrics, where Sequential disk writes yield massive ingestion throughput and better compression.",
-        "**How to Use: Engineering Implementation**: Every additional index speeds up matching `SELECT` queries but slows down `INSERT`, `UPDATE`, and `DELETE` operations because the storage engine must update every affected B+ Tree and risk page splits. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-        "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-      ]
-    },
-    {
-      "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "Improper implementation of Indexing introduces operational bottlenecks and failure modes:",
-      "bullets": [
-        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: random i/o on writes due to in-place page updates and page splits.",
-        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: read amplification (checking multiple sstables) and compaction cpu/io spikes.",
-        "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-        "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-      ]
-    },
-    {
-      "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Technical guidelines and evaluation criteria for Indexing:",
-      "bullets": [
-        "**Staff+ Golden Rule**: Composite indexes follow the leftmost prefix rule: an index on (A, B, C) accelerates queries on (A) and (A, B), but cannot be used for (B, C) alone.",
-        "**Staff+ Interview Playbook**: When designing composite indexes in an interview, state the ESR rule explicitly: Equality columns first, Sort columns second, and Range/Included columns last."
+        "Equality Before Range: In composite indexes, always order equality predicates (`=`) before inequality or range predicates (`>`, `<`, `BETWEEN`).",
+        "GIN / Inverted Indexes: Used for full-text search and JSONB containment queries where keys map to posting lists of row IDs.",
+        "Geospatial Indexes (R-Tree / Geohash / S2): Partition 2D coordinates into hierarchical bounding boxes or space-filling curves."
       ]
     }
   ],
