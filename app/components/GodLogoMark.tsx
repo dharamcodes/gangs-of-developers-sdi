@@ -80,63 +80,211 @@ export default function GodLogoMark({ ui = DEFAULT_UI }: GodLogoMarkProps) {
           },
         }}
       >
-        {/* Geometric System Architecture Icon Mark */}
+        {/* Geometric System Architecture Icon Mark - 3D Isometric Architecture Cube Triad */}
         <Box
           className="god-mark-icon"
           sx={{
             width: { xs: 36, sm: 40 },
             height: { xs: 36, sm: 40 },
-            borderRadius: "10px",
+            borderRadius: "11px",
             background: isLight
-              ? "linear-gradient(135deg, #1e293b 0%, #0f172a 100%)"
-              : "linear-gradient(135deg, #1e293b 0%, #090d16 100%)",
+              ? "linear-gradient(135deg, #1e293b 0%, #0a0f1d 100%)"
+              : "linear-gradient(135deg, #1e293b 0%, #060911 100%)",
             border: "1.5px solid",
             borderColor: isLight
-              ? "rgba(245, 158, 11, 0.45)"
-              : "rgba(245, 158, 11, 0.55)",
+              ? "rgba(180, 83, 9, 0.4)"
+              : "rgba(245, 158, 11, 0.5)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             boxShadow: isLight
-              ? "0 4px 12px rgba(0, 0, 0, 0.1), inset 0 1px 1px rgba(255, 255, 255, 0.2)"
-              : "0 4px 14px rgba(0, 0, 0, 0.5), inset 0 1px 1px rgba(255, 255, 255, 0.15)",
+              ? "0 4px 12px rgba(180, 83, 9, 0.15), inset 0 1px 1px rgba(255, 255, 255, 0.2)"
+              : "0 4px 16px rgba(0, 0, 0, 0.6), inset 0 1px 1px rgba(255, 255, 255, 0.15)",
             flexShrink: 0,
             position: "relative",
             transition: "all 0.25s cubic-bezier(0.4, 0, 0.2, 1)",
           }}
         >
           <svg
-            width="24"
-            height="24"
-            viewBox="0 0 32 32"
+            width="28"
+            height="28"
+            viewBox="0 0 64 64"
             fill="none"
             xmlns="http://www.w3.org/2000/svg"
           >
-            {/* Distributed Cluster Isometric Mesh */}
+            <defs>
+              <linearGradient
+                id="headerTopFacet"
+                x1="13"
+                y1="18"
+                x2="51"
+                y2="18"
+                gradientUnits="userSpaceOnUse"
+              >
+                <stop offset="0%" stopColor="#fde047" />
+                <stop offset="35%" stopColor="#fbbf24" />
+                <stop offset="100%" stopColor="#f59e0b" />
+              </linearGradient>
+
+              <linearGradient
+                id="headerLeftFacet"
+                x1="13"
+                y1="18"
+                x2="32"
+                y2="53"
+                gradientUnits="userSpaceOnUse"
+              >
+                <stop offset="0%" stopColor="#38bdf8" />
+                <stop offset="50%" stopColor="#0284c7" />
+                <stop offset="100%" stopColor="#034d75" />
+              </linearGradient>
+
+              <linearGradient
+                id="headerRightFacet"
+                x1="51"
+                y1="18"
+                x2="32"
+                y2="53"
+                gradientUnits="userSpaceOnUse"
+              >
+                <stop offset="0%" stopColor="#f59e0b" />
+                <stop offset="50%" stopColor="#d97706" />
+                <stop offset="100%" stopColor="#92400e" />
+              </linearGradient>
+
+              <radialGradient
+                id="headerNexusGlow"
+                cx="50%"
+                cy="50%"
+                r="50%"
+              >
+                <stop offset="0%" stopColor="#ffffff" />
+                <stop offset="50%" stopColor="#fbbf24" />
+                <stop offset="100%" stopColor="#f59e0b" />
+              </radialGradient>
+            </defs>
+
+            {/* 3D Isometric Architecture Cube Monolith */}
+            {/* Left Facet: Storage Engine */}
             <path
-              d="M16 4L26 9.8V21.4L16 27.2L6 21.4V9.8L16 4Z"
-              fill="rgba(245, 158, 11, 0.1)"
-              stroke="#f59e0b"
-              strokeWidth="1.6"
+              d="M13 18L32 29V53L13 42V18Z"
+              fill="url(#headerLeftFacet)"
+              stroke="#080c16"
+              strokeWidth="0.8"
               strokeLinejoin="round"
             />
-            {/* Coordinate Axis / Consensus Links */}
+
+            {/* Right Facet: Network & Messaging */}
             <path
-              d="M16 15.6V4M16 15.6L26 21.4M16 15.6L6 21.4"
-              stroke="rgba(255, 255, 255, 0.45)"
-              strokeWidth="1.4"
+              d="M32 29L51 18V42L32 53V29Z"
+              fill="url(#headerRightFacet)"
+              stroke="#080c16"
+              strokeWidth="0.8"
+              strokeLinejoin="round"
+            />
+
+            {/* Top Facet: Compute & Ingress Gateway */}
+            <path
+              d="M32 7L51 18L32 29L13 18L32 7Z"
+              fill="url(#headerTopFacet)"
+              stroke="#080c16"
+              strokeWidth="0.8"
+              strokeLinejoin="round"
+            />
+
+            {/* High-Tech Circuit Bus Lines connecting to Center Core */}
+            <path
+              d="M22.5 23.5L32 29"
+              stroke="#ffffff"
+              strokeOpacity="0.9"
+              strokeWidth="1.8"
               strokeLinecap="round"
             />
-            {/* Node Points */}
-            <circle cx="16" cy="4" r="2" fill="#fbbf24" />
-            <circle cx="26" cy="9.8" r="2" fill="#38bdf8" />
-            <circle cx="26" cy="21.4" r="2" fill="#38bdf8" />
-            <circle cx="16" cy="27.2" r="2" fill="#fbbf24" />
-            <circle cx="6" cy="21.4" r="2" fill="#f59e0b" />
-            <circle cx="6" cy="9.8" r="2" fill="#f59e0b" />
-            {/* Central Orchestration Nexus */}
-            <circle cx="16" cy="15.6" r="3" fill="#ffffff" />
-            <circle cx="16" cy="15.6" r="1.5" fill="#f59e0b" />
+            <path
+              d="M41.5 23.5L32 29"
+              stroke="#ffffff"
+              strokeOpacity="0.9"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+            />
+            <path
+              d="M32 29V42"
+              stroke="#ffffff"
+              strokeOpacity="0.9"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+            />
+
+            {/* Central Orchestration Nexus (Raft / Master Node) */}
+            <circle
+              cx="32"
+              cy="29"
+              r="6"
+              fill="#f59e0b"
+              fillOpacity="0.25"
+            />
+            <circle
+              cx="32"
+              cy="29"
+              r="4.2"
+              fill="url(#headerNexusGlow)"
+            />
+            <circle
+              cx="32"
+              cy="29"
+              r="1.8"
+              fill="#ffffff"
+            />
+
+            {/* Peripheral Vertex Gateway Nodes */}
+            <circle
+              cx="32"
+              cy="7"
+              r="2.8"
+              fill="#fde047"
+              stroke="#080c16"
+              strokeWidth="1.2"
+            />
+            <circle
+              cx="51"
+              cy="18"
+              r="2.8"
+              fill="#f59e0b"
+              stroke="#080c16"
+              strokeWidth="1.2"
+            />
+            <circle
+              cx="13"
+              cy="18"
+              r="2.8"
+              fill="#38bdf8"
+              stroke="#080c16"
+              strokeWidth="1.2"
+            />
+            <circle
+              cx="32"
+              cy="53"
+              r="2.8"
+              fill="#fbbf24"
+              stroke="#080c16"
+              strokeWidth="1.2"
+            />
+            <circle
+              cx="13"
+              cy="42"
+              r="2.2"
+              fill="#0284c7"
+              stroke="#080c16"
+              strokeWidth="1"
+            />
+            <circle
+              cx="51"
+              cy="42"
+              r="2.2"
+              fill="#d97706"
+              stroke="#080c16"
+              strokeWidth="1"
+            />
           </svg>
         </Box>
 
