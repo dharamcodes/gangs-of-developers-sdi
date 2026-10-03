@@ -16,25 +16,12 @@
   "architectureDiagram": "Multi-Layer Retry Amplification (Anti-Pattern: 3 Retries at Every Layer):\n[Client (3x)] ---> [API GW (3x)] ---> [Order Svc (3x)] ---> [DB]\n1 Failure at DB = 3 x 3 x 3 = 27x Load Amplification on the struggling DB!\n\nCorrect Pattern (Retry at One Layer + Token Retry Budget <= 10%):\n[Client (No Retry)] ---> [API GW (No Retry)] ---> [Order Svc (Max 2 Retries + 10% Budget)] ---> [DB]",
   "sections": [
     {
-      "heading": "1. Architectural Fundamentals & Core Mechanics",
+      "heading": "Capped Exponential Backoff & Idempotency",
       "body": "Transient errors, such as packet loss, brief leader elections, or connection pool blips, are unavoidable in cloud environments. Immediate back-to-back retries fail because the underlying fault typically lasts tens to hundreds of milliseconds; hammering the server immediately only worsens contention. **Capped Exponential Backoff** spaces out retries exponentially (e.g., `100ms`, `200ms`, `400ms`, `800ms`) up to a hard cap (`maxBackoff`) and maximum attempt count.",
       "bullets": [
-        "**Core Architectural Principle**: Exponential backoff multiplies wait duration between attempts ($t = \\min(T_{\\max}, b \\cdot 2^{n})$) to give struggling dependencies breathing room.",
-        "**Problem Space & Invariants**: Naive retries across a $K$-layer microservice call stack multiply load by $M^K$, turning a minor blip into a self-inflicted DDoS.",
-        "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-      ],
-      "asciiDiagram": "Multi-Layer Retry Amplification (Anti-Pattern: 3 Retries at Every Layer):\n[Client (3x)] ---> [API GW (3x)] ---> [Order Svc (3x)] ---> [DB]\n1 Failure at DB = 3 x 3 x 3 = 27x Load Amplification on the struggling DB!\n\nCorrect Pattern (Retry at One Layer + Token Retry Budget <= 10%):\n[Client (No Retry)] ---> [API GW (No Retry)] ---> [Order Svc (Max 2 Retries + 10% Budget)] ---> [DB]"
-    },
-    {
-      "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "Distributed architectures apply specific implementation patterns and topologies for Retry + Exponential Backoff:",
-      "bullets": [
-        "**Fixed Per-Request Retry Count (e.g., maxAttempts = 3)**: Provides simple to configure and reason about for an individual request. Best suited for Low-QPS background jobs or CLI tools.",
-        "**Exponential Backoff + 10% Token Retry Budget**: Provides masks transient tail errors while capping maximum extra cluster load at 10% during major outages. Best suited for High-scale production microservices and API gateways.",
         "**Require Idempotency Keys**: Never retry non-idempotent writes (e.g., `POST /charge`) without passing a deterministic `Idempotency-Key` UUID.",
         "**Classify Errors Strictly**: Never retry `400 Bad Request`, `401 Unauthorized`, `403 Forbidden`, or `422 Unprocessable Entity`.",
-        "**Single-Layer Retry Rule**: Perform retries at only one layer of the stack (usually the immediate caller of the leaf dependency), while upstream callers fail fast.",
-        "**Adaptive Retry Budget (Token Bucket)**: Each normal request deposits $0.1$ tokens; each retry consumes $1.0$ token. During a minor $1\\%$ packet-loss blip, all retries succeed; during a total outage, the bucket drains in milliseconds and halts retries immediately."
+        "**Respect `Retry-After` Headers**: If a downstream service returns `429` or `503` with a `Retry-After` header, honor the server-specified delay."
       ],
       "codeSnippet": {
         "title": "Retry Client with Exponential Backoff and Adaptive Retry Budget",
@@ -42,31 +29,11 @@
       }
     },
     {
-      "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Production deployments apply Retry + Exponential Backoff across targeted operational scenarios:",
+      "heading": "Preventing Retry Amplification with Retry Budgets",
+      "body": "Two lethal failure modes accompany retries: **Multi-Layer Retries** and **Outage Retry Storms**. First, if Services A, B, and C each configure 3 retries, a single database timeout at Service C triggers $3^3 = 27$ database calls. Second, if 100% of calls to Service C begin failing during an outage, 3 retries per request instantly quadruples traffic to Service C (`400%` load). To prevent this, production service meshes (like Envoy and Finagle) enforce a **per-instance Retry Budget**: a token bucket that limits retries to at most **10%** of total outgoing traffic volume.",
       "bullets": [
-        "**Where to Use: High-Impact Scenarios**: Optimal for Low-QPS background jobs or CLI tools, suited for environments requiring Simple to configure and reason about for an individual request.",
-        "**Where to Use: High-Throughput Scenarios**: Recommended for High-scale production microservices and API gateways, where Masks transient tail errors while capping maximum extra cluster load at 10% during major outages.",
-        "**How to Use: Engineering Implementation**: Two lethal failure modes accompany retries: **Multi-Layer Retries** and **Outage Retry Storms**. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-        "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-      ]
-    },
-    {
-      "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "Improper implementation of Retry + Exponential Backoff introduces operational bottlenecks and failure modes:",
-      "bullets": [
-        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: multiplies total cluster traffic by 3x–4x during a systemic outage, preventing recovery.",
-        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: requires shared per-process token bucket state in the rpc client or service mesh sidecar.",
-        "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-        "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-      ]
-    },
-    {
-      "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Technical guidelines and evaluation criteria for Retry + Exponential Backoff:",
-      "bullets": [
-        "**Staff+ Golden Rule**: Only retry transient errors (`502/503/504`, `429`, network timeouts) and ONLY when the operation is idempotent.",
-        "**Staff+ Interview Playbook**: Bringing up **Retry Budgets (capping retries at 10% of total request volume via a token bucket)** and **Single-Layer Retries (avoiding $3^K$ multiplication)** is one of the strongest Staff+ signals in reliability discussions."
+        "**Single-Layer Retry Rule**: Perform retries at only one layer of the stack (usually the immediate caller of the leaf dependency), while upstream callers fail fast.",
+        "**Adaptive Retry Budget (Token Bucket)**: Each normal request deposits $0.1$ tokens; each retry consumes $1.0$ token. During a minor $1\\%$ packet-loss blip, all retries succeed; during a total outage, the bucket drains in milliseconds and halts retries immediately."
       ]
     }
   ],

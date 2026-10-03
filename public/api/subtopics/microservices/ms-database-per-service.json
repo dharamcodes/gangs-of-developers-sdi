@@ -16,25 +16,12 @@
   "architectureDiagram": "ANTI-PATTERN (Shared Database Coupling):\n[Order Svc] -------+\n                   +---> [ Shared Monolithic DB (Orders + Users + Inventory Tables) ]\n[Billing Svc] -----+     (Schema migration in Orders breaks Billing queries! Resource contention!)\n\nDATABASE-PER-SERVICE (Strict Encapsulation + Polyglot Persistence):\n[Order Svc] -----> [Orders Postgres]   ==(Kafka Events)==> [Billing Svc] -----> [Billing Ledger DB]\n[Catalog Svc] ---> [Catalog MongoDB/ES]",
   "sections": [
     {
-      "heading": "1. Architectural Fundamentals & Core Mechanics",
+      "heading": "Why Shared Databases Destroy Microservice Autonomy",
       "body": "If `OrderService` and `AnalyticsService` both run SQL queries directly against the `orders` table in the same database, the `OrderService` team can never rename a column, split a table, or migrate from Postgres to DynamoDB without coordinating with every downstream team. Worse, a heavy table-scan query from `AnalyticsService` can exhaust buffer pool memory and lock rows, taking down real-time checkout in `OrderService`. The **Database-per-Service** pattern mandates that each service owns its data store exclusively and exposes data only through versioned APIs or domain events.",
       "bullets": [
-        "**Core Architectural Principle**: A microservice's database is a private implementation detail; no other service may read or write its tables directly.",
-        "**Problem Space & Invariants**: Sharing a database across microservices creates hidden schema coupling, lock contention, and breaks independent deployability.",
-        "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-      ],
-      "asciiDiagram": "ANTI-PATTERN (Shared Database Coupling):\n[Order Svc] -------+\n                   +---> [ Shared Monolithic DB (Orders + Users + Inventory Tables) ]\n[Billing Svc] -----+     (Schema migration in Orders breaks Billing queries! Resource contention!)\n\nDATABASE-PER-SERVICE (Strict Encapsulation + Polyglot Persistence):\n[Order Svc] -----> [Orders Postgres]   ==(Kafka Events)==> [Billing Svc] -----> [Billing Ledger DB]\n[Catalog Svc] ---> [Catalog MongoDB/ES]"
-    },
-    {
-      "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "Distributed architectures apply specific implementation patterns and topologies for Database-per-Service:",
-      "bullets": [
-        "**API Composition (On-Demand RPC Aggregation)**: Provides always reads fresh data directly from source-of-truth services without duplicating storage. Best suited for Point lookups by ID (e.g., rendering a single Order Details screen).",
-        "**Event-Carried State Transfer (Local Read Replica Table)**: Provides zero runtime rpc dependency on upstream services; ultra-fast local sql joins and filtering. Best suited for High-throughput services needing reference attributes (user tier, merchant status) during writes or filtered reads.",
         "**Schema Autonomy**: Teams can evolve internal database schemas freely as long as their public API/Event contract remains backward-compatible.",
         "**Blast Radius Isolation**: Connection spikes, slow queries, or disk saturation in one service's DB never impact other services.",
-        "**1. API Composition (In-Memory Join)**: A BFF or aggregator calls `OrderService.getOrders(userId)` and `CatalogService.getProducts(productIds)` in parallel and joins the results in memory. Works well for single-page lookups, but fails for paginated multi-condition joins (e.g., 'find all orders placed by VIP customers in Berlin containing electronics').",
-        "**2. Event-Carried State Transfer (Local Reference Table)**: `OrderService` subscribes to `CustomerUpdated` events and stores a tiny read-only `local_customer_cache(customer_id, tier, region)` table in its own database, turning a cross-service join back into a fast local SQL join."
+        "**Polyglot Persistence**: Each service selects the storage engine best suited to its access pattern (e.g., Postgres for Orders, Elasticsearch for Search, Graph DB for Social Connections)."
       ],
       "codeSnippet": {
         "title": "Maintaining a Local Denormalized Read Cache via Domain Events",
@@ -42,31 +29,12 @@
       }
     },
     {
-      "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Production deployments apply Database-per-Service across targeted operational scenarios:",
+      "heading": "Executing Joins & Queries Across Private Databases",
+      "body": "Once tables live in separate databases, you lose SQL `JOIN`s and foreign key constraints. Engineers use three primary patterns to query across boundaries:",
       "bullets": [
-        "**Where to Use: High-Impact Scenarios**: Optimal for Point lookups by ID (e.g., rendering a single Order Details screen), suited for environments requiring Always reads fresh data directly from source-of-truth services without duplicating storage.",
-        "**Where to Use: High-Throughput Scenarios**: Recommended for High-throughput services needing reference attributes (user tier, merchant status) during writes or filtered reads, where Zero runtime RPC dependency on upstream services; ultra-fast local SQL joins and filtering.",
-        "**How to Use: Engineering Implementation**: Once tables live in separate databases, you lose SQL `JOIN`s and foreign key constraints. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-        "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-      ]
-    },
-    {
-      "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "Improper implementation of Database-per-Service introduces operational bottlenecks and failure modes:",
-      "bullets": [
-        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: increases tail latency and reduces availability; cannot execute filtered pagination across large datasets.",
-        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: eventual consistency (milliseconds to seconds lag) and storage duplication of subset fields.",
-        "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-        "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-      ]
-    },
-    {
-      "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Technical guidelines and evaluation criteria for Database-per-Service:",
-      "bullets": [
-        "**Staff+ Golden Rule**: Cross-service data queries are solved via **API Composition** (for low-fanout lookups) or **Event-Driven Local Read Replicas / CQRS** (for complex joins).",
-        "**Staff+ Interview Playbook**: When an interviewer asks 'How do you join Orders and Users if they are in different databases?', contrast **API Composition** (for point lookups) with **Event-Carried State Transfer / CQRS** (for filtered queries and high availability)."
+        "**1. API Composition (In-Memory Join)**: A BFF or aggregator calls `OrderService.getOrders(userId)` and `CatalogService.getProducts(productIds)` in parallel and joins the results in memory. Works well for single-page lookups, but fails for paginated multi-condition joins (e.g., 'find all orders placed by VIP customers in Berlin containing electronics').",
+        "**2. Event-Carried State Transfer (Local Reference Table)**: `OrderService` subscribes to `CustomerUpdated` events and stores a tiny read-only `local_customer_cache(customer_id, tier, region)` table in its own database, turning a cross-service join back into a fast local SQL join.",
+        "**3. Dedicated CQRS Read View**: Stream events from multiple services into Elasticsearch or ClickHouse to power complex multi-domain search and analytics dashboards."
       ]
     }
   ],

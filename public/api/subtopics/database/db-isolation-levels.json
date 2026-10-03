@@ -16,25 +16,12 @@
   "architectureDiagram": "+---------------------+------------+-------------------+---------------+------------+\n| Isolation Level     | Dirty Read | Non-Repeatable Rd | Phantom Read  | Write Skew |\n+---------------------+------------+-------------------+---------------+------------+\n| Read Uncommitted    | Possible   | Possible          | Possible      | Possible   |\n| Read Committed      | Prevented  | Possible          | Possible      | Possible   |\n| Repeatable Read (SI)| Prevented  | Prevented         | Engine-Depend | Possible   |\n| Serializable (SSI)  | Prevented  | Prevented         | Prevented     | Prevented  |\n+---------------------+------------+-------------------+---------------+------------+",
   "sections": [
     {
-      "heading": "1. Architectural Fundamentals & Core Mechanics",
+      "heading": "Concurrency Anomalies Explained",
       "body": "When multiple transactions execute concurrently, subtle race conditions emerge if isolation is weak. Beyond classic Dirty Reads (reading uncommitted data) and Non-Repeatable Reads (reading a row twice and seeing different committed values), senior engineers must watch out for Lost Updates and Write Skew.",
       "bullets": [
-        "**Core Architectural Principle**: Read Committed (default in PostgreSQL) prevents dirty reads, but allows non-repeatable reads and write skew within the same transaction.",
-        "**Problem Space & Invariants**: Repeatable Read / Snapshot Isolation prevents non-repeatable reads by freezing a snapshot at transaction start, yet remains vulnerable to Write Skew.",
-        "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-      ],
-      "asciiDiagram": "+---------------------+------------+-------------------+---------------+------------+\n| Isolation Level     | Dirty Read | Non-Repeatable Rd | Phantom Read  | Write Skew |\n+---------------------+------------+-------------------+---------------+------------+\n| Read Uncommitted    | Possible   | Possible          | Possible      | Possible   |\n| Read Committed      | Prevented  | Possible          | Possible      | Possible   |\n| Repeatable Read (SI)| Prevented  | Prevented         | Engine-Depend | Possible   |\n| Serializable (SSI)  | Prevented  | Prevented         | Prevented     | Prevented  |\n+---------------------+------------+-------------------+---------------+------------+"
-    },
-    {
-      "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "Distributed architectures apply specific implementation patterns and topologies for Isolation Levels:",
-      "bullets": [
-        "**Read Committed / Snapshot Isolation**: Provides high concurrency, zero read locks, minimal transaction abort rates. Best suited for General CRUD microservices, social feeds, and read-heavy dashboards.",
-        "**Serializable Isolation (SSI)**: Provides mathematically eliminates all concurrency anomalies; simplifies application correctness reasoning. Best suited for Core banking ledgers, auction bidding, and double-entry accounting systems.",
         "Lost Update: Two transactions read `counter = 10`, both increment in memory, and both write `11`, losing one increment.",
         "Phantom Read: Transaction A queries `WHERE status = 'ON_CALL'`, Transaction B inserts a new matching row and commits, changing the result set of A's range query.",
-        "Two-Phase Locking (2PL): Traditional serializable implementation using shared/exclusive and predicate/gap locks; prone to deadlocks.",
-        "Serializable Snapshot Isolation (SSI): Optimistic approach tracking `SIREAD` locks in memory; requires application retry loops on `40001` errors."
+        "Write Skew (The On-Call Doctor Problem): Two doctors are on call (invariant: >= 1 must remain on call). Under Snapshot Isolation, both concurrently read `count = 2`, both update their own row to `off_call`, and both commit, leaving 0 doctors on call!"
       ],
       "codeSnippet": {
         "title": "Preventing Write Skew with Serializable Snapshot Isolation (SSI)",
@@ -42,31 +29,12 @@
       }
     },
     {
-      "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Production deployments apply Isolation Levels across targeted operational scenarios:",
+      "heading": "How Engines Implement Isolation Levels",
+      "body": "PostgreSQL's default is `READ COMMITTED` (each statement sees a fresh snapshot of data committed before that statement began), whereas MySQL InnoDB's default is `REPEATABLE READ` (snapshot established at the first read in the transaction, using gap locks for locking reads). For `SERIALIZABLE`, modern PostgreSQL and CockroachDB use Serializable Snapshot Isolation (SSI), tracking read-write dependency graphs without blocking readers, aborting only when a cycle forms.",
       "bullets": [
-        "**Where to Use: High-Impact Scenarios**: Optimal for General CRUD microservices, social feeds, and read-heavy dashboards, suited for environments requiring High concurrency, zero read locks, minimal transaction abort rates.",
-        "**Where to Use: High-Throughput Scenarios**: Recommended for Core banking ledgers, auction bidding, and double-entry accounting systems, where Mathematically eliminates all concurrency anomalies; simplifies application correctness reasoning.",
-        "**How to Use: Engineering Implementation**: PostgreSQL's default is `READ COMMITTED` (each statement sees a fresh snapshot of data committed before that statement began), whereas MySQL InnoDB's default is `REPEATABLE READ` (snapshot established at the first read in the transaction, using gap locks for locking reads). Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-        "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-      ]
-    },
-    {
-      "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "Improper implementation of Isolation Levels introduces operational bottlenecks and failure modes:",
-      "bullets": [
-        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: susceptible to subtle invariants breaking via write skew or lost updates if not explicitly locked.",
-        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: cpu overhead tracking read dependencies and mandatory client retries on contended keys.",
-        "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-        "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-      ]
-    },
-    {
-      "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Technical guidelines and evaluation criteria for Isolation Levels:",
-      "bullets": [
-        "**Staff+ Golden Rule**: Serializable (via SSI or 2PL) guarantees execution equivalent to a serial one-by-one schedule, eliminating all concurrency anomalies at the cost of serialization retries.",
-        "**Staff+ Interview Playbook**: Know the default isolation level of your chosen database (PostgreSQL = Read Committed, MySQL InnoDB = Repeatable Read) and be ready to explain the 'On-Call Doctors' Write Skew anomaly when asked why Repeatable Read isn't fully Serializable."
+        "Two-Phase Locking (2PL): Traditional serializable implementation using shared/exclusive and predicate/gap locks; prone to deadlocks.",
+        "Serializable Snapshot Isolation (SSI): Optimistic approach tracking `SIREAD` locks in memory; requires application retry loops on `40001` errors.",
+        "Materializing Conflicts: If using Repeatable Read, you can prevent write skew by locking a parent summary row (`SELECT ... FOR UPDATE` on the `shifts` table)."
       ]
     }
   ],

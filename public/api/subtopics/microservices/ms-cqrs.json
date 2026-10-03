@@ -16,58 +16,26 @@
   "architectureDiagram": "[Client] ---> Command (PlaceOrder) ---> [Write Service] ---> [Normalized Postgres (3NF, ACID)]\n                                                                     |\n                                                          (CDC / Outbox via Kafka)\n                                                                     v\n[Client] <--- Query (SearchOrders) <--- [Read Service]  <--- [Denormalized Elasticsearch / Redis View]",
   "sections": [
     {
-      "heading": "1. Architectural Fundamentals & Core Mechanics",
+      "heading": "Separating Write Invariants from Read Projections",
       "body": "In a traditional CRUD architecture, a single domain model and database schema handle both transactional mutations and complex UI queries. As scale grows, a fundamental tension emerges: writes require normalized tables (3NF) with minimal indexes to avoid write amplification and lock contention, whereas reads require deeply joined, denormalized views with dozens of secondary indexes and full-text search capabilities. **CQRS (Command Query Responsibility Segregation)** resolves this by splitting the system into a **Command side** (which validates business rules and mutates the source-of-truth DB) and a **Query side** (which subscribes to domain events and materializes purpose-built read views).",
       "bullets": [
-        "**Core Architectural Principle**: CQRS separates the **Write Model (Commands)** that enforces invariants from the **Read Model (Queries)** optimized for fast retrieval.",
-        "**Problem Space & Invariants**: Allows independent scaling and storage selection (e.g., normalized 3NF Postgres for writes, Elasticsearch/Redis projections for reads).",
-        "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-      ],
-      "asciiDiagram": "[Client] ---> Command (PlaceOrder) ---> [Write Service] ---> [Normalized Postgres (3NF, ACID)]\n                                                                     |\n                                                          (CDC / Outbox via Kafka)\n                                                                     v\n[Client] <--- Query (SearchOrders) <--- [Read Service]  <--- [Denormalized Elasticsearch / Redis View]",
-      "diagramImageUrl": "/diagrams/arch-ms-cqrs.svg"
-    },
-    {
-      "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "Distributed architectures apply specific implementation patterns and topologies for CQRS:",
-      "bullets": [
-        "**Single Shared CRUD Model (Read Replicas Only)**: Provides simple architecture, single schema to maintain, zero asynchronous projection pipeline lag. Best suited for 90% of standard CRUD microservices with moderate read/write complexity.",
-        "**Full CQRS with Event-Driven Materialized Read Views**: Provides sub-10ms pre-joined queries, polyglot read engines (elasticsearch/redis), complete isolation of read spikes from write db. Best suited for High-scale search/analytics dashboards, multi-service order history views, and high read-to-write asymmetry.",
         "**Asymmetric Scaling**: An e-commerce site with a 100:1 read-to-write ratio can scale the Query service and read replicas independently without over-provisioning the transactional primary DB.",
         "**Cross-Service Materialized Views**: The Read Model can consume events from `OrderService`, `PaymentService`, and `ShippingService` to pre-compute a single flat JSON document in Redis or Elasticsearch, eliminating runtime N+1 RPC joins.",
-        "**Optimistic Client State Update**: Return the created/updated resource representation directly in the Command response and merge it into the frontend state cache.",
-        "**Version Token / High-Watermark Routing**: Return the committed `version` or log offset from the Command; if the Read Projection's version is lower than the client's token, briefly wait or fall back to the primary DB."
+        "**CQRS != Event Sourcing**: While often paired together, CQRS does NOT require Event Sourcing, your write store can be a standard relational Postgres table publishing change events via CDC/Outbox."
       ],
       "codeSnippet": {
         "title": "Handling Read-Your-Own-Writes Consistency Across Async CQRS",
         "code": "// 1. Command returns the new monotonic write version / offset\nconst { orderId, writeVersion } = await commandClient.placeOrder(payload);\n\n// 2. Query passes the expected minVersion; Read Service falls back to Write DB if projection lags!\nexport async function getOrderView(orderId: string, minVersion = 0) {\n  const view = await readStore.get(orderId);\n  if (view && view.version >= minVersion) return view;\n  // Projection hasn't caught up yet (< 100ms window): read from authoritative Write API or wait\n  return commandClient.getAuthoritativeOrder(orderId);\n}"
-      }
+      },
+      "diagramImageUrl": "/diagrams/arch-ms-cqrs.svg"
     },
     {
-      "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Production deployments apply CQRS across targeted operational scenarios:",
+      "heading": "Solving the Read-Your-Own-Writes Consistency Gap",
+      "body": "The primary engineering challenge in CQRS is replication lag between the Write Store and the Read Projection (typically 50ms to 500ms). If a user submits an order, receives HTTP 200, and their browser immediately redirects to `/orders` which queries the Read Model before the Kafka consumer updates it, the user won't see the order they just placed! Engineers solve this using three techniques:",
       "bullets": [
-        "**Where to Use: High-Impact Scenarios**: Optimal for 90% of standard CRUD microservices with moderate read/write complexity, suited for environments requiring Simple architecture, single schema to maintain, zero asynchronous projection pipeline lag.",
-        "**Where to Use: High-Throughput Scenarios**: Recommended for High-scale search/analytics dashboards, multi-service order history views, and high read-to-write asymmetry, where Sub-10ms pre-joined queries, polyglot read engines (Elasticsearch/Redis), complete isolation of read spikes from write DB.",
-        "**How to Use: Engineering Implementation**: The primary engineering challenge in CQRS is replication lag between the Write Store and the Read Projection (typically 50ms to 500ms). Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-        "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-      ]
-    },
-    {
-      "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "Improper implementation of CQRS introduces operational bottlenecks and failure modes:",
-      "bullets": [
-        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: write performance degrades under heavy secondary indexing; cannot join across microservice databases.",
-        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: eventual consistency lag, operational cost of maintaining projection consumers and syncing schemas.",
-        "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-        "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-      ]
-    },
-    {
-      "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Technical guidelines and evaluation criteria for CQRS:",
-      "bullets": [
-        "**Staff+ Golden Rule**: Introduces **Read-Your-Own-Writes** eventual consistency challenges between the command DB and the asynchronous read projection.",
-        "**Staff+ Interview Playbook**: Clarify in your interview that **CQRS does not require Event Sourcing** (you can use standard Postgres + Debezium CDC), and proactively explain how you guarantee **Read-Your-Own-Writes** when the user redirects after a mutation."
+        "**Optimistic Client State Update**: Return the created/updated resource representation directly in the Command response and merge it into the frontend state cache.",
+        "**Version Token / High-Watermark Routing**: Return the committed `version` or log offset from the Command; if the Read Projection's version is lower than the client's token, briefly wait or fall back to the primary DB.",
+        "**Idempotent Rebuildable Projections**: Design read projection consumers to be idempotent and version-checked (`WHERE version < event.version`) so projections can be wiped and rebuilt from scratch via Kafka replay."
       ]
     }
   ],

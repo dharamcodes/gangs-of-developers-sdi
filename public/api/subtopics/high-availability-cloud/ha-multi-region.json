@@ -13,61 +13,29 @@
     "Speed-of-light in fiber (~200 km/ms) imposes a hard physical floor: US-East to US-West is ~65ms RTT, and US to Europe is ~85-100ms RTT, making synchronous cross-region writes prohibitively slow for most interactive apps.",
     "Control-plane dependencies (IAM, global DNS config updates, CI/CD) are the #1 cause of correlated multi-region outages; data planes must operate autonomously without calling regional control APIs."
   ],
-  "architectureDiagram": "[ Global Geo-DNS / Anycast Edge ]\n                    /                              \\\n       (US Users: 15ms)                          (EU Users: 15ms)\n          /                                              \\\n         v                                                v\n+-----------------------+                        +-----------------------+\n| Region: us-east-1     |   Async Change Stream  | Region: eu-central-1  |\n| +-------------------+ | =====================> | +-------------------+ |\n| | Stateless Compute | |    (85ms WAN Fiber)    | | Stateless Compute | |\n| +---------+---------+ | <===================== | +---------+---------+ |\n|           |           |   CDC / Global Table   |           |           |\n| +---------v---------+ |                        | +---------v---------+ |\n| | Regional Storage  | |                        | | Regional Storage  | |\n| +-------------------+ |                        | +-------------------+ |\n+-----------------------+                        +-----------------------+",
+  "architectureDiagram": "                   [ Global Geo-DNS / Anycast Edge ]\n                    /                              \\\n       (US Users: 15ms)                          (EU Users: 15ms)\n          /                                              \\\n         v                                                v\n+-----------------------+                        +-----------------------+\n| Region: us-east-1     |   Async Change Stream  | Region: eu-central-1  |\n| +-------------------+ | =====================> | +-------------------+ |\n| | Stateless Compute | |    (85ms WAN Fiber)    | | Stateless Compute | |\n| +---------+---------+ | <===================== | +---------+---------+ |\n|           |           |   CDC / Global Table   |           |           |\n| +---------v---------+ |                        | +---------v---------+ |\n| | Regional Storage  | |                        | | Regional Storage  | |\n| +-------------------+ |                        | +-------------------+ |\n+-----------------------+                        +-----------------------+",
   "sections": [
     {
-      "heading": "1. Architectural Fundamentals & Core Mechanics",
+      "heading": "Physics of WAN Latency & Data Replication Strategies",
       "body": "While Multi-AZ protects against physical data center failures, an entire Cloud Region can go down due to a faulty regional software deployment, BGP routing leak, or regional control-plane service outage (e.g., AWS us-east-1 IAM/DynamoDB/Kinesis incidents). Spanning multiple regions introduces speed-of-light constraints.",
       "bullets": [
-        "**Core Architectural Principle**: Multi-region architectures solve three distinct problems: surviving region-wide control-plane outages, reducing user round-trip latency via geographic proximity, and satisfying data sovereignty laws (GDPR).",
-        "**Problem Space & Invariants**: Speed-of-light in fiber (~200 km/ms) imposes a hard physical floor: US-East to US-West is ~65ms RTT, and US to Europe is ~85-100ms RTT, making synchronous cross-region writes prohibitively slow for most interactive apps.",
-        "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-      ],
-      "asciiDiagram": "[ Global Geo-DNS / Anycast Edge ]\n                    /                              \\\n       (US Users: 15ms)                          (EU Users: 15ms)\n          /                                              \\\n         v                                                v\n+-----------------------+                        +-----------------------+\n| Region: us-east-1     |   Async Change Stream  | Region: eu-central-1  |\n| +-------------------+ | =====================> | +-------------------+ |\n| | Stateless Compute | |    (85ms WAN Fiber)    | | Stateless Compute | |\n| +---------+---------+ | <===================== | +---------+---------+ |\n|           |           |   CDC / Global Table   |           |           |\n| +---------v---------+ |                        | +---------v---------+ |\n| | Regional Storage  | |                        | | Regional Storage  | |\n| +-------------------+ |                        | +-------------------+ |\n+-----------------------+                        +-----------------------+",
-      "diagramImageUrl": "/diagrams/arch-ha-multi-region.svg"
-    },
-    {
-      "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "Distributed architectures apply specific implementation patterns and topologies for Multi-Region:",
-      "bullets": [
-        "**Geo-Partitioned Home Regions (User Sharded)**: Provides fast local read-after-write consistency (<10ms); avoids write conflicts; satisfies gdpr data residency. Best suited for SaaS platforms, ride-sharing (Uber/Lyft), food delivery, and regional banking systems.",
-        "**Global Multi-Region Consensus (Spanner / Multi-Region Raft)**: Provides external consistency (linearizability) globally with zero conflict resolution code and rpo = 0. Best suited for Global financial ledgers, inventory reservation, and global IAM/configuration stores.",
         "Synchronous Cross-Region Quorum (Spanner / CockroachDB): Commits wait for a majority of regions (e.g., US-East, US-Central, US-West). Guarantees strict serializability and RPO = 0, but every write incurs 30-70ms minimum WAN RTT.",
         "Asynchronous Cross-Region Replication (DynamoDB Global Tables / Aurora Global): Local region commits in <5ms and ships replication logs asynchronously over WAN (~1s replication lag). Fast writes, but risks stale reads or ~1s data loss on sudden regional crash.",
-        "Staggered Ring Deployments: Never deploy a config change, schema migration, or binary update to all regions simultaneously. Roll out to Canary Region -> wait 4 hours -> Region 2 -> wait 24 hours -> Region 3.",
-        "Data Plane vs Control Plane Separation: During an outage, your regional traffic routing and failover must rely on static data-plane health checks, not control-plane mutation APIs."
+        "Home-Region Pinning (Cellular Sharding): Partition users by geo-shard (e.g., EU users pinned to `eu-central-1`, US users to `us-east-1`) so 99% of reads and writes are strictly local, with async cross-region standby for DR."
       ],
       "codeSnippet": {
         "title": "Geo-Proximity Routing & Regional Failover Health Checks",
         "code": "// Route53 / Global Traffic Manager Routing Policy Configuration\n{\n  \"RecordName\": \"api.global-platform.com\",\n  \"RoutingPolicy\": \"LATENCY_WITH_HEALTH_FAILOVER\",\n  \"Endpoints\": [\n    {\n      \"Region\": \"us-east-1\",\n      \"Target\": \"alb-us-east-1.amazonaws.com\",\n      \"HealthCheck\": \"https://alb-us-east-1/healthz/deep-data-plane\",\n      \"EvaluateTargetHealth\": true\n    },\n    {\n      \"Region\": \"eu-central-1\",\n      \"Target\": \"alb-eu-central-1.amazonaws.com\",\n      \"HealthCheck\": \"https://alb-eu-central-1/healthz/deep-data-plane\",\n      \"EvaluateTargetHealth\": true\n    }\n  ]\n}"
-      }
+      },
+      "diagramImageUrl": "/diagrams/arch-ha-multi-region.svg"
     },
     {
-      "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Production deployments apply Multi-Region across targeted operational scenarios:",
+      "heading": "Regional Isolation & Avoiding Correlated Global Outages",
+      "body": "Building a multi-region system that accidentally shares a single global bottleneck is worse than a single-region system because it doubles operational complexity without improving availability.",
       "bullets": [
-        "**Where to Use: High-Impact Scenarios**: Optimal for SaaS platforms, ride-sharing (Uber/Lyft), food delivery, and regional banking systems, suited for environments requiring Fast local read-after-write consistency (<10ms); avoids write conflicts; satisfies GDPR data residency.",
-        "**Where to Use: High-Throughput Scenarios**: Recommended for Global financial ledgers, inventory reservation, and global IAM/configuration stores, where External consistency (linearizability) globally with zero conflict resolution code and RPO = 0.",
-        "**How to Use: Engineering Implementation**: Building a multi-region system that accidentally shares a single global bottleneck is worse than a single-region system because it doubles operational complexity without improving availability. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-        "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-      ]
-    },
-    {
-      "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "Improper implementation of Multi-Region introduces operational bottlenecks and failure modes:",
-      "bullets": [
-        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: traveling users experience cross-region latency or require complex session/shard migration.",
-        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: every write pays speed-of-light wan latency (30-100ms+); high infrastructure and cross-region network cost.",
-        "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-        "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-      ]
-    },
-    {
-      "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Technical guidelines and evaluation criteria for Multi-Region:",
-      "bullets": [
-        "**Staff+ Golden Rule**: Control-plane dependencies (IAM, global DNS config updates, CI/CD) are the #1 cause of correlated multi-region outages; data planes must operate autonomously without calling regional control APIs.",
-        "**Staff+ Interview Playbook**: Quote real latency numbers in interviews: Intra-AZ is ~0.2ms, Cross-AZ is ~1-2ms, US East-to-West is ~65ms, and US-to-Europe is ~85ms. Use these numbers to prove why synchronous multi-region two-phase commit doesn't work for a <50ms SLA."
+        "Staggered Ring Deployments: Never deploy a config change, schema migration, or binary update to all regions simultaneously. Roll out to Canary Region -> wait 4 hours -> Region 2 -> wait 24 hours -> Region 3.",
+        "Data Plane vs Control Plane Separation: During an outage, your regional traffic routing and failover must rely on static data-plane health checks, not control-plane mutation APIs.",
+        "Cache Warming on Regional Failover: If `us-east-1` fails and 100% of US traffic suddenly shifts to `us-west-2`, cold Redis caches in West will cause an instant database stampede unless caches are pre-warmed via cross-region replication streams."
       ]
     }
   ],

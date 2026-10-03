@@ -13,28 +13,15 @@
     "Low inter-AZ latency (0.5ms - 2ms) enables synchronous database replication and consensus quorums (Raft/Paxos) across 3 AZs with zero data loss (RPO = 0) on single-AZ failure.",
     "Cross-AZ data transfer is billed by cloud providers ($0.01-$0.02/GB each way); high-throughput systems use Topology-Aware Routing to keep RPC and cache reads within the local AZ."
   ],
-  "architectureDiagram": "[ Regional ALB / NLB ]\n                     /          |           \\\n        +-----------+           |            +-----------+\n        v                       v                        v\n+---------------+       +---------------+        +---------------+\n|   AZ-1 (us-a) |       |   AZ-2 (us-b) |        |   AZ-3 (us-c) |\n|  [App Pods]   |       |  [App Pods]   |        |  [App Pods]   |\n|      |        |       |      |        |        |      |        |\n|  [DB Primary] |======>|  [DB Sync]    |------->|  [DB Quorum   |\n|               | <1.5ms|   Standby     | <1.5ms |   Witness]    |\n+---------------+       +---------------+        +---------------+\n  Independent Power       Independent Power        Independent Power",
+  "architectureDiagram": "                      [ Regional ALB / NLB ]\n                     /          |           \\\n        +-----------+           |            +-----------+\n        v                       v                        v\n+---------------+       +---------------+        +---------------+\n|   AZ-1 (us-a) |       |   AZ-2 (us-b) |        |   AZ-3 (us-c) |\n|  [App Pods]   |       |  [App Pods]   |        |  [App Pods]   |\n|      |        |       |      |        |        |      |        |\n|  [DB Primary] |======>|  [DB Sync]    |------->|  [DB Quorum   |\n|               | <1.5ms|   Standby     | <1.5ms |   Witness]    |\n+---------------+       +---------------+        +---------------+\n  Independent Power       Independent Power        Independent Power",
   "sections": [
     {
-      "heading": "1. Architectural Fundamentals & Core Mechanics",
+      "heading": "Physical Isolation & Synchronous Consensus Across 3 AZs",
       "body": "A single data center can fail due to transformer explosions, cooling leaks, or fiber cuts. Cloud regions group 3 or more physically separated Availability Zones (typically 10-100 km apart) so they do not share Flood/Power fault domains, while keeping round-trip network latency under 2 milliseconds.",
       "bullets": [
-        "**Core Architectural Principle**: An Availability Zone (AZ) is one or more discrete data centers with independent power, cooling, and physical networking within a metropolitan region, connected by low-latency (<2ms) dark fiber.",
-        "**Problem Space & Invariants**: Low inter-AZ latency (0.5ms - 2ms) enables synchronous database replication and consensus quorums (Raft/Paxos) across 3 AZs with zero data loss (RPO = 0) on single-AZ failure.",
-        "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-      ],
-      "asciiDiagram": "[ Regional ALB / NLB ]\n                     /          |           \\\n        +-----------+           |            +-----------+\n        v                       v                        v\n+---------------+       +---------------+        +---------------+\n|   AZ-1 (us-a) |       |   AZ-2 (us-b) |        |   AZ-3 (us-c) |\n|  [App Pods]   |       |  [App Pods]   |        |  [App Pods]   |\n|      |        |       |      |        |        |      |        |\n|  [DB Primary] |======>|  [DB Sync]    |------->|  [DB Quorum   |\n|               | <1.5ms|   Standby     | <1.5ms |   Witness]    |\n+---------------+       +---------------+        +---------------+\n  Independent Power       Independent Power        Independent Power"
-    },
-    {
-      "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "Distributed architectures apply specific implementation patterns and topologies for Multi-AZ:",
-      "bullets": [
-        "**Cross-AZ Load Balancing (Uniform Distribution)**: Provides evenly balances cpu/memory across all instances regardless of uneven ingress distribution per az. Best suited for Low-bandwidth, CPU-intensive RPC services where even compute utilization outweighs network transfer fees.",
-        "**Zonal Affinity / Topology-Aware Routing**: Provides eliminates cross-az network egress charges and shaves 1-2ms per hop across deep microservice chains. Best suited for High-bandwidth data pipelines, Kafka consumers, distributed caches, and chatty microservice meshes.",
-        "Why 3 AZs Instead of 2: Consensus protocols (etcd, Raft, ZooKeeper, Patroni) require a strict majority quorum ($\\lfloor N/2 \\rfloor + 1$). With 2 AZs, a majority is $\\lfloor 2/2 \\rfloor + 1 = 2$: meaning if either AZ goes dark, the cluster loses quorum and halts writes! With 3 AZs, quorum is 2, surviving any single AZ loss.",
+        "Why 3 AZs Instead of 2: Consensus protocols (etcd, Raft, ZooKeeper, Patroni) require a strict majority quorum ($\\lfloor N/2 \\rfloor + 1$). With 2 AZs, a majority is $\\lfloor 2/2 \\rfloor + 1 = 2$, meaning if either AZ goes dark, the cluster loses quorum and halts writes! With 3 AZs, quorum is 2, surviving any single AZ loss.",
         "Synchronous Storage Durability: Cloud-native databases (AWS Aurora, CockroachDB) write WAL logs across 6 storage nodes spanning 3 AZs and acknowledge commits once 4 of 6 nodes confirm, achieving RPO = 0 with ~1.5ms write overhead.",
-        "Topology-Aware Service Routing: Configure Envoy / Kubernetes EndpointSlices to route RPCs to healthy pods in the same AZ first, spilling over to peer AZs only when local capacity is saturated or unhealthy.",
-        "Kafka Rack-Aware Consumers: Set `client.rack` on consumers and `broker.rack` on Kafka brokers so consumers fetch high-volume partition replicas from the local AZ's follower broker rather than crossing AZs to the leader."
+        "Over-Provisioning for N-1 Capacity: In a 3-AZ deployment, each AZ handles 33.3% of traffic. If one AZ fails, the remaining two AZs must immediately absorb 50% each, meaning baseline utilization should not exceed ~60%."
       ],
       "codeSnippet": {
         "title": "Kubernetes Topology Spread Constraints & Zone-Aware Routing",
@@ -42,31 +29,12 @@
       }
     },
     {
-      "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Production deployments apply Multi-AZ across targeted operational scenarios:",
+      "heading": "Hidden Cross-AZ Egress Costs & Zonal Affinity",
+      "body": "While Multi-AZ protects against data center failures, naive round-robin load balancing across 3 AZs means 66% of every microservice hop, Redis read, and Kafka consumer fetch crosses an AZ boundary, incurring bilateral data transfer charges and adding 1-2ms per hop.",
       "bullets": [
-        "**Where to Use: High-Impact Scenarios**: Optimal for Low-bandwidth, CPU-intensive RPC services where even compute utilization outweighs network transfer fees, suited for environments requiring Evenly balances CPU/memory across all instances regardless of uneven ingress distribution per AZ.",
-        "**Where to Use: High-Throughput Scenarios**: Recommended for High-bandwidth data pipelines, Kafka consumers, distributed caches, and chatty microservice meshes, where Eliminates cross-AZ network egress charges and shaves 1-2ms per hop across deep microservice chains.",
-        "**How to Use: Engineering Implementation**: While Multi-AZ protects against data center failures, naive round-robin load balancing across 3 AZs means 66% of every microservice hop, Redis read, and Kafka consumer fetch crosses an AZ boundary: incurring bilateral data transfer charges and adding 1-2ms per hop. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-        "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-      ]
-    },
-    {
-      "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "Improper implementation of Multi-AZ introduces operational bottlenecks and failure modes:",
-      "bullets": [
-        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: 66% of traffic crosses az boundaries, incurring $0.02/gb transfer fees and extra 1ms latency per hop.",
-        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: can cause hot-spotting if one az has fewer healthy pods or receives disproportionate ingress traffic.",
-        "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-        "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-      ]
-    },
-    {
-      "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Technical guidelines and evaluation criteria for Multi-AZ:",
-      "bullets": [
-        "**Staff+ Golden Rule**: Cross-AZ data transfer is billed by cloud providers ($0.01-$0.02/GB each way); high-throughput systems use Topology-Aware Routing to keep RPC and cache reads within the local AZ.",
-        "**Staff+ Interview Playbook**: Always explain why production stateful systems deploy across **3 AZs** rather than 2: in a 2-AZ setup, if the AZ hosting the primary (or 50% of quorum nodes) loses connectivity, the surviving AZ only has 50% of votes and cannot safely elect a new leader without risking split-brain."
+        "Topology-Aware Service Routing: Configure Envoy / Kubernetes EndpointSlices to route RPCs to healthy pods in the same AZ first, spilling over to peer AZs only when local capacity is saturated or unhealthy.",
+        "Kafka Rack-Aware Consumers: Set `client.rack` on consumers and `broker.rack` on Kafka brokers so consumers fetch high-volume partition replicas from the local AZ's follower broker rather than crossing AZs to the leader.",
+        "Grey Failure & Zonal Evacuation: Sometimes an AZ suffers partial packet loss rather than total blackout; operators use Zonal Shift to drain traffic away from the degraded AZ via DNS/Load Balancer weights."
       ]
     }
   ],

@@ -13,28 +13,16 @@
     "Common production tuning for `N = 3` is `W = 2, R = 2`, which tolerates 1 unavailable node for both reads and writes while ensuring every read sees the latest committed write.",
     "Even when `W + R > N`, a leaderless quorum system is NOT strictly linearizable during concurrent writes or partial write failures unless Read Repair is synchronous."
   ],
-  "architectureDiagram": "STRICT QUORUM OVERLAP (N = 3, W = 2, R = 2)\n                              W + R = 4 > 3 (Overlap >= 1)\n\n      Write Quorum (W = 2)                     Read Quorum (R = 2)\n  +---------------------------+           +---------------------------+\n  |  [Replica 1]  [Replica 2] |           |  [Replica 2]  [Replica 3] |\n  |   (ver = 5)    (ver = 5)  |           |   (ver = 5)    (ver = 4)  |\n  +---------------------------+           +---------------------------+\n                         \\                     /\n                          v                   v\n                    [Replica 2 is in BOTH sets!]\n             Reader takes max(ver=5, ver=4) => Returns ver=5",
+  "architectureDiagram": "                   STRICT QUORUM OVERLAP (N = 3, W = 2, R = 2)\n                              W + R = 4 > 3 (Overlap >= 1)\n\n      Write Quorum (W = 2)                     Read Quorum (R = 2)\n  +---------------------------+           +---------------------------+\n  |  [Replica 1]  [Replica 2] |           |  [Replica 2]  [Replica 3] |\n  |   (ver = 5)    (ver = 5)  |           |   (ver = 5)    (ver = 4)  |\n  +---------------------------+           +---------------------------+\n                         \\                     /\n                          v                   v\n                    [Replica 2 is in BOTH sets!]\n             Reader takes max(ver=5, ver=4) => Returns ver=5",
   "sections": [
     {
-      "heading": "1. Architectural Fundamentals & Core Mechanics",
+      "heading": "Tunable Quorum Configurations (N, W, R)",
       "body": "By the Pigeonhole Principle, if you write to `W` out of `N` nodes and read from `R` out of `N` nodes such that `W + R > N`, at least one node in the `R` responses must have participated in the most recent completed write. The coordinator attaches a version vector or timestamp to every write; on a read, it queries `R` nodes in parallel and returns the value with the highest version.",
       "bullets": [
-        "**Core Architectural Principle**: In a system with `N` replicas, requiring `W` write acknowledgments and `R` read responses where `W + R > N` guarantees that the read set and write set overlap by at least 1 replica.",
-        "**Problem Space & Invariants**: Common production tuning for `N = 3` is `W = 2, R = 2`, which tolerates 1 unavailable node for both reads and writes while ensuring every read sees the latest committed write.",
-        "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-      ],
-      "asciiDiagram": "STRICT QUORUM OVERLAP (N = 3, W = 2, R = 2)\n                              W + R = 4 > 3 (Overlap >= 1)\n\n      Write Quorum (W = 2)                     Read Quorum (R = 2)\n  +---------------------------+           +---------------------------+\n  |  [Replica 1]  [Replica 2] |           |  [Replica 2]  [Replica 3] |\n  |   (ver = 5)    (ver = 5)  |           |   (ver = 5)    (ver = 4)  |\n  +---------------------------+           +---------------------------+\n                         \\                     /\n                          v                   v\n                    [Replica 2 is in BOTH sets!]\n             Reader takes max(ver=5, ver=4) => Returns ver=5"
-    },
-    {
-      "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "Distributed architectures apply specific implementation patterns and topologies for Quorum:",
-      "bullets": [
-        "**Strict Quorum (`N=3, W=2, R=2`)**: Provides strong overlap guarantee without a single leader bottleneck; tolerates 1 node failure seamlessly. Best suited for Distributed key-value and wide-column stores (Cassandra `LOCAL_QUORUM`, DynamoDB).",
-        "**Weak / Eventual Quorum (`N=3, W=1, R=1`)**: Provides lowest possible latency and highest availability during multi-node outages. Best suited for Non-critical metrics, clickstream ingestion, and cached recommendations.",
         "Balanced High Availability (`N=3, W=2, R=2`): Survives 1 dead node for both reads and writes; tail latency is bounded by the *2nd fastest* node rather than the slowest node!",
         "Write-Optimized (`N=3, W=1, R=3`): Ultra-fast writes, but reads must wait for all 3 nodes and fail if even 1 node is down.",
-        "In-Flight Write Anomaly (Flip-Flop Reads): Suppose Writer updates `v1 -> v2` (`N=3, W=2`). Replica 1 finishes `v2`, Replica 2 is still in network flight, Replica 3 hasn't received it. Reader A reads `{Replica 1 (v2), Replica 2 (v1)}` and sees `v2`. Immediately after, Reader B reads `{Replica 2 (v1), Replica 3 (v1)}` and sees `v1`: violating linearizability unless Reader A performs *synchronous* read repair before returning!",
-        "Failed Write Not Rolled Back: If a write with `W=2` succeeds on only 1 node (`Replica 1`) and fails on the other 2, the client receives a Write Error, yet `Replica 1` keeps the uncommitted value and exposes it to subsequent `R=2` reads."
+        "Read-Optimized (`N=3, W=3, R=1`): Ultra-fast single-node reads, but writes block if any of the 3 nodes is unreachable.",
+        "Write-Write Conflict Ordering (`W > N / 2`): Ensuring `W` is a strict majority prevents two concurrent conflicting writes from both succeeding on disjoint subsets."
       ],
       "codeSnippet": {
         "title": "Quorum Coordinator Read with Synchronous Read-Repair",
@@ -42,31 +30,12 @@
       }
     },
     {
-      "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Production deployments apply Quorum across targeted operational scenarios:",
+      "heading": "Edge Cases: Why W + R > N Is Not Automatically Linearizable",
+      "body": "Senior/Staff interviews often probe edge cases where `W + R > N` still exhibits non-linearizable anomalies:",
       "bullets": [
-        "**Where to Use: High-Impact Scenarios**: Optimal for Distributed key-value and wide-column stores (Cassandra `LOCAL_QUORUM`, DynamoDB), suited for environments requiring Strong overlap guarantee without a single leader bottleneck; tolerates 1 node failure seamlessly.",
-        "**Where to Use: High-Throughput Scenarios**: Recommended for Non-critical metrics, clickstream ingestion, and cached recommendations, where Lowest possible latency and highest availability during multi-node outages.",
-        "**How to Use: Engineering Implementation**: Senior/Staff interviews often probe edge cases where `W + R > N` still exhibits non-linearizable anomalies:. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-        "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-      ]
-    },
-    {
-      "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "Improper implementation of Quorum introduces operational bottlenecks and failure modes:",
-      "bullets": [
-        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: requires 2 network round-trips/parallel responses; not strictly linearizable without sync read-repair or paxos.",
-        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: high probability of reading stale data before background replication catches up.",
-        "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-        "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-      ]
-    },
-    {
-      "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Technical guidelines and evaluation criteria for Quorum:",
-      "bullets": [
-        "**Staff+ Golden Rule**: Even when `W + R > N`, a leaderless quorum system is NOT strictly linearizable during concurrent writes or partial write failures unless Read Repair is synchronous.",
-        "**Staff+ Interview Playbook**: Explain why `N=3, W=2, R=2` actually *improves* p99 tail latency compared to reading from a single node: because the coordinator sends requests to all 3 nodes and only waits for the fastest 2, a GC pause on the 3rd node is completely masked!"
+        "In-Flight Write Anomaly (Flip-Flop Reads): Suppose Writer updates `v1 -> v2` (`N=3, W=2`). Replica 1 finishes `v2`, Replica 2 is still in network flight, Replica 3 hasn't received it. Reader A reads `{Replica 1 (v2), Replica 2 (v1)}` and sees `v2`. Immediately after, Reader B reads `{Replica 2 (v1), Replica 3 (v1)}` and sees `v1`, violating linearizability unless Reader A performs *synchronous* read repair before returning!",
+        "Failed Write Not Rolled Back: If a write with `W=2` succeeds on only 1 node (`Replica 1`) and fails on the other 2, the client receives a Write Error, yet `Replica 1` keeps the uncommitted value and exposes it to subsequent `R=2` reads.",
+        "Sloppy Quorum Violation: If Hinted Handoff accepts writes on fallback nodes outside the home `N` nodes during a partition, `W + R > N` no longer guarantees intersection until hints replay."
       ]
     }
   ],

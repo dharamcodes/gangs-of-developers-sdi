@@ -13,28 +13,15 @@
     "Pure LRU suffers from 'Scan Pollution': a one-time bulk scan of cold items flushes out genuinely popular items; LFU or W-TinyLFU solves this by tracking access frequency.",
     "Redis does not use a doubly linked list for LRU (to save 16 bytes of pointer overhead per key); instead, it uses approximated sampling of N random keys."
   ],
-  "architectureDiagram": "O(1) LRU CACHE DATA STRUCTURE\n     Hash Map (O(1) Lookup)\n  +-------+-------+-------+-------+\n  | 'k1'  | 'k2'  | 'k3'  | 'k4'  |\n  +---+---+---+---+---+---+---+---+\n      |       |       |       |\n      v       v       v       v\n    +----+  +----+  +----+  +----+    Doubly Linked List (O(1) Splice)\nMRU | k1 |<>| k2 |<>| k3 |<>| k4 | LRU (Evict from Tail when full)\nHead+----+  +----+  +----+  +----+Tail",
+  "architectureDiagram": "                  O(1) LRU CACHE DATA STRUCTURE\n     Hash Map (O(1) Lookup)\n  +-------+-------+-------+-------+\n  | 'k1'  | 'k2'  | 'k3'  | 'k4'  |\n  +---+---+---+---+---+---+---+---+\n      |       |       |       |\n      v       v       v       v\n    +----+  +----+  +----+  +----+    Doubly Linked List (O(1) Splice)\nMRU | k1 |<>| k2 |<>| k3 |<>| k4 | LRU (Evict from Tail when full)\nHead+----+  +----+  +----+  +----+Tail",
   "sections": [
     {
-      "heading": "1. Architectural Fundamentals & Core Mechanics",
+      "heading": "Implementing Thread-Safe O(1) LRU & Understanding Scan Resistance",
       "body": "Every `get(key)` or `put(key, val)` in an LRU cache looks up the node in a hash table in O(1) time and splices that node to the `head` (Most Recently Used) of a doubly linked list in O(1) time. When capacity is reached, the node at the `tail` (Least Recently Used) is unlinked and removed from the hash map.",
       "bullets": [
-        "**Core Architectural Principle**: A textbook O(1) LRU cache combines a Hash Map (`key -> Node*`) for O(1) lookups with a Doubly Linked List (`head = MRU, tail = LRU`) for O(1) promotion and eviction.",
-        "**Problem Space & Invariants**: Pure LRU suffers from 'Scan Pollution': a one-time bulk scan of cold items flushes out genuinely popular items; LFU or W-TinyLFU solves this by tracking access frequency.",
-        "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-      ],
-      "asciiDiagram": "O(1) LRU CACHE DATA STRUCTURE\n     Hash Map (O(1) Lookup)\n  +-------+-------+-------+-------+\n  | 'k1'  | 'k2'  | 'k3'  | 'k4'  |\n  +---+---+---+---+---+---+---+---+\n      |       |       |       |\n      v       v       v       v\n    +----+  +----+  +----+  +----+    Doubly Linked List (O(1) Splice)\nMRU | k1 |<>| k2 |<>| k3 |<>| k4 | LRU (Evict from Tail when full)\nHead+----+  +----+  +----+  +----+Tail"
-    },
-    {
-      "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "Distributed architectures apply specific implementation patterns and topologies for LRU:",
-      "bullets": [
-        "**LRU (Least Recently Used)**: Provides adapts immediately to sudden recency shifts (e.g., breaking news); simple o(1) mechanics. Best suited for Session caches, recency-driven news feeds, and general application caching.",
-        "**LFU / W-TinyLFU (Frequency-Aware Eviction)**: Provides scan-resistant; retains consistently popular keys even during one-off read bursts. Best suited for Product catalogs, CDN edge caches, and skewed power-law Zipfian workloads.",
         "Lock Contention in Multi-Threaded In-Process Caches: Because every *read* mutates the linked list pointers, a global mutex turns concurrent reads into a serial bottleneck. Production libraries (like Java Caffeine or Go Ristretto) buffer read events in lock-free ring buffers and apply promotions asynchronously.",
         "Scan Pollution Problem: If capacity is 10,000 items and a user runs a pagination job reading 10,000 one-off cold items, pure LRU evicts all 10,000 hot items.",
-        "`allkeys-lru` vs `volatile-lru`: `allkeys-lru` evicts any key when RAM is full; `volatile-lru` only evicts keys that have an explicit TTL set (preserving permanent state).",
-        "`allkeys-lfu` (Morris Counter): Uses those same 24 header bits to store a 16-bit last-decrement time and an 8-bit logarithmic frequency counter (0–255) with time decay."
+        "LFU & W-TinyLFU: Least Frequently Used (LFU) tracks access counts (often via a Count-Min Sketch probabilistic frequency sketch with periodic halving/decay) so cold one-off items are rejected before evicting hot items."
       ],
       "codeSnippet": {
         "title": "O(1) LRU Cache Implementation in TypeScript",
@@ -42,31 +29,12 @@
       }
     },
     {
-      "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Production deployments apply LRU across targeted operational scenarios:",
+      "heading": "How Redis Approximates LRU & LFU (`maxmemory-policy`)",
+      "body": "Maintaining two 64-bit pointers (`prev`, `next`) per key across 100 million keys in Redis would waste 1.6 GB of RAM. Instead, Redis stores a 24-bit clock/counter directly inside the `robj` object header of every key and uses random sampling (`maxmemory-samples`, default 5) to evict the oldest key in the sample pool.",
       "bullets": [
-        "**Where to Use: High-Impact Scenarios**: Optimal for Session caches, recency-driven news feeds, and general application caching, suited for environments requiring Adapts immediately to sudden recency shifts (e.g., breaking news); simple O(1) mechanics.",
-        "**Where to Use: High-Throughput Scenarios**: Recommended for Product catalogs, CDN edge caches, and skewed power-law Zipfian workloads, where Scan-resistant; retains consistently popular keys even during one-off read bursts.",
-        "**How to Use: Engineering Implementation**: Maintaining two 64-bit pointers (`prev`, `next`) per key across 100 million keys in Redis would waste 1.6 GB of RAM. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-        "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-      ]
-    },
-    {
-      "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "Improper implementation of LRU introduces operational bottlenecks and failure modes:",
-      "bullets": [
-        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: vulnerable to cache pollution from sequential scans or one-time bulk queries.",
-        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: requires frequency decay tuning so formerly popular items don't stay stuck in memory forever.",
-        "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-        "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-      ]
-    },
-    {
-      "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Technical guidelines and evaluation criteria for LRU:",
-      "bullets": [
-        "**Staff+ Golden Rule**: Redis does not use a doubly linked list for LRU (to save 16 bytes of pointer overhead per key); instead, it uses approximated sampling of N random keys.",
-        "**Staff+ Interview Playbook**: Be ready to code an O(1) LRU Cache from scratch using a HashMap + Doubly Linked List, and follow up by explaining how concurrent in-memory caches avoid lock contention on the linked list during reads."
+        "`allkeys-lru` vs `volatile-lru`: `allkeys-lru` evicts any key when RAM is full; `volatile-lru` only evicts keys that have an explicit TTL set (preserving permanent state).",
+        "`allkeys-lfu` (Morris Counter): Uses those same 24 header bits to store a 16-bit last-decrement time and an 8-bit logarithmic frequency counter (0–255) with time decay.",
+        "`noeviction`: Returns `OOM command not allowed` errors on writes when `maxmemory` is reached; appropriate only when Redis is used as a durable store or message broker."
       ]
     }
   ],
