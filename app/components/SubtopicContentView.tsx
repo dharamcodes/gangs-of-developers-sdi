@@ -5,6 +5,7 @@ import {
   Avatar,
   Box,
   Button,
+  ButtonBase,
   Chip,
   Dialog,
   DialogContent,
@@ -24,8 +25,8 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import ArrowBackIosNewIcon from "@mui/icons-material/ArrowBackIosNew";
-import ArrowForwardIosIcon from "@mui/icons-material/ArrowForwardIos";
+import ArrowBackRoundedIcon from "@mui/icons-material/ArrowBackRounded";
+import ArrowForwardRoundedIcon from "@mui/icons-material/ArrowForwardRounded";
 import TipsAndUpdatesOutlinedIcon from "@mui/icons-material/TipsAndUpdatesOutlined";
 import AccessTimeIcon from "@mui/icons-material/AccessTime";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
@@ -1317,119 +1318,333 @@ export default function SubtopicContentView({
         {/* ========================================================= */}
         {/* 6. NEXT READS & CHAPTER NAVIGATION                         */}
         {/* ========================================================= */}
-        <Box sx={{ maxWidth: PROSE_MAX_WIDTH, mx: "auto" }}>
-          <Stack
-            direction={{ xs: "column", sm: "row" }}
-            spacing={2.5}
-            sx={{ justifyContent: "space-between" }}
-          >
-            {prevSubtopic ? (
-              <Button
-                variant="outlined"
+        <Box
+          sx={{
+            maxWidth: PROSE_MAX_WIDTH,
+            mx: "auto",
+            display: "grid",
+            gridTemplateColumns: { xs: "1fr", sm: "repeat(2, minmax(0, 1fr))" },
+            gap: 2.5,
+          }}
+        >
+          {prevSubtopic && (
+            <Paper
+              elevation={0}
+              sx={{
+                gridColumn: { xs: "1 / -1", sm: "1 / 2" },
+                borderRadius: 3,
+                overflow: "hidden",
+                border: "1px solid",
+                borderColor:
+                  mode === "dark"
+                    ? "rgba(255, 255, 255, 0.08)"
+                    : "rgba(15, 23, 42, 0.08)",
+                bgcolor:
+                  mode === "dark"
+                    ? "rgba(15, 23, 42, 0.6)"
+                    : "rgba(255, 255, 255, 0.95)",
+                transition: "all 0.25s cubic-bezier(0.16, 1, 0.3, 1)",
+                "&:hover": {
+                  transform: "translateY(-3px)",
+                  borderColor: "primary.main",
+                  boxShadow:
+                    mode === "dark"
+                      ? "0 12px 28px -6px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(245, 158, 11, 0.25)"
+                      : "0 12px 28px -6px rgba(180, 83, 9, 0.12), 0 0 0 1px rgba(180, 83, 9, 0.2)",
+                  "& .nav-arrow-prev": {
+                    transform: "translateX(-4px)",
+                    bgcolor: "primary.main",
+                    color: "#ffffff",
+                  },
+                  "& .nav-title-prev": {
+                    color: "primary.main",
+                  },
+                },
+              }}
+            >
+              <ButtonBase
                 onClick={() =>
                   onSelectSubtopic(prevSubtopic.id, prevSubtopic.topicId)
                 }
                 sx={{
-                  justifyContent: "flex-start",
+                  width: "100%",
+                  height: "100%",
+                  p: { xs: 2.25, sm: 2.75 },
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "flex-start",
                   textAlign: "left",
-                  p: { xs: 2, sm: 2.5 },
-                  borderRadius: 3,
-                  textTransform: "none",
-                  flex: 1,
-                  borderColor: "divider",
-                  transition: "all 0.2s ease",
-                  "&:hover": {
-                    borderColor: "primary.main",
-                    transform: "translateY(-2px)",
-                    boxShadow: "0 6px 20px rgba(0,0,0,0.06)",
-                  },
                 }}
               >
-                <ArrowBackIosNewIcon
-                  fontSize="small"
-                  sx={{ mr: 1.5, color: "text.secondary" }}
-                />
-                <Box>
-                  <Typography
-                    variant="caption"
-                    color="text.secondary"
-                    sx={{ display: "block", fontWeight: 700, mb: 0.25 }}
+                <Box
+                  sx={{
+                    width: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 1.5,
+                    mb: 1.25,
+                  }}
+                >
+                  <Box
+                    sx={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 1,
+                    }}
                   >
-                    PREVIOUS CHAPTER
-                  </Typography>
-                  <Typography
-                    variant="subtitle1"
-                    sx={{ fontWeight: 800, lineHeight: 1.3, color: "text.primary" }}
-                  >
-                    {prevSubtopic.subtopicNumber} {prevSubtopic.title}
-                  </Typography>
-                  <Typography
-                    variant="caption"
-                    color="text.secondary"
-                    sx={{ fontSize: "0.72rem" }}
-                  >
-                    {prevSubtopic.topicTitle}
-                  </Typography>
-                </Box>
-              </Button>
-            ) : (
-              <Box sx={{ flex: 1 }} />
-            )}
+                    <Box
+                      className="nav-arrow-prev"
+                      sx={{
+                        width: 26,
+                        height: 26,
+                        borderRadius: "50%",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        bgcolor:
+                          mode === "dark"
+                            ? "rgba(255, 255, 255, 0.08)"
+                            : "rgba(15, 23, 42, 0.06)",
+                        color: "text.secondary",
+                        transition:
+                          "transform 0.2s ease, background-color 0.2s ease, color 0.2s ease",
+                      }}
+                    >
+                      <ArrowBackRoundedIcon sx={{ fontSize: 16 }} />
+                    </Box>
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        fontWeight: 750,
+                        textTransform: "uppercase",
+                        letterSpacing: "0.08em",
+                        fontSize: "0.7rem",
+                        color: "text.secondary",
+                      }}
+                    >
+                      {ui.previousLabel || "Previous"}
+                    </Typography>
+                  </Box>
 
-            {nextSubtopic ? (
-              <Button
-                variant="contained"
-                color="primary"
+                  {prevSubtopic.subtopicNumber && (
+                    <Chip
+                      size="small"
+                      label={`Part ${prevSubtopic.subtopicNumber}`}
+                      sx={{
+                        height: 20,
+                        fontSize: "0.68rem",
+                        fontWeight: 700,
+                        borderRadius: 1.5,
+                        bgcolor:
+                          mode === "dark"
+                            ? "rgba(255, 255, 255, 0.06)"
+                            : "rgba(15, 23, 42, 0.05)",
+                        color: "text.secondary",
+                        border: "none",
+                      }}
+                    />
+                  )}
+                </Box>
+
+                <Typography
+                  className="nav-title-prev"
+                  variant="subtitle1"
+                  sx={{
+                    fontWeight: 750,
+                    lineHeight: 1.35,
+                    color: "text.primary",
+                    transition: "color 0.2s ease",
+                    display: "-webkit-box",
+                    WebkitLineClamp: 2,
+                    WebkitBoxOrient: "vertical",
+                    overflow: "hidden",
+                    mb: 0.5,
+                  }}
+                >
+                  {prevSubtopic.title}
+                </Typography>
+
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{
+                    fontSize: "0.74rem",
+                    display: "block",
+                    lineHeight: 1.4,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    maxWidth: "100%",
+                  }}
+                >
+                  {prevSubtopic.topicTitle}
+                </Typography>
+              </ButtonBase>
+            </Paper>
+          )}
+
+          {nextSubtopic && (
+            <Paper
+              elevation={0}
+              sx={{
+                gridColumn: {
+                  xs: "1 / -1",
+                  sm: prevSubtopic ? "2 / 3" : "2 / 3",
+                },
+                borderRadius: 3,
+                overflow: "hidden",
+                border: "1px solid",
+                borderColor:
+                  mode === "dark"
+                    ? "rgba(245, 158, 11, 0.25)"
+                    : "rgba(180, 83, 9, 0.2)",
+                bgcolor:
+                  mode === "dark"
+                    ? "rgba(245, 158, 11, 0.04)"
+                    : "rgba(180, 83, 9, 0.02)",
+                transition: "all 0.25s cubic-bezier(0.16, 1, 0.3, 1)",
+                "&:hover": {
+                  transform: "translateY(-3px)",
+                  borderColor: "primary.main",
+                  boxShadow:
+                    mode === "dark"
+                      ? "0 12px 28px -6px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(245, 158, 11, 0.35)"
+                      : "0 12px 28px -6px rgba(180, 83, 9, 0.16), 0 0 0 1px rgba(180, 83, 9, 0.3)",
+                  "& .nav-arrow-next": {
+                    transform: "translateX(4px)",
+                    bgcolor: "primary.main",
+                    color: "#ffffff",
+                  },
+                  "& .nav-title-next": {
+                    color: "primary.main",
+                  },
+                },
+              }}
+            >
+              <ButtonBase
                 onClick={() =>
                   onSelectSubtopic(nextSubtopic.id, nextSubtopic.topicId)
                 }
                 sx={{
-                  justifyContent: "flex-end",
+                  width: "100%",
+                  height: "100%",
+                  p: { xs: 2.25, sm: 2.75 },
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "flex-end",
                   textAlign: "right",
-                  p: { xs: 2, sm: 2.5 },
-                  borderRadius: 3,
-                  textTransform: "none",
-                  flex: 1,
-                  boxShadow: "0 6px 20px rgba(245, 158, 11, 0.25)",
-                  transition: "all 0.2s ease",
-                  "&:hover": {
-                    transform: "translateY(-2px)",
-                    boxShadow: "0 8px 25px rgba(245, 158, 11, 0.35)",
-                  },
                 }}
               >
-                <Box sx={{ mr: 1.5 }}>
-                  <Typography
-                    variant="caption"
+                <Box
+                  sx={{
+                    width: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 1.5,
+                    mb: 1.25,
+                  }}
+                >
+                  {nextSubtopic.subtopicNumber ? (
+                    <Chip
+                      size="small"
+                      label={`Part ${nextSubtopic.subtopicNumber}`}
+                      sx={{
+                        height: 20,
+                        fontSize: "0.68rem",
+                        fontWeight: 700,
+                        borderRadius: 1.5,
+                        bgcolor:
+                          mode === "dark"
+                            ? "rgba(245, 158, 11, 0.12)"
+                            : "rgba(180, 83, 9, 0.08)",
+                        color: "primary.main",
+                        border: "none",
+                      }}
+                    />
+                  ) : (
+                    <Box />
+                  )}
+
+                  <Box
                     sx={{
-                      display: "block",
-                      fontWeight: 800,
-                      opacity: 0.9,
-                      mb: 0.25,
-                      letterSpacing: "0.04em",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 1,
                     }}
                   >
-                    NEXT STORY IN SERIES →
-                  </Typography>
-                  <Typography
-                    variant="subtitle1"
-                    sx={{ fontWeight: 850, lineHeight: 1.3 }}
-                  >
-                    {nextSubtopic.subtopicNumber} {nextSubtopic.title}
-                  </Typography>
-                  <Typography
-                    variant="caption"
-                    sx={{ opacity: 0.85, fontSize: "0.72rem" }}
-                  >
-                    {nextSubtopic.topicTitle}
-                  </Typography>
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        fontWeight: 750,
+                        textTransform: "uppercase",
+                        letterSpacing: "0.08em",
+                        fontSize: "0.7rem",
+                        color: "primary.main",
+                      }}
+                    >
+                      {ui.nextLabel || "Next"}
+                    </Typography>
+                    <Box
+                      className="nav-arrow-next"
+                      sx={{
+                        width: 26,
+                        height: 26,
+                        borderRadius: "50%",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        bgcolor:
+                          mode === "dark"
+                            ? "rgba(245, 158, 11, 0.15)"
+                            : "rgba(180, 83, 9, 0.12)",
+                        color: "primary.main",
+                        transition:
+                          "transform 0.2s ease, background-color 0.2s ease, color 0.2s ease",
+                      }}
+                    >
+                      <ArrowForwardRoundedIcon sx={{ fontSize: 16 }} />
+                    </Box>
+                  </Box>
                 </Box>
-                <ArrowForwardIosIcon fontSize="small" />
-              </Button>
-            ) : (
-              <Box sx={{ flex: 1 }} />
-            )}
-          </Stack>
+
+                <Typography
+                  className="nav-title-next"
+                  variant="subtitle1"
+                  sx={{
+                    fontWeight: 750,
+                    lineHeight: 1.35,
+                    color: "text.primary",
+                    transition: "color 0.2s ease",
+                    display: "-webkit-box",
+                    WebkitLineClamp: 2,
+                    WebkitBoxOrient: "vertical",
+                    overflow: "hidden",
+                    mb: 0.5,
+                  }}
+                >
+                  {nextSubtopic.title}
+                </Typography>
+
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{
+                    fontSize: "0.74rem",
+                    display: "block",
+                    lineHeight: 1.4,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    maxWidth: "100%",
+                  }}
+                >
+                  {nextSubtopic.topicTitle}
+                </Typography>
+              </ButtonBase>
+            </Paper>
+          )}
         </Box>
       </Paper>
 

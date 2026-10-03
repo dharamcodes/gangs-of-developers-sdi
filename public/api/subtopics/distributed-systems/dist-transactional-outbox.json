@@ -13,27 +13,27 @@
     "The Transactional Outbox pattern inserts both the business entity AND an event row into an `outbox_events` table inside the **exact same local ACID transaction**.",
     "A separate Message Relay (either a polling worker using `FOR UPDATE SKIP LOCKED` or Debezium CDC tailing the DB WAL) asynchronously publishes outbox rows to Kafka."
   ],
-  "architectureDiagram": "                  TRANSACTIONAL OUTBOX PATTERN\n  [Order Service]\n        |\n        |  BEGIN LOCAL ACID TRANSACTION\n        |---> 1a. INSERT INTO orders (id, status) VALUES ('ord_1', 'PAID');\n        |---> 1b. INSERT INTO outbox_events (id, topic, payload) VALUES (...);\n        |  COMMIT; (Atomic: Both succeed or both roll back!)\n                                  |\n                     (2. Tail WAL via Debezium CDC\n                         OR Poll via SKIP LOCKED)\n                                  v\n                         [Outbox Relay Worker]\n                                  |\n                     (3. Publish with Idempotent Producer)\n                                  v\n                           [Kafka Broker]",
+  "architectureDiagram": "TRANSACTIONAL OUTBOX PATTERN\n  [Order Service]\n        |\n        |  BEGIN LOCAL ACID TRANSACTION\n        |---> 1a. INSERT INTO orders (id, status) VALUES ('ord_1', 'PAID');\n        |---> 1b. INSERT INTO outbox_events (id, topic, payload) VALUES (.);\n        |  COMMIT; (Atomic: Both succeed or both roll back!)\n                                  |\n                     (2. Tail WAL via Debezium CDC\n                         OR Poll via SKIP LOCKED)\n                                  v\n                         [Outbox Relay Worker]\n                                  |\n                     (3. Publish with Idempotent Producer)\n                                  v\n                           [Kafka Broker]",
   "sections": [
     {
       "heading": "1. Architectural Fundamentals & Core Mechanics",
-      "body": "Transactional Outbox is a foundational architectural concept in distributed systems. Solving the Dual-Write problem between a database and a message broker (Kafka/RabbitMQ) with guaranteed at-least-once event publishing. Fundamentally, Suppose your `OrderService` needs to save a new order in PostgreSQL and publish an `OrderCreated` event to Kafka. If you commit to PostgreSQL first and the pod is OOM-killed 1ms before `kafka.send()` completes, the order exists in the DB but Downstream Inventory/Notification services never hear about it. Conversely, if you publish to Kafka first and the PostgreSQL commit fails due to a constraint error, downstream services process a phantom order that doesn't exist! The Transactional Outbox solves this by piggybacking on the local database's ACID transaction.",
+      "body": "Suppose your `OrderService` needs to save a new order in PostgreSQL and publish an `OrderCreated` event to Kafka. If you commit to PostgreSQL first and the pod is OOM-killed 1ms before `kafka.send()` completes, the order exists in the DB but Downstream Inventory/Notification services never hear about it. Conversely, if you publish to Kafka first and the PostgreSQL commit fails due to a constraint error, downstream services process a phantom order that doesn't exist! The Transactional Outbox solves this by piggybacking on the local database's ACID transaction.",
       "bullets": [
         "**Core Architectural Principle**: Never dual-write directly to a database and a message broker (`await db.save(); await kafka.send()`): if the process crashes or Kafka times out after the DB commit, the system enters permanent inconsistency.",
         "**Problem Space & Invariants**: The Transactional Outbox pattern inserts both the business entity AND an event row into an `outbox_events` table inside the **exact same local ACID transaction**.",
         "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
       ],
-      "asciiDiagram": "                  TRANSACTIONAL OUTBOX PATTERN\n  [Order Service]\n        |\n        |  BEGIN LOCAL ACID TRANSACTION\n        |---> 1a. INSERT INTO orders (id, status) VALUES ('ord_1', 'PAID');\n        |---> 1b. INSERT INTO outbox_events (id, topic, payload) VALUES (...);\n        |  COMMIT; (Atomic: Both succeed or both roll back!)\n                                  |\n                     (2. Tail WAL via Debezium CDC\n                         OR Poll via SKIP LOCKED)\n                                  v\n                         [Outbox Relay Worker]\n                                  |\n                     (3. Publish with Idempotent Producer)\n                                  v\n                           [Kafka Broker]"
+      "asciiDiagram": "TRANSACTIONAL OUTBOX PATTERN\n  [Order Service]\n        |\n        |  BEGIN LOCAL ACID TRANSACTION\n        |---> 1a. INSERT INTO orders (id, status) VALUES ('ord_1', 'PAID');\n        |---> 1b. INSERT INTO outbox_events (id, topic, payload) VALUES (.);\n        |  COMMIT; (Atomic: Both succeed or both roll back!)\n                                  |\n                     (2. Tail WAL via Debezium CDC\n                         OR Poll via SKIP LOCKED)\n                                  v\n                         [Outbox Relay Worker]\n                                  |\n                     (3. Publish with Idempotent Producer)\n                                  v\n                           [Kafka Broker]"
     },
     {
       "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "In production distributed systems, transactional outbox manifests across several distinct architectural classifications, operational modes, and implementation strategies:",
+      "body": "Distributed architectures apply specific implementation patterns and topologies for Transactional Outbox:",
       "bullets": [
-        "**Debezium CDC Log Tailer on Outbox Table**: Focuses on sub-50ms latency; zero polling query load on the primary database; preserves strict wal commit order. Best suited for High-throughput microservice fleets already standardized on Kafka..",
-        "**SQL Polling Relay Worker (`FOR UPDATE SKIP LOCKED`)**: Focuses on no cdc infrastructure needed; easy to implement in 30 lines of application code. Best suited for Low-to-medium throughput services (<2,000 events/sec) or non-Kafka brokers (SQS/RabbitMQ)..",
-        "Single Atomic Commit: Writing to `orders` and `outbox_events` in the same database uses a standard local transaction—no slow cross-system 2PC required.",
+        "**Debezium CDC Log Tailer on Outbox Table**: Provides sub-50ms latency; zero polling query load on the primary database; preserves strict wal commit order. Best suited for High-throughput microservice fleets already standardized on Kafka.",
+        "**SQL Polling Relay Worker (`FOR UPDATE SKIP LOCKED`)**: Provides no cdc infrastructure needed; easy to implement in 30 lines of application code. Best suited for Low-to-medium throughput services (<2,000 events/sec) or non-Kafka brokers (SQS/RabbitMQ).",
+        "Single Atomic Commit: Writing to `orders` and `outbox_events` in the same database uses a standard local transaction: no slow cross-system 2PC required.",
         "Guaranteed At-Least-Once Delivery: Once the DB transaction commits, the event is durable on disk in `outbox_events`. The relay worker retries publishing to Kafka until Kafka acknowledges receipt.",
-        "Polling Publisher (`SELECT ... FOR UPDATE SKIP LOCKED`): Simple to run with zero extra infrastructure; works well up to ~1,000–5,000 events/sec, though polling adds slight DB query overhead.",
+        "Polling Publisher (`SELECT . FOR UPDATE SKIP LOCKED`): Simple to run with zero extra infrastructure; works well up to ~1,000–5,000 events/sec, though polling adds slight DB query overhead.",
         "Transaction Log Tailer (Debezium CDC): Reads committed inserts directly from PostgreSQL's WAL or MySQL's binlog with near-zero read load on the database! Tip: even with Debezium, clean up old `outbox_events` rows via partitioning or immediately delete after insert (`INSERT` followed by `DELETE` still emits the WAL insert record!)."
       ],
       "codeSnippet": {
@@ -43,30 +43,30 @@
     },
     {
       "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Adopting appropriate design patterns around transactional outbox unlocks critical performance, scalability, and operational advantages for modern backend platforms:",
+      "body": "Production deployments apply Transactional Outbox across targeted operational scenarios:",
       "bullets": [
-        "**Where to Use — High-Impact Scenarios**: Optimal for High-throughput microservice fleets already standardized on Kafka. and environments requiring Sub-50ms latency; zero polling query load on the primary database; preserves strict WAL commit order..",
-        "**Where to Use — High-Throughput Scenarios**: Recommended for Low-to-medium throughput services (<2,000 events/sec) or non-Kafka brokers (SQS/RabbitMQ). where No CDC infrastructure needed; easy to implement in 30 lines of application code..",
-        "**How to Use — Engineering Implementation**: There are two ways to move records from the `outbox_events` table into Kafka:. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
+        "**Where to Use: High-Impact Scenarios**: Optimal for High-throughput microservice fleets already standardized on Kafka, suited for environments requiring Sub-50ms latency; zero polling query load on the primary database; preserves strict WAL commit order.",
+        "**Where to Use: High-Throughput Scenarios**: Recommended for Low-to-medium throughput services (<2,000 events/sec) or non-Kafka brokers (SQS/RabbitMQ), where No CDC infrastructure needed; easy to implement in 30 lines of application code.",
+        "**How to Use: Engineering Implementation**: There are two ways to move records from the `outbox_events` table into Kafka:. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
         "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
       ]
     },
     {
       "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "While essential for scalable engineering, transactional outbox introduces substantial architectural trade-offs, operational failure modes, and anti-patterns if applied inappropriately:",
+      "body": "Improper implementation of Transactional Outbox introduces operational bottlenecks and failure modes:",
       "bullets": [
-        "**Where to Avoid — Trade-Off Bottlenecks**: Avoid when constraints impose requires operating kafka connect and debezium connectors; coupled to db replication slots.",
-        "**Where to Avoid — Complexity Ceiling**: Avoid premature optimization when adds polling cpu/io overhead and mvcc dead-tuple churn on the database.",
+        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: requires operating kafka connect and debezium connectors; coupled to db replication slots.",
+        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: adds polling cpu/io overhead and mvcc dead-tuple churn on the database.",
         "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
         "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
       ]
     },
     {
       "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Mastering transactional outbox is a defining trait of Staff-level distributed systems engineers. Navigating the delicate balance between performance, reliability, and simplicity ensures architectures scale sustainably without introducing unmanageable operational friction.",
+      "body": "Technical guidelines and evaluation criteria for Transactional Outbox:",
       "bullets": [
         "**Staff+ Golden Rule**: A separate Message Relay (either a polling worker using `FOR UPDATE SKIP LOCKED` or Debezium CDC tailing the DB WAL) asynchronously publishes outbox rows to Kafka.",
-        "**Staff+ Interview Playbook**: Whenever your architecture diagram shows a service writing to a DB and publishing an event to Kafka/SQS, draw or mention the 'Transactional Outbox Pattern'—interviewers frequently test whether candidates fall into the Dual-Write trap."
+        "**Staff+ Interview Playbook**: Whenever your architecture diagram shows a service writing to a DB and publishing an event to Kafka/SQS, draw or mention the 'Transactional Outbox Pattern': interviewers frequently test whether candidates fall into the Dual-Write trap."
       ]
     }
   ],
@@ -84,6 +84,6 @@
       "bestFor": "Low-to-medium throughput services (<2,000 events/sec) or non-Kafka brokers (SQS/RabbitMQ)."
     }
   ],
-  "interviewTip": "Whenever your architecture diagram shows a service writing to a DB and publishing an event to Kafka/SQS, draw or mention the 'Transactional Outbox Pattern'—interviewers frequently test whether candidates fall into the Dual-Write trap.",
+  "interviewTip": "Whenever your architecture diagram shows a service writing to a DB and publishing an event to Kafka/SQS, draw or mention the 'Transactional Outbox Pattern', interviewers frequently test whether candidates fall into the Dual-Write trap.",
   "jsonUrl": "/api/subtopics/distributed-systems/dist-transactional-outbox.json"
 }

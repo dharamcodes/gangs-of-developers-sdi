@@ -17,7 +17,7 @@
   "sections": [
     {
       "heading": "1. Architectural Fundamentals & Core Mechanics",
-      "body": "CDN is a foundational architectural concept in distributed systems. Anycast edge POPs, tiered origin shielding, stale-while-revalidate caching, and dynamic edge compute. Fundamentally, CDNs do far more than cache static images. By advertising the same IP address from 300+ global locations via BGP Anycast, a CDN terminates the client's TCP and TLS 1.3 / HTTP/3 handshake within 10 milliseconds of the user, then reuses pre-warmed, multiplexed persistent connections over private fiber backbones to your origin.",
+      "body": "CDNs do far more than cache static images. By advertising the same IP address from 300+ global locations via BGP Anycast, a CDN terminates the client's TCP and TLS 1.3 / HTTP/3 handshake within 10 milliseconds of the user, then reuses pre-warmed, multiplexed persistent connections over private fiber backbones to your origin.",
       "bullets": [
         "**Core Architectural Principle**: A Content Delivery Network (CDN) terminates TLS/QUIC at hundreds of global Points of Presence (POPs) close to the user, eliminating long-haul TCP handshake RTTs and absorbing 85-99% of read traffic before it reaches the origin.",
         "**Problem Space & Invariants**: Origin Shielding funnels cache misses from hundreds of edge POPs through a single regional aggregation POP with request coalescing, preventing thundering-herd origin collapse on cache expiry.",
@@ -27,43 +27,43 @@
     },
     {
       "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "In production distributed systems, cdn manifests across several distinct architectural classifications, operational modes, and implementation strategies:",
+      "body": "Distributed architectures apply specific implementation patterns and topologies for CDN:",
       "bullets": [
-        "**Long TTL + Surrogate-Key Active Purge**: Focuses on maximizes cache hit ratio (99%+) and shields origin completely until data actually mutates. Best suited for E-commerce product catalogs, CMS/news publishing, and media metadata APIs..",
-        "**Short TTL (5-30s) + Stale-While-Revalidate (Micro-Caching)**: Focuses on zero purge infrastructure needed; automatically bounds staleness to seconds while still absorbing flash spikes. Best suited for Live sports scores, stock tickers, flash-sale inventory counters, and high-fanout social feeds..",
+        "**Long TTL + Surrogate-Key Active Purge**: Provides maximizes cache hit ratio (99%+) and shields origin completely until data actually mutates. Best suited for E-commerce product catalogs, CMS/news publishing, and media metadata APIs.",
+        "**Short TTL (5-30s) + Stale-While-Revalidate (Micro-Caching)**: Provides zero purge infrastructure needed; automatically bounds staleness to seconds while still absorbing flash spikes. Best suited for Live sports scores, stock tickers, flash-sale inventory counters, and high-fanout social feeds.",
         "Request Coalescing (Collapsed Forwarding): If a popular live-score JSON or video manifest expires at an Edge POP and 5,000 users request it within 20ms, the POP holds 4,999 requests in memory and sends only **1** fetch upstream.",
         "Tiered Caching / Origin Shield: Without shielding, 300 global Edge POPs experiencing a cache miss still send 300 simultaneous requests to the origin. An Origin Shield POP sits right in front of the origin region, collapsing those 300 edge misses into a single origin request.",
-        "Content-Addressed Versioning vs Purging: For static bundles (JS/CSS/images), embed the SHA-256 content hash in the filename (`bundle.a1b2c3.js`) with `Cache-Control: public, max-age=31536000, immutable`. Never purge static assets—deploy a new HTML pointer.",
+        "Content-Addressed Versioning vs Purging: For static bundles (JS/CSS/images), embed the SHA-256 content hash in the filename (`bundle.a1b2c3.js`) with `Cache-Control: public, max-age=31536000, immutable`. Never purge static assets: deploy a new HTML pointer.",
         "Tag-Based Instant Invalidation (`Surrogate-Key` / `Cache-Tag`): For dynamic catalog or news pages, tag responses with entity IDs (`article_42`). When an editor updates the article, send a single API call to purge tag `article_42` globally in <150ms."
       ],
       "codeSnippet": {
         "title": "Production Cache-Control & Surrogate-Key Headers for Edge Resilience",
-        "code": "// HTTP Response Headers from Origin API (Product Catalog Endpoint)\nHTTP/1.1 200 OK\nContent-Type: application/json\n\n// Browser caches for 60s; CDN (s-maxage) caches for 1 hour;\n// Serve stale for 60s while fetching fresh in background; serve stale for 24h if origin returns 5xx!\nCache-Control: public, max-age=60, s-maxage=3600, stale-while-revalidate=60, stale-if-error=86400\n\n// CDN-only tag for O(1) targeted purge when product_992 or category_shoes updates\nSurrogate-Key: product_992 category_shoes storefront_us\n\n// Prevent cache key fragmentation—normalize only on required headers\nVary: Accept-Encoding"
+        "code": "// HTTP Response Headers from Origin API (Product Catalog Endpoint)\nHTTP/1.1 200 OK\nContent-Type: application/json\n\n// Browser caches for 60s; CDN (s-maxage) caches for 1 hour;\n// Serve stale for 60s while fetching fresh in background; serve stale for 24h if origin returns 5xx!\nCache-Control: public, max-age=60, s-maxage=3600, stale-while-revalidate=60, stale-if-error=86400\n\n// CDN-only tag for O(1) targeted purge when product_992 or category_shoes updates\nSurrogate-Key: product_992 category_shoes storefront_us\n\n// Prevent cache key fragmentation: normalize only on required headers\nVary: Accept-Encoding"
       }
     },
     {
       "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Adopting appropriate design patterns around cdn unlocks critical performance, scalability, and operational advantages for modern backend platforms:",
+      "body": "Production deployments apply CDN across targeted operational scenarios:",
       "bullets": [
-        "**Where to Use — High-Impact Scenarios**: Optimal for E-commerce product catalogs, CMS/news publishing, and media metadata APIs. and environments requiring Maximizes cache hit ratio (99%+) and shields origin completely until data actually mutates..",
-        "**Where to Use — High-Throughput Scenarios**: Recommended for Live sports scores, stock tickers, flash-sale inventory counters, and high-fanout social feeds. where Zero purge infrastructure needed; automatically bounds staleness to seconds while still absorbing flash spikes..",
-        "**How to Use — Engineering Implementation**: A CDN's cache hit ratio (CHR) depends on strict Cache Key normalization. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
+        "**Where to Use: High-Impact Scenarios**: Optimal for E-commerce product catalogs, CMS/news publishing, and media metadata APIs, suited for environments requiring Maximizes cache hit ratio (99%+) and shields origin completely until data actually mutates.",
+        "**Where to Use: High-Throughput Scenarios**: Recommended for Live sports scores, stock tickers, flash-sale inventory counters, and high-fanout social feeds, where Zero purge infrastructure needed; automatically bounds staleness to seconds while still absorbing flash spikes.",
+        "**How to Use: Engineering Implementation**: A CDN's cache hit ratio (CHR) depends on strict Cache Key normalization. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
         "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
       ]
     },
     {
       "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "While essential for scalable engineering, cdn introduces substantial architectural trade-offs, operational failure modes, and anti-patterns if applied inappropriately:",
+      "body": "Improper implementation of CDN introduces operational bottlenecks and failure modes:",
       "bullets": [
-        "**Where to Avoid — Trade-Off Bottlenecks**: Avoid when constraints impose requires reliable cdc/webhook integration to trigger tag purges; risk of stale data if a purge webhook fails.",
-        "**Where to Avoid — Complexity Ceiling**: Avoid premature optimization when higher steady-state origin traffic for long-tail items with infrequent requests.",
+        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: requires reliable cdc/webhook integration to trigger tag purges; risk of stale data if a purge webhook fails.",
+        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: higher steady-state origin traffic for long-tail items with infrequent requests.",
         "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
         "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
       ]
     },
     {
       "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Mastering cdn is a defining trait of Staff-level distributed systems engineers. Navigating the delicate balance between performance, reliability, and simplicity ensures architectures scale sustainably without introducing unmanageable operational friction.",
+      "body": "Technical guidelines and evaluation criteria for CDN:",
       "bullets": [
         "**Staff+ Golden Rule**: Immutable content-addressed asset URLs (`app.8f92a.js`) paired with `stale-while-revalidate` and surrogate keys provide instant cache invalidation without origin load spikes.",
         "**Staff+ Interview Playbook**: Mention **Micro-Caching** (`s-maxage=5, stale-while-revalidate=10` with Request Coalescing) in interviews: even a 5-second CDN cache on a dynamic endpoint reduces a 100,000 RPS flash-crowd spike down to 1 request every 5 seconds at your origin!"

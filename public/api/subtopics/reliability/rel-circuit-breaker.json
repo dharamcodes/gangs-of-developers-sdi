@@ -13,25 +13,25 @@
     "Requires a minimum request volume threshold (`minimumNumberOfCalls`) in the sliding window before tripping to avoid false positives at low QPS.",
     "Failing fast in `OPEN` state protects caller thread pools and relieves load on the struggling downstream service."
   ],
-  "architectureDiagram": "                  [ Failure Rate >= 50% (over min 20 calls) ]\n          +---------------------------------------------------------+\n          |                                                         v\n+--------------------+                                    +--------------------+\n|       CLOSED       |                                    |        OPEN        |\n| (Calls pass thru)  |                                    | (Fail fast / Cache)|\n+--------------------+                                    +--------------------+\n          ^                                                         |\n          |       +--------------------+                            |\n          +-------|     HALF-OPEN      | <--------------------------+\n    [ N Probes    | (Allow N trial reqs|      [ Wait Duration Elapsed (e.g. 15s) ]\n      Succeed ]   |  Fail -> back OPEN)|\n                  +--------------------+",
+  "architectureDiagram": "[ Failure Rate >= 50% (over min 20 calls) ]\n          +---------------------------------------------------------+\n          |                                                         v\n+--------------------+                                    +--------------------+\n|       CLOSED       |                                    |        OPEN        |\n| (Calls pass thru)  |                                    | (Fail fast / Cache)|\n+--------------------+                                    +--------------------+\n          ^                                                         |\n          |       +--------------------+                            |\n          +-------|     HALF-OPEN      | <--------------------------+\n    [ N Probes    | (Allow N trial reqs|      [ Wait Duration Elapsed (e.g. 15s) ]\n      Succeed ]   |  Fail -> back OPEN)|\n                  +--------------------+",
   "sections": [
     {
       "heading": "1. Architectural Fundamentals & Core Mechanics",
-      "body": "Circuit Breaker is a foundational architectural concept in distributed systems. State machine that short-circuits calls to failing dependencies so they can recover and callers fail fast. Fundamentally, When a downstream service is completely down or experiencing severe latency degradation, continuing to send requests—even with a 1-second timeout—ties up caller threads for 1 full second per request and bombards the recovering service. Modeled after electrical breakers, a **Circuit Breaker** monitors a sliding window of recent outcomes (errors and slow calls). When the failure or slow-call rate breaches a threshold, the breaker trips to `OPEN` and rejects all calls in sub-microsecond time without touching the network.",
+      "body": "When a downstream service is completely down or experiencing severe latency degradation, continuing to send requests, even with a 1-second timeout, ties up caller threads for 1 full second per request and bombards the recovering service. Modeled after electrical breakers, a **Circuit Breaker** monitors a sliding window of recent outcomes (errors and slow calls). When the failure or slow-call rate breaches a threshold, the breaker trips to `OPEN` and rejects all calls in sub-microsecond time without touching the network.",
       "bullets": [
         "**Core Architectural Principle**: A Circuit Breaker wraps outbound calls in a three-state machine: `CLOSED` (normal), `OPEN` (short-circuit fail fast), and `HALF-OPEN` (trial probes).",
         "**Problem Space & Invariants**: Requires a minimum request volume threshold (`minimumNumberOfCalls`) in the sliding window before tripping to avoid false positives at low QPS.",
         "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
       ],
       "diagramImageUrl": "/diagrams/arch-circuit-breaker.svg",
-      "asciiDiagram": "                  [ Failure Rate >= 50% (over min 20 calls) ]\n          +---------------------------------------------------------+\n          |                                                         v\n+--------------------+                                    +--------------------+\n|       CLOSED       |                                    |        OPEN        |\n| (Calls pass thru)  |                                    | (Fail fast / Cache)|\n+--------------------+                                    +--------------------+\n          ^                                                         |\n          |       +--------------------+                            |\n          +-------|     HALF-OPEN      | <--------------------------+\n    [ N Probes    | (Allow N trial reqs|      [ Wait Duration Elapsed (e.g. 15s) ]\n      Succeed ]   |  Fail -> back OPEN)|\n                  +--------------------+"
+      "asciiDiagram": "[ Failure Rate >= 50% (over min 20 calls) ]\n          +---------------------------------------------------------+\n          |                                                         v\n+--------------------+                                    +--------------------+\n|       CLOSED       |                                    |        OPEN        |\n| (Calls pass thru)  |                                    | (Fail fast / Cache)|\n+--------------------+                                    +--------------------+\n          ^                                                         |\n          |       +--------------------+                            |\n          +-------|     HALF-OPEN      | <--------------------------+\n    [ N Probes    | (Allow N trial reqs|      [ Wait Duration Elapsed (e.g. 15s) ]\n      Succeed ]   |  Fail -> back OPEN)|\n                  +--------------------+"
     },
     {
       "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "In production distributed systems, circuit breaker manifests across several distinct architectural classifications, operational modes, and implementation strategies:",
+      "body": "Distributed architectures apply specific implementation patterns and topologies for Circuit Breaker:",
       "bullets": [
-        "**Local Per-Pod In-Memory Circuit Breaker (Resilience4j / Envoy)**: Focuses on zero external coordination latency; resilient even if redis/control plane is down. Best suited for 99% of production microservice deployments and service mesh sidecars..",
-        "**Distributed Shared Circuit Breaker (Redis-Backed)**: Focuses on instantaneous fleet-wide protection once aggregate failure threshold is crossed. Best suited for Protecting strict external third-party API quotas across hundreds of ephemeral serverless workers..",
+        "**Local Per-Pod In-Memory Circuit Breaker (Resilience4j / Envoy)**: Provides zero external coordination latency; resilient even if redis/control plane is down. Best suited for 99% of production microservice deployments and service mesh sidecars.",
+        "**Distributed Shared Circuit Breaker (Redis-Backed)**: Provides instantaneous fleet-wide protection once aggregate failure threshold is crossed. Best suited for Protecting strict external third-party API quotas across hundreds of ephemeral serverless workers.",
         "**CLOSED**: Requests flow normally. A ring buffer or sliding time window tracks error rate and slow-call rate.",
         "**OPEN**: All calls immediately throw `CircuitBreakerOpenError` or invoke a fallback (e.g., stale cache). A cooldown timer (`waitDurationInOpenState`) runs.",
         "Scope circuit breakers per `(service, endpoint_group)` or per downstream shard/AZ rather than globally.",
@@ -44,27 +44,27 @@
     },
     {
       "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Adopting appropriate design patterns around circuit breaker unlocks critical performance, scalability, and operational advantages for modern backend platforms:",
+      "body": "Production deployments apply Circuit Breaker across targeted operational scenarios:",
       "bullets": [
-        "**Where to Use — High-Impact Scenarios**: Optimal for 99% of production microservice deployments and service mesh sidecars. and environments requiring Zero external coordination latency; resilient even if Redis/control plane is down..",
-        "**Where to Use — High-Throughput Scenarios**: Recommended for Protecting strict external third-party API quotas across hundreds of ephemeral serverless workers. where Instantaneous fleet-wide protection once aggregate failure threshold is crossed..",
-        "**How to Use — Engineering Implementation**: A poorly scoped circuit breaker can cause wider outages than the bug it tries to contain. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
+        "**Where to Use: High-Impact Scenarios**: Optimal for 99% of production microservice deployments and service mesh sidecars, suited for environments requiring Zero external coordination latency; resilient even if Redis/control plane is down.",
+        "**Where to Use: High-Throughput Scenarios**: Recommended for Protecting strict external third-party API quotas across hundreds of ephemeral serverless workers, where Instantaneous fleet-wide protection once aggregate failure threshold is crossed.",
+        "**How to Use: Engineering Implementation**: A poorly scoped circuit breaker can cause wider outages than the bug it tries to contain. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
         "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
       ]
     },
     {
       "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "While essential for scalable engineering, circuit breaker introduces substantial architectural trade-offs, operational failure modes, and anti-patterns if applied inappropriately:",
+      "body": "Improper implementation of Circuit Breaker introduces operational bottlenecks and failure modes:",
       "bullets": [
-        "**Where to Avoid — Trade-Off Bottlenecks**: Avoid when constraints impose each of n caller pods must independently experience failures before opening its local breaker.",
-        "**Where to Avoid — Complexity Ceiling**: Avoid premature optimization when adds network hop to every rpc call and creates a single point of failure on the redis cluster.",
+        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: each of n caller pods must independently experience failures before opening its local breaker.",
+        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: adds network hop to every rpc call and creates a single point of failure on the redis cluster.",
         "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
         "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
       ]
     },
     {
       "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Mastering circuit breaker is a defining trait of Staff-level distributed systems engineers. Navigating the delicate balance between performance, reliability, and simplicity ensures architectures scale sustainably without introducing unmanageable operational friction.",
+      "body": "Technical guidelines and evaluation criteria for Circuit Breaker:",
       "bullets": [
         "**Staff+ Golden Rule**: Failing fast in `OPEN` state protects caller thread pools and relieves load on the struggling downstream service.",
         "**Staff+ Interview Playbook**: Explain how **Timeouts**, **Retries**, and **Circuit Breakers** compose together: each individual attempt has a **Timeout**, failed attempts are **Retried** with jittered backoff, and the **Circuit Breaker** wraps the calls so when the downstream is down, neither timeouts nor retries run."
