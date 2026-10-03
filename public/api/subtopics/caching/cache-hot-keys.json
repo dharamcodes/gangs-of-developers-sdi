@@ -9,49 +9,51 @@
   "readingTime": "8 min read",
   "difficulty": "Staff+",
   "keyTakeaways": [
-    "Even though a Redis Cluster scales horizontally across 100 shards, any single key (`celebrity:post:99`) hashes to exactly ONE Redis primary node (and its replicas).",
-    "A single Redis process is single-threaded for command execution and tops out around ~100k–150k RPS; a 1M RPS hot key will saturate that one shard's CPU and NIC.",
-    "Solve Hot Keys using Local L1 In-Process Caches (with short TTL / client-side invalidation) or Key Salting/Replication (`key#1 .. key#N`) across all cluster shards."
+    "Sharding a cache horizontally provides cluster throughput, but any individual key hashes to exactly one Redis master node.",
+    "Because Redis processes commands sequentially on a single core, an extreme hot key (200k+ RPS) saturates that single shard's CPU and network interface, causing timeouts for all unrelated keys on the same node.",
+    "Mitigate hot keys using short-TTL in-process L1 caches in application memory or by salting keys across multiple cluster hash slots."
   ],
   "architectureDiagram": "THE HOT KEY PROBLEM (Shard 2 Melts)          SOLUTION: L1 LOCAL CACHE + KEY SALTING\n  1,000,000 RPS for 'viral_post_1'             [App Pods: L1 Cache (2s TTL) absorbs 99%]\n                 |                                                |\n      +----------+----------+                        (Salted Key: 'viral_post_1#' + rand(1..10))\n      |          |          |                                     |\n      v          v          v                        +------------+------------+\n  [Shard 1]  [Shard 2]  [Shard 3]                    v            v            v\n   (5% CPU)  (100% CPU)  (4% CPU)                [Shard 1]    [Shard 2]    [Shard 3]\n             (THROTTLED!)                       (viral#1..3) (viral#4..6) (viral#7..10)",
   "sections": [
     {
-      "heading": "Why Sharding Doesn't Save You From Hot Keys",
-      "body": "In a distributed cache (Redis Cluster or Memcached), consistent hashing or CRC16 hash slots map each key to a specific shard. If a flash sale item, Taylor Swift ticket drop, or viral tweet generates 800,000 reads/sec for a single key, 100% of those requests land on a single Redis shard. Because Redis executes commands on a single main event-loop thread, that shard hits 100% CPU, causing timeouts for every other unrelated key that happens to live on the same shard!",
+      "heading": "The Single-Shard Saturation Trap",
+      "body": "Horizontal scaling solves uniform data distribution, not skewed access patterns. In Redis Cluster, CRC16 hashing assigns each key to one of 16,384 slots mapped across master nodes. When a celebrity tweet, flash-sale SKU, or emergency notification goes viral, traffic doesn't spread across your cluster. It funnels into a single thread on a single machine. Once that thread caps out at 100% CPU, latency spikes, and every other key assigned to that shard begins timing out.",
       "bullets": [
-        "Detection (`redis-cli --hotkeys` & Count-Min Sketch): Track key access frequencies in the client SDK or proxy using a lightweight probabilistic Count-Min Sketch to dynamically detect keys exceeding 5,000 RPS.",
-        "Solution 1: L1 In-Process Memory Cache: Cache hot keys directly inside the application pod's RAM (e.g., Caffeine/LRU with a 1–3 second TTL or Redis RESP3 Client-Side Tracking). 100 app pods can serve 5,000,000 RPS from local RAM with 0 network hops!",
-        "Solution 2: Key Salting / Key Replication: Append a random suffix `1..N` (`viral_post_1#shard_7`) when writing hot keys so copies are distributed across N different hash slots in the Redis cluster."
+        "Hot Key Detection: Use client-side probabilistic sketches (such as Count-Min Sketch in an Envoy proxy or client SDK) or Redis's native `redis-cli --hotkeys` to detect keys exceeding safe traffic thresholds (e.g., >5,000 RPS).",
+        "L1 In-Process Memory Cache: Place a high-speed local LRU cache (e.g. Caffeine or Go Ristretto) inside application pods with a 1–2 second TTL. If you run 80 application pods, an L1 cache absorbs 98% of reads in local RAM with zero network round trips.",
+        "Key Salting (Replication Across Shards): Append a pseudo-random suffix (`item:42#shard_{0..15}`) when writing the key. Writers update all 16 replicas, and readers query a random salt shard, spreading 400,000 RPS across 16 different Redis cluster nodes."
       ],
       "codeSnippet": {
         "title": "Dynamic Hot-Key Salting & L1 Tiered Cache Reader",
         "code": "const HOT_KEY_REPLICA_COUNT = 16;\n\nasync function getHotKeyResilient(baseKey: string, isHotKey: boolean): Promise<string | null> {\n  // Tier 1: Check ultra-fast in-process L1 LRU cache (TTL: 2000ms)\n  const l1Hit = localL1Cache.get(baseKey);\n  if (l1Hit !== undefined) return l1Hit;\n\n  // Tier 2: If flagged as Hot Key by Count-Min Sketch, spread read across 16 hash slots\n  const targetKey = isHotKey\n    ? `${baseKey}:replica_${Math.floor(Math.random() * HOT_KEY_REPLICA_COUNT)}`\n    : baseKey;\n\n  const val = await redisCluster.get(targetKey);\n  if (val && isHotKey) {\n    localL1Cache.set(baseKey, val, { ttl: 2000 });\n  }\n  return val;\n}"
-      }
+      },
+      "diagramImageUrl": "/diagrams/arch-cache-hot-keys.svg"
     },
     {
-      "heading": "Coordinating Writes & Invalidations for Salted Keys",
-      "body": "While salting a hot key (`key#0` through `key#15`) scales read throughput by 16x across the Redis cluster, it amplifies writes and invalidations by 16x. Therefore, you should only salt keys that are dynamically detected as hot or known a priori to be broadcast keys.",
+      "heading": "Trade-offs in Key Salting and Invalidation Coordination",
+      "body": "Key salting scales read throughput linearly with the number of shards, but it introduces operational costs on the write and invalidation paths.",
       "bullets": [
-        "Hash Tags Caveat in Redis Cluster: Recall that in Redis Cluster, `{user123}:profile` hashes only the substring inside `{}`. When salting a hot key to spread across shards, do NOT wrap the base key in `{}` braces, or all 16 copies will still map to the exact same hash slot!",
-        "Read Replicas Per Shard: Adding 3 read replicas to each Redis shard gives a 4x read multiplier, which helps moderate hot keys but is often insufficient for 100x viral spikes compared to L1 caching.",
-        "Redis RESP3 Client-Side Caching (Broadcast Mode): Application nodes subscribe to invalidation prefixes; Redis pushes an invalidate message to pods immediately whenever the hot key changes."
+        "Write & Invalidation Amplification: Salting across 16 shards means every write or `DEL` must execute 16 separate network calls. Salting should only be activated for dynamically identified hot keys, never for the entire keyspace.",
+        "Avoid Hash Tag Trap in Redis Cluster: In Redis Cluster, any text inside curly braces `{...}` forces keys into the same hash slot. Writing `{item:42}#1` through `{item:42}#16` would defeat the purpose entirely by routing all 16 copies to the same physical node!",
+        "Redis Client-Side Caching (RESP3): Using Redis 6+ tracking mode, the server proactively broadcasts invalidation messages to connected application nodes whenever tracked keys change, keeping L1 memory in sync without aggressive polling."
       ]
     }
   ],
   "tradeOffs": [
     {
       "option": "Tiered L1 In-Process Cache (App RAM) + L2 Redis",
-      "pros": "Eliminates network hops completely; scales linearly with the number of stateless app pods.",
-      "cons": "Consumes app pod heap memory; short 1–2s staleness window unless using RESP3 client tracking.",
-      "bestFor": "Read-heavy viral content, feature flags, celebrity profiles, and flash-sale product metadata."
+      "pros": "Zero network hops; read throughput scales directly with the number of stateless application pods.",
+      "cons": "Consumes application heap memory and introduces a brief staleness window unless using RESP3 invalidation broadcasts.",
+      "bestFor": "Celebrity profiles, trending hashtags, flash-sale catalogs, and global feature toggles."
     },
     {
-      "option": "Salted / Replicated Keys across Redis Shards (`key#1..N`)",
-      "pros": "Spreads network and CPU load evenly across all Redis Cluster nodes without app heap overhead.",
-      "cons": "Writes and invalidations must fan out to all N salted copies.",
-      "bestFor": "Large cached payloads or counters shared across thousands of short-lived serverless workers."
+      "option": "Key Salting Across Cluster Shards (`key#1..N`)",
+      "pros": "Spreads CPU and network load across the Redis Cluster without increasing application memory footprint.",
+      "cons": "Multiplies write operations and invalidation fan-out by N.",
+      "bestFor": "Large cached blobs or counters queried by thousands of ephemeral serverless functions without local disk/memory continuity."
     }
   ],
-  "interviewTip": "In any high-scale interview (Twitter, TikTok, Ticketmaster, Flash Sale), explicitly bring up the 'Redis Hot Key single-shard bottleneck' and propose a local in-process L1 cache (1-2s TTL) + Count-Min Sketch hot-key detector.",
-  "jsonUrl": "/api/subtopics/caching/cache-hot-keys.json"
+  "interviewTip": "During high-scale system design interviews, bring up the single-shard hot key bottleneck unprompted, and explain how an in-process L1 cache (1–2s TTL) prevents single-thread CPU starvation.",
+  "jsonUrl": "/api/subtopics/caching/cache-hot-keys.json",
+  "diagramImageUrl": "/diagrams/arch-cache-hot-keys.svg"
 }

@@ -16,19 +16,19 @@
       "readingTime": "8 min read",
       "difficulty": "Foundational",
       "keyTakeaways": [
-        "In Cache-Aside (Lazy Loading), the application orchestrates both the cache and the database: on a cache miss, it reads from the DB, populates the cache, and returns the data.",
-        "On a write, the application should update the database first and then DELETE (invalidate) the cache key, rather than updating the cache, to avoid out-of-order write races.",
-        "Cache-Aside is resilient to cache cluster failures: if Redis goes down, requests fall back to the database (though circuit breakers/rate limiters are needed to prevent DB overload)."
+        "In Cache-Aside, the application owns the coordination between cache and database: on a miss, it reads from the database, populates the cache, and returns the payload.",
+        "Always delete (invalidate) the cache key on writes rather than overwriting it; concurrent writers with out-of-order network latency will permanently poison the cache with stale data.",
+        "Protect against cold starts and cache penetration by applying negative caching with short TTLs and jittered expirations."
       ],
       "architectureDiagram": "                     CACHE-ASIDE READ & WRITE FLOW\nREAD PATH (Cache Miss):                      WRITE PATH (Invalidate on Write):\n  [App Server] -- 1. GET key --> [Redis]       [App Server] -- 1. UPDATE row -> [Database]\n       |         (Miss: nil)                     |                              |\n       +--------- 2. SELECT ---> [Database]      +------------ 2. DEL key ----> [Redis]\n       |         (Returns row)                   (Next read will lazy-load fresh value)\n       +--------- 3. SETEX ----> [Redis]",
       "sections": [
         {
           "heading": "Why Delete-on-Write Beats Update-on-Write",
-          "body": "A common mistake in Cache-Aside is updating the cache after updating the database. If Request A and Request B concurrently update the same row, Request A might write to the DB first, then Request B writes to the DB second, but due to network jitter Request B updates Redis first and Request A updates Redis second, leaving Redis permanently poisoned with stale data until TTL expiry. Deleting the cache key (`DEL`) forces the next reader to fetch the authoritative row from the database.",
+          "body": "Adding Redis fixed our query latency. It also created an invalidation race that silently served stale data for hours. The classic mistake is updating the cache after writing to the database: if Writer A commits first and Writer B commits second, but network jitter causes Writer B's cache write to land before Writer A's, the cache gets permanently poisoned with Writer A's older state until the TTL expires. Deleting the cache key (`DEL`) instead of overwriting it changes the equation: the next reader is forced to hit the source of truth.",
           "bullets": [
-            "Only Requested Data is Cached: Keeps cache memory utilization focused purely on the active working set.",
-            "Read/Write Race Condition: Even with `DEL` on write, a tiny race exists where a concurrent reader experiences a cache miss before a write commits, reads the old DB value, and populates Redis after the writer's `DEL`. Use `SET ... NX` with short TTLs or Leases (Memcached `gets/cas`) to mitigate.",
-            "Cold Start Penalty: Brand-new or flushed caches experience 100% miss rates initially; warm critical keys proactively before shifting production traffic."
+            "Only Requested Data is Cached: Memory consumption scales with the active working set rather than the total size of your database tables.",
+            "The Stale-Set Race: A subtle race still exists if Reader A misses the cache, reads old DB data, Writer B updates the DB and deletes the key, and Reader A belatedly populates Redis with the old value. Mitigate this with short TTLs, version tokens, or Memcached lease checks.",
+            "Cold Start Reality: A freshly flushed cache drops your hit rate to 0%, funneling all initial requests to the database. Pre-warm high-traffic keys before routing production traffic."
           ],
           "codeSnippet": {
             "title": "Production Cache-Aside Implementation with Negative Caching",
@@ -38,29 +38,29 @@
         },
         {
           "heading": "Cache Penetration & Negative Caching",
-          "body": "If a malicious client or bug repeatedly requests non-existent IDs (e.g., `user_id = -1` or random UUIDs), every request misses the cache and hits the database directly, known as Cache Penetration. You can defend against this in two ways.",
+          "body": "If a buggy client or malicious crawler repeatedly queries IDs that do not exist (like `user_id = -1` or random UUIDs), every single request misses the cache and punches straight through to the database. This is cache penetration, and under moderate concurrency it exhausts connection pools.",
           "bullets": [
-            "Negative Caching: Store a sentinel value (`\"__NULL__\"`) in Redis with a short TTL (e.g., 30–60 seconds) when the DB returns 0 rows.",
-            "Bloom Filter Prefix Guard: Maintain a compact Bloom filter of all valid entity IDs; reject requests for IDs not present in the Bloom filter before querying Redis or the DB.",
-            "Schema Versioning in Keys: Prefix keys with a schema version (`user:profile:v2:{id}`) so deployments with breaking serialization changes never collide with old cached payloads."
+            "Negative Caching: When the database returns zero rows, write a sentinel value (`\"__NULL__\"`) to Redis with a short TTL (30–60 seconds) so subsequent queries return `null` in sub-millisecond time without touching disk.",
+            "Bloom Filter Front Guard: Store valid entity keys in an in-memory Bloom filter at the application or proxy layer. If the Bloom filter returns false, reject the lookup immediately before calling Redis or the database.",
+            "Schema Versioning in Key Namespaces: Prefix keys with a version tag (`user:profile:v2:{id}`) so deployments introducing breaking schema changes never deserialize incompatible cached payloads."
           ]
         }
       ],
       "tradeOffs": [
         {
-          "option": "Cache-Aside (Lazy Loading)",
-          "pros": "Simple to reason about; caches only requested data; decoupled data model from DB schema.",
-          "cons": "First read always suffers a cache-miss latency penalty (3 network hops).",
-          "bestFor": "General-purpose read-heavy APIs, user profiles, product catalogs, and CMS pages."
+          "option": "Cache-Aside (Lazy Loading with Invalidation)",
+          "pros": "Simple to reason about; stores only the active working set; decoupled from database schema.",
+          "cons": "Every cache miss incurs a three-network-hop latency penalty (App -> Cache -> DB -> Cache).",
+          "bestFor": "Read-heavy general-purpose APIs, user profiles, and product catalogs."
         },
         {
-          "option": "Pre-Warming / Eager Cache Population",
-          "pros": "Zero cache-miss latency penalty for users; guarantees predictable p99 read latency.",
-          "cons": "Wastes RAM caching items that may never be read; requires background sync pipelines.",
-          "bestFor": "Homepage featured items, feature flags, and celebrity social media posts."
+          "option": "Proactive Pre-Warming",
+          "pros": "Guarantees low p99 read latency on initial user requests with zero cold-miss penalty.",
+          "cons": "Consumes memory for records that may never be read; requires dedicated warming workers.",
+          "bestFor": "Flash sale landing pages, platform configuration flags, and scheduled campaign launches."
         }
       ],
-      "interviewTip": "Always specify that on a write in Cache-Aside, you update the DB first and then DELETE the cache entry (not update it), and mention adding random jitter to TTLs.",
+      "interviewTip": "Always emphasize deleting the cache key instead of updating it on DB writes, and mention adding negative caching with TTL jitter to protect backing databases from penetration and stampedes.",
       "jsonUrl": "/api/subtopics/caching/cache-aside.json",
       "diagramImageUrl": "/diagrams/arch-cache-aside.svg"
     },
@@ -75,19 +75,19 @@
       "readingTime": "7 min read",
       "difficulty": "Intermediate",
       "keyTakeaways": [
-        "In Read-Through and Write-Through caching, the application treats the cache provider (e.g., AWS DynamoDB Accelerator DAX, NCache) as the single main data store.",
-        "Write-Through updates both the cache and the underlying database synchronously on every write, guaranteeing strong cache-to-DB consistency.",
-        "Write-Through eliminates stale reads and cold-read misses for newly written data, at the cost of higher write latency."
+        "In Read-Through and Write-Through, the application treats the cache as the single authoritative data access layer; the cache proxy manages persistence to the database.",
+        "Write-Through updates both the cache and the backing database synchronously, guaranteeing read-your-own-writes consistency at the cost of higher write latency.",
+        "Inline caching simplifies client code but requires careful handling of partial failures when the database commit succeeds but the in-memory update is interrupted."
       ],
       "architectureDiagram": "                      READ-THROUGH & WRITE-THROUGH\n\n[Application] === 1. Write(k, v) ===> [Cache Proxy / DAX] === 2. Sync Write ===> [Database]\n[Application] <-- 4. ACK Success ---- [Cache Proxy / DAX] <-- 3. DB Commit ACK -- [Database]\n\n[Application] === 1. Read(k) =======> [Cache Proxy / DAX] --- (If Miss: Load) -> [Database]",
       "sections": [
         {
-          "heading": "How Read-Through and Write-Through Work Together",
-          "body": "Unlike Cache-Aside, where application code explicitly talks to both Redis and PostgreSQL, Read-Through and Write-Through delegate storage coordination to an inline cache layer or data-access library. On a read miss, the cache provider itself loads the record from the backing database, stores it, and returns it. On a write, the cache updates its in-memory state and synchronously writes through to the database before acknowledging success.",
+          "heading": "Moving Cache Coordination Behind a Storage Facade",
+          "body": "When application services handle cache coordination directly, every engineer writes cache-aside slightly differently: some forget TTLs, some update instead of deleting, and others skip error handling. Read-Through and Write-Through push this responsibility down into a specialized caching proxy (like AWS DynamoDB Accelerator DAX, Hazelcast MapStore, or an ORM interceptor). To the application, it looks like a single fast database.",
           "bullets": [
-            "Clean Application Code: Business logic interacts with a single unified storage interface rather than juggling cache invalidation logic.",
-            "Always Warm After Write: Newly created or updated records are immediately present in the cache, preventing read-after-write cache misses.",
-            "Real-World Examples: Amazon DynamoDB Accelerator (DAX), Hazelcast Read/Write-Through MapStore, and CDNs acting as read-through caches in front of S3 origins."
+            "Decoupled Application Logic: The calling service simply calls `get(id)` and `set(id, data)`. The caching layer encapsulates connection pooling, serialization, and database queries.",
+            "Eliminating Read-After-Write Misses: Because the cache is updated before the write call returns, immediately following read requests hit warm cache memory instead of triggering a cold DB read.",
+            "Production Implementations: Managed storage proxies like AWS DAX or embedded cache layers like Ehcache and Hazelcast implement this pattern natively."
           ],
           "codeSnippet": {
             "title": "Write-Through Wrapper with Distributed Lock / Version Guard",
@@ -96,30 +96,30 @@
           "diagramImageUrl": "/diagrams/arch-cache-read-write-through.svg"
         },
         {
-          "heading": "Handling Partial Failures & Cache Pollution",
-          "body": "The main downside of Write-Through is two-fold: first, every write pays the latency of both the database and the cache; second, write-once data (like audit logs or rarely viewed records) pollutes the cache memory and evicts hot read items unless a TTL or write-around policy is applied.",
+          "heading": "Write Latency Penalty and Cache Pollution",
+          "body": "The catch with Write-Through is operational efficiency. Every single write must pay the latency tax of both an in-memory mutation and a durable disk write over the network. If your application ingests high-volume write-once records—such as event logs, clickstream events, or status pings—Write-Through wastes precious cache memory on data that no client will ever read again.",
           "bullets": [
-            "Write-Around Hybrid: Write infrequent/bulk data directly to the DB (bypassing cache) and let Read-Through populate only items that are actually read.",
-            "Dual-Write Atomicity: If implementing Write-Through in application code without a managed proxy, use a conditional version check (Lua script) so concurrent writers never overwrite a newer cached version with an older one.",
-            "Read-Your-Own-Writes Guarantee: Because the write is already in the cache before returning to the user, subsequent reads hitting the cache see the update immediately."
+            "Write-Around Strategy: Bypass the cache entirely for write-once or bulk data imports, writing directly to the database. Let Read-Through lazy-load only records that are actively requested by users.",
+            "Dual-Write Race Conditions: If the cache proxy runs across multiple distributed nodes without distributed locking, concurrent writes can arrive out of order. Enforce monotonic version checks or database change sequence numbers.",
+            "Failure Boundary: If the backing database slows down or locks rows, the cache proxy's worker pool backs up, propagating latency all the way to the API edge."
           ]
         }
       ],
       "tradeOffs": [
         {
-          "option": "Write-Through Caching",
-          "pros": "Cache is never stale after a write; immediate read-your-writes consistency; zero cold-read miss.",
-          "cons": "Higher write latency (sync DB + Cache write); pollutes cache with data that may never be read again.",
-          "bestFor": "User session state, active shopping carts, and managed caches like DynamoDB DAX."
+          "option": "Write-Through Inline Caching",
+          "pros": "Cache is always fresh; immediate read-your-own-writes consistency; eliminates cold-read penalties for new entities.",
+          "cons": "Higher write latency from synchronous double-writes; risks evicting hot read keys with unread write-heavy payloads.",
+          "bestFor": "User session state, active checkout carts, and managed database accelerators like DynamoDB DAX."
         },
         {
-          "option": "Cache-Aside with Delete-on-Write",
-          "pros": "Faster writes; never wastes cache memory on unread writes; works with any custom SQL query.",
-          "cons": "Next read after a write always incurs a cache miss and DB fetch.",
-          "bestFor": "General microservice architectures where read shapes differ from write entities."
+          "option": "Write-Around with Cache-Aside",
+          "pros": "Lower write latency; avoids cache pollution by storing only records that users actually request.",
+          "cons": "The first read of newly written data always incurs a database round trip.",
+          "bestFor": "Analytics event streams, audit logs, and archival batch operations."
         }
       ],
-      "interviewTip": "Contrast Cache-Aside with Write-Through by asking: 'Will this newly written item be read immediately by thousands of users?' If yes (e.g., a breaking news article or live sports score), Write-Through prevents a cache miss storm on the database.",
+      "interviewTip": "Distinguish Write-Through from Cache-Aside by asking: 'Does this newly written record need to be read immediately by thousands of concurrent users?' If yes, Write-Through eliminates the initial cache-miss stampede.",
       "jsonUrl": "/api/subtopics/caching/cache-read-write-through.json",
       "diagramImageUrl": "/diagrams/arch-cache-read-write-through.svg"
     },
@@ -134,51 +134,53 @@
       "readingTime": "8 min read",
       "difficulty": "Advanced",
       "keyTakeaways": [
-        "Write-Behind (Write-Back) acknowledges writes immediately after updating the fast in-memory cache, queuing persistence to the database asynchronously.",
-        "Multiple rapid updates to the same key within the flush window are coalesced into a single database `UPDATE`, drastically reducing DB IOPS.",
-        "Because the cache holds uncommitted dirty data before it reaches the DB, node crashes can cause permanent data loss unless backed by replicated WAL/streams."
+        "Write-Behind (Write-Back) acknowledges writes immediately after updating fast in-memory storage, delegating disk persistence to asynchronous background flushers.",
+        "Write coalescing merges thousands of rapid mutations to the same key into a single bulk database update, dropping database IOPS by multiple orders of magnitude.",
+        "The core trade-off is durability: uncommitted dirty data in the cache is vulnerable to node crashes unless backed by replicated append-only logs or write streams."
       ],
       "architectureDiagram": "                       WRITE-BEHIND (WRITE-BACK) PIPELINE\n\n[Clients] -- 100k Writes/sec --> [Redis / In-Memory Cache] (1. Immediate ACK < 1ms)\n                                            |\n                                  (2. Dirty Key Queue /\n                                   Write Coalescing Window: 5s)\n                                            |\n                                            v\n                                 [Async Batch Flusher Worker]\n                                            |\n                                  (3. Bulk Upsert: 500 rows/batch)\n                                            v\n                                   [PostgreSQL / MySQL]",
       "sections": [
         {
-          "heading": "Write Coalescing & Batch Persistence",
-          "body": "Imagine a viral video receiving 50,000 view increments per second. Executing 50,000 individual `UPDATE videos SET views = views + 1` statements per second against PostgreSQL will saturate row locks and WAL I/O. With Write-Behind, each view increments a Redis counter (`HINCRBY`) and records the `video_id` in a dirty set. Every 5 seconds, a background worker drains the dirty set and executes a single bulk `UPDATE` statement in PostgreSQL.",
+          "heading": "Write Coalescing to Protect Database Disk I/O",
+          "body": "At 50,000 requests per second, row-level locks on relational tables turn writes into a serialized bottleneck. If 50,000 users click like or watch a video within a 5-second window, writing directly to Postgres means 250,000 individual transactions. Write-Behind turns this upside down: the application increments an in-memory Redis counter, tags the entity ID as dirty, and returns HTTP 200 in sub-millisecond time. A background batch worker wakes up every 5 seconds, drains the dirty delta, and issues a single bulk update.",
           "bullets": [
-            "Massive Write Compression: 250,000 increments to 100 videos over 5 seconds collapse into a single SQL batch update of 100 rows!",
-            "Sub-Millisecond Write Latency: Clients only wait for an in-memory RAM operation, isolating user latency from database load spikes.",
-            "CPU & OS Page Cache Analogy: Linux OS page cache and CPU L1/L2 caches use Write-Back natively, marking pages with a 'dirty bit' and flushing asynchronously."
+            "Orders-of-Magnitude IOPS Reduction: 250,000 point updates collapse into a single batched SQL statement modifying a handful of rows.",
+            "Isolating Client Latency: Callers never wait on database lock acquisition, disk flush, or replication lag; latency remains tied strictly to network and RAM.",
+            "The Operating System Precedent: This is the exact pattern the Linux OS uses with dirty pages in the page cache, deferring disk sync (`fsync`) to background flush daemons."
           ],
           "codeSnippet": {
             "title": "Atomic Write-Behind Coalescing with Redis Lua & Batch Flush",
             "code": "// 1. Fast Write Path: Increment counter and mark entity dirty atomically\nasync function recordVideoView(videoId: string): Promise<void> {\n  await redis.multi()\n    .hincrby('video:views:delta', videoId, 1)\n    .sadd('video:views:dirty_ids', videoId)\n    .exec();\n}\n\n// 2. Background Worker (runs every 5s): Drain delta atomically & bulk-flush to DB\nconst luaDrain = `\n  local delta = redis.call('HGET', 'video:views:delta', ARGV[1])\n  if delta then\n    redis.call('HDEL', 'video:views:delta', ARGV[1])\n    redis.call('SREM', 'video:views:dirty_ids', ARGV[1])\n  end\n  return delta\n`;"
-          }
+          },
+          "diagramImageUrl": "/diagrams/arch-cache-write-behind.svg"
         },
         {
-          "heading": "Durability Risks & Failure Recovery",
-          "body": "Because Write-Behind violates strict ACID durability by acknowledging writes before they hit persistent disk, engineers must carefully bound the blast radius of a cache node failure.",
+          "heading": "Bounded Data Loss and Crash Recovery",
+          "body": "The reason engineers don't use Write-Behind everywhere is simple: it violates ACID durability (the 'D'). Acknowledge first and persist later means any failure between the two introduces data loss. The operational task is bounding that loss window.",
           "bullets": [
-            "Redis AOF + Replication: Configure Redis with `appendfsync everysec` and a replica, or push mutations onto a durable Kafka topic alongside the Redis update.",
-            "Idempotent Retry Handling: If the batch worker crashes after updating the DB but before clearing the Redis delta, a naive retry would double-count. Store a flush batch ID or flush absolute snapshots rather than blind deltas where possible.",
-            "Backpressure Protection: If the backing database goes down for maintenance, dirty keys will accumulate in Redis RAM; enforce a max memory threshold that degrades gracefully."
+            "Durability Guardrails: Pair Redis with `appendfsync everysec` and active replication, or dual-publish mutations to an append-only stream (like Kafka) alongside memory updates.",
+            "Idempotent Retry Handling: If the flusher commits to Postgres but crashes before evicting the dirty delta from Redis, the next worker run might double-count. Write snapshots or monotonically increasing sequence values rather than raw blind increments whenever possible.",
+            "Backpressure and Memory Spikes: If the primary database suffers downtime, dirty writes accumulate in Redis RAM. Set clear memory saturation alerts and bounded queue limits to degrade gracefully instead of running the cache out of memory."
           ]
         }
       ],
       "tradeOffs": [
         {
           "option": "Write-Behind (Write-Back) Caching",
-          "pros": "Sub-millisecond write latency; orders-of-magnitude reduction in DB write IOPS via coalescing.",
-          "cons": "Window of potential data loss on cache failure; complex error recovery if DB rejects a batch.",
-          "bestFor": "View/like counters, user presence/last-seen timestamps, gaming leaderboards, and rate limiters."
+          "pros": "Sub-millisecond write latency; collapses extreme write concurrency into compact bulk database updates.",
+          "cons": "Risk of data loss if the cache node crashes before dirty entries are flushed to persistent disk.",
+          "bestFor": "View counts, telemetry ingestion, user presence status, and real-time gaming leaderboards."
         },
         {
-          "option": "Synchronous Database / Write-Through",
-          "pros": "Strict durability (RPO = 0); immediate database constraints validation.",
-          "cons": "Cannot absorb sudden 100x write spikes on hot keys without row-lock saturation.",
-          "bestFor": "Financial balances, inventory deduction, and order creation."
+          "option": "Synchronous Database Write",
+          "pros": "Zero data loss window (strict RPO = 0); immediate validation of schema constraints and foreign keys.",
+          "cons": "Directly exposes client latency to database lock contention, disk I/O bottlenecks, and connection limits.",
+          "bestFor": "Account balances, billing charges, and inventory decrement operations."
         }
       ],
-      "interviewTip": "Use Write-Behind in interviews whenever you have high-frequency, loss-tolerant mutations (like 'User Last Active Timestamp', 'Video Playback Progress', or 'Like Counters'), and explicitly mention 'write coalescing' over a 5-second window.",
-      "jsonUrl": "/api/subtopics/caching/cache-write-behind.json"
+      "interviewTip": "Whenever you encounter high-frequency, loss-tolerant metrics (such as video views or user click telemetry), propose Write-Behind with a 5-second write coalescing window to demonstrate production resource efficiency.",
+      "jsonUrl": "/api/subtopics/caching/cache-write-behind.json",
+      "diagramImageUrl": "/diagrams/arch-cache-write-behind.svg"
     },
     {
       "id": "cache-ttl",
@@ -191,51 +193,53 @@
       "readingTime": "6 min read",
       "difficulty": "Foundational",
       "keyTakeaways": [
-        "Every cached key should have an explicit Time-To-Live (TTL) as a safety net to bound maximum staleness even if active invalidation fails.",
-        "Synchronized TTLs (e.g., setting 10,000 keys with `EX 3600` during a batch job) cause a Cache Avalanche when all keys expire at the exact same second, always add random jitter.",
-        "Caches reclaim expired keys using a combination of Passive Expiry (on read access) and Active Expiry (probabilistic background sampling)."
+        "Every cached key requires an explicit Time-To-Live (TTL) to bound data staleness and prevent abandoned keys from consuming RAM indefinitely.",
+        "Fixed TTLs cause synchronized mass expirations (Cache Avalanches); applying random jitter distributes expirations smoothly over time.",
+        "Caches clean expired keys using a mix of passive checks during read access and periodic active probabilistic sampling in the background."
       ],
       "architectureDiagram": "WITHOUT JITTER (Cache Avalanche at t=3600s)    WITH RANDOM JITTER (TTL = 3600s + rand(0..600s))\nDB Load ^                                      DB Load ^\n        |          ||                                  |\n        |          ||  <-- 50k keys expire             |        . - ~ ~ - .\n        |          ||      simultaneously!             |    . '             ' .\n        +----------++---------> Time                   +-------------------------> Time\n                 3600s                                       3600s         4200s",
       "sections": [
         {
-          "heading": "How Caches Expire Keys Internally (Passive vs Active)",
-          "body": "If a Redis instance holds 50 million keys with TTLs, running a timer thread for every key would consume massive CPU. Instead, Redis combines two lightweight strategies: Passive Expiration and Active Probabilistic Expiration.",
+          "heading": "Passive vs Active Expiration Mechanics",
+          "body": "An in-memory store cannot spin up 50 million OS timers for 50 million cached keys without melting its CPU. Redis balances memory reclamation against CPU cycles by splitting expiration into two distinct mechanisms.",
           "bullets": [
-            "Passive (Lazy) Expiration: When a client executes `GET key`, Redis checks if the key's expiration timestamp has passed. If expired, it deletes the key immediately and returns `nil`. Caveat: keys that are never read again would sit in RAM forever without active expiry.",
-            "Active Probabilistic Sampling: 10 times per second, Redis samples 20 random keys from the set of keys with an associated TTL. It deletes any expired keys found. If >25% of the 20 sampled keys were expired, it repeats the loop immediately.",
-            "Stale-While-Revalidate (Soft TTL vs Hard TTL): Store both a logical 'soft expiry' timestamp inside the JSON payload (e.g., 5 mins) and a physical Redis TTL ('hard expiry', e.g., 60 mins). When a reader sees the soft TTL has passed, it immediately returns the slightly stale cached value while triggering a single background async refresh."
+            "Passive (Lazy) Expiration: Whenever a client runs `GET key`, the engine checks the key's timestamp. If expired, it removes the entry on the spot and returns `nil`. The limitation is that unread keys would linger in RAM forever without a cleanup loop.",
+            "Active Probabilistic Sampling: Ten times a second, the server samples 20 keys with TTLs at random, deletes the expired ones, and repeats immediately if more than 25% were dead. This prevents memory bloat while capping CPU usage to single-digit percentages.",
+            "Dual Expiration (Soft TTL vs Hard TTL): Store a business timestamp inside the payload alongside a longer Redis TTL. When a reader sees the soft TTL expired, it serves the cached payload immediately while queuing an asynchronous background refresh. Users see 0ms tail latency."
           ],
           "codeSnippet": {
             "title": "Jittered TTL & Soft-TTL (Stale-While-Revalidate) Pattern",
             "code": "interface CachedEnvelope<T> {\n  data: T;\n  softExpireAt: number; // Unix ms\n}\n\nasync function setWithJitterAndSoftTtl<T>(key: string, data: T, baseTtlSec: number) {\n  const jitterSec = Math.floor(Math.random() * (baseTtlSec * 0.2)); // +/- 20% jitter\n  const softTtlSec = baseTtlSec + jitterSec;\n  const hardTtlSec = softTtlSec * 2; // Keep fallback data in Redis twice as long\n\n  const envelope: CachedEnvelope<T> = {\n    data,\n    softExpireAt: Date.now() + softTtlSec * 1000\n  };\n  await redis.set(key, JSON.stringify(envelope), 'EX', hardTtlSec);\n}"
-          }
+          },
+          "diagramImageUrl": "/diagrams/arch-cache-ttl.svg"
         },
         {
-          "heading": "Preventing Cache Avalanche via TTL Jitter",
-          "body": "A Cache Avalanche occurs when a large batch of keys is populated at the same moment (for example, after a deployment, cron job, or regional failover) with an identical static TTL like `3600` seconds. Exactly one hour later, all keys vanish simultaneously, funneling 100% of read traffic onto the database.",
+          "heading": "Defending Against the Cache Avalanche",
+          "body": "Cache Avalanches usually follow large deployments, daily cron syncs, or failover events where thousands of keys are written simultaneously. Without variance in the expiration calculation, they all expire at the same tick, sending an unbuffered traffic spike to the database.",
           "bullets": [
-            "Mandatory TTL Jitter: Always compute `ttl = base_ttl + random(0, jitter_window)` on every `SET` operation to spread expirations uniformly over time.",
-            "Tiered TTLs by Volatility: Static reference data = 24h; user profile = 1h; dynamic feed counts = 30s.",
-            "Mass Expiry CPU Spike: Even in Redis, expiring millions of large keys at the exact same second can block the single-threaded event loop during active expiry; enable `lazyfree-lazy-expire yes` so memory deallocation happens on a background bio thread."
+            "Mandatory TTL Jitter: Add a random variance (`ttl = base_ttl + rand(0, jitter_range)`) to every write. A 3600-second base TTL with 10% jitter spreads expirations across a 360-second window, turning a cliff into a gentle slope.",
+            "Asynchronous Deallocation (`lazyfree-lazy-expire`): Expiring millions of large collection keys simultaneously can tie up Redis's main thread during active sampling. Setting `lazyfree-lazy-expire yes` shifts memory free calls to background IO threads.",
+            "Tiered Expiration Windows: Classify cache keys by update volatility: static configurations (24h+), user sessions (1h), and rapidly changing counters (10–30s)."
           ]
         }
       ],
       "tradeOffs": [
         {
-          "option": "Short TTL (e.g., 5–30 seconds)",
-          "pros": "Minimizes staleness window without requiring complex event-driven cache invalidation.",
-          "cons": "Lower cache hit ratio for long-tail items; higher baseline read load on the database.",
-          "bestFor": "High-traffic endpoints where slight staleness is acceptable (e.g., trending lists, live scores)."
+          "option": "Short Fixed TTLs (e.g. 5–30 seconds)",
+          "pros": "Keeps cache staleness tightly bounded without needing complex CDC or pub/sub invalidation pipelines.",
+          "cons": "Reduces cache hit ratio for tail records and generates steady background database read load.",
+          "bestFor": "Rapidly shifting dashboards, live public leaderboards, and aggregate counters."
         },
         {
-          "option": "Long TTL + Event-Driven Invalidation + Soft TTL",
-          "pros": "Maximizes cache hit ratio (>99%) and serves zero-latency reads via Stale-While-Revalidate.",
-          "cons": "Requires reliable invalidation pipelines (CDC or pub/sub) to clear changed items.",
-          "bestFor": "Product catalogs, user profiles, and configuration settings."
+          "option": "Long TTL with Soft Expiry & Invalidation",
+          "pros": "Maximizes cache hit ratio (>99%) and guarantees near-zero p99 read latency.",
+          "cons": "Requires operational maintenance of asynchronous refresh workers and invalidation queues.",
+          "bestFor": "Product catalogs, customer profile summaries, and merchant directory listings."
         }
       ],
-      "interviewTip": "Mentioning 'Soft TTL + Hard TTL (Stale-While-Revalidate)' and 'TTL Jitter to prevent Cache Avalanche' is an easy way to stand out when discussing caching layers.",
-      "jsonUrl": "/api/subtopics/caching/cache-ttl.json"
+      "interviewTip": "Highlighting TTL jitter alongside a Soft/Hard TTL split (Stale-While-Revalidate) shows you design for catastrophic edge cases like database thrashing rather than assuming happy-path traffic.",
+      "jsonUrl": "/api/subtopics/caching/cache-ttl.json",
+      "diagramImageUrl": "/diagrams/arch-cache-ttl.svg"
     },
     {
       "id": "cache-lru",
@@ -248,51 +252,53 @@
       "readingTime": "8 min read",
       "difficulty": "Intermediate",
       "keyTakeaways": [
-        "A textbook O(1) LRU cache combines a Hash Map (`key -> Node*`) for O(1) lookups with a Doubly Linked List (`head = MRU, tail = LRU`) for O(1) promotion and eviction.",
-        "Pure LRU suffers from 'Scan Pollution': a one-time bulk scan of cold items flushes out genuinely popular items; LFU or W-TinyLFU solves this by tracking access frequency.",
-        "Redis does not use a doubly linked list for LRU (to save 16 bytes of pointer overhead per key); instead, it uses approximated sampling of N random keys."
+        "Textbook O(1) LRU pairs a Hash Map for O(1) key lookups with a Doubly Linked List for O(1) node promotion and tail eviction.",
+        "Pure LRU is vulnerable to Scan Pollution (a one-off batch scan flushing out genuinely hot keys); frequency-aware policies like LFU and W-TinyLFU prevent this.",
+        "Production in-memory stores like Redis do not use linked lists due to memory pointer overhead, choosing probabilistic sampling across random keys instead."
       ],
       "architectureDiagram": "                  O(1) LRU CACHE DATA STRUCTURE\n     Hash Map (O(1) Lookup)\n  +-------+-------+-------+-------+\n  | 'k1'  | 'k2'  | 'k3'  | 'k4'  |\n  +---+---+---+---+---+---+---+---+\n      |       |       |       |\n      v       v       v       v\n    +----+  +----+  +----+  +----+    Doubly Linked List (O(1) Splice)\nMRU | k1 |<>| k2 |<>| k3 |<>| k4 | LRU (Evict from Tail when full)\nHead+----+  +----+  +----+  +----+Tail",
       "sections": [
         {
-          "heading": "Implementing Thread-Safe O(1) LRU & Understanding Scan Resistance",
-          "body": "Every `get(key)` or `put(key, val)` in an LRU cache looks up the node in a hash table in O(1) time and splices that node to the `head` (Most Recently Used) of a doubly linked list in O(1) time. When capacity is reached, the node at the `tail` (Least Recently Used) is unlinked and removed from the hash map.",
+          "heading": "The Mechanics of O(1) LRU and Multi-Threaded Contention",
+          "body": "In code interviews, an LRU cache is simply a Hash Map plus a Doubly Linked List. On every read or write, the node is spliced to the head (Most Recently Used). When memory fills up, the tail node (Least Recently Used) is evicted. In production multi-threaded systems, however, updating pointers on every read turns every cache lookup into a write, serializing concurrent readers behind a mutex.",
           "bullets": [
-            "Lock Contention in Multi-Threaded In-Process Caches: Because every *read* mutates the linked list pointers, a global mutex turns concurrent reads into a serial bottleneck. Production libraries (like Java Caffeine or Go Ristretto) buffer read events in lock-free ring buffers and apply promotions asynchronously.",
-            "Scan Pollution Problem: If capacity is 10,000 items and a user runs a pagination job reading 10,000 one-off cold items, pure LRU evicts all 10,000 hot items.",
-            "LFU & W-TinyLFU: Least Frequently Used (LFU) tracks access counts (often via a Count-Min Sketch probabilistic frequency sketch with periodic halving/decay) so cold one-off items are rejected before evicting hot items."
+            "Concurrency Bottleneck: Because reading an item modifies linked-list pointers, naive synchronization creates severe lock contention across CPU cores. Production caches (like Java Caffeine or Go Ristretto) use lock-free ring buffers to queue read events and update eviction lists asynchronously.",
+            "Scan Pollution: If your cache holds 10,000 items and a user or batch job runs a table scan over 10,000 cold records, every hot key in memory gets evicted. A single scan flushes your active working set.",
+            "Frequency Defense (LFU & W-TinyLFU): Window TinyLFU tracks frequency via a compact probabilistic Count-Min Sketch. New cold items enter a probationary admission window and are only admitted to the main cache if their historical frequency exceeds the eviction candidate's score."
           ],
           "codeSnippet": {
             "title": "O(1) LRU Cache Implementation in TypeScript",
             "code": "class LRUCache<K, V> {\n  private map = new Map<K, V>(); // JS Map preserves insertion order via internal doubly-linked list\n  constructor(private readonly capacity: number) {}\n\n  get(key: K): V | undefined {\n    if (!this.map.has(key)) return undefined;\n    const val = this.map.get(key)!;\n    this.map.delete(key);\n    this.map.set(key, val); // Promote to MRU (end of Map iterator)\n    return val;\n  }\n\n  put(key: K, val: V): void {\n    if (this.map.has(key)) this.map.delete(key);\n    else if (this.map.size >= this.capacity) {\n      const lruKey = this.map.keys().next().value!;\n      this.map.delete(lruKey); // Evict oldest (first item in Map)\n    }\n    this.map.set(key, val);\n  }\n}"
-          }
+          },
+          "diagramImageUrl": "/diagrams/arch-cache-lru.svg"
         },
         {
-          "heading": "How Redis Approximates LRU & LFU (`maxmemory-policy`)",
-          "body": "Maintaining two 64-bit pointers (`prev`, `next`) per key across 100 million keys in Redis would waste 1.6 GB of RAM. Instead, Redis stores a 24-bit clock/counter directly inside the `robj` object header of every key and uses random sampling (`maxmemory-samples`, default 5) to evict the oldest key in the sample pool.",
+          "heading": "How Redis Implements Approximated Eviction",
+          "body": "Storing two 64-bit pointers (`prev` and `next`) per key across 100 million keys in Redis would waste 1.6 GB of RAM purely on linked-list metadata. Redis eliminates pointer overhead by approximating LRU and LFU through probabilistic sampling.",
           "bullets": [
-            "`allkeys-lru` vs `volatile-lru`: `allkeys-lru` evicts any key when RAM is full; `volatile-lru` only evicts keys that have an explicit TTL set (preserving permanent state).",
-            "`allkeys-lfu` (Morris Counter): Uses those same 24 header bits to store a 16-bit last-decrement time and an 8-bit logarithmic frequency counter (0–255) with time decay.",
-            "`noeviction`: Returns `OOM command not allowed` errors on writes when `maxmemory` is reached; appropriate only when Redis is used as a durable store or message broker."
+            "Approximated LRU Sampling: Redis embeds a 24-bit timestamp inside each key's internal object header. When memory reaches `maxmemory`, it samples a small random pool of keys (configured via `maxmemory-samples`, default 5) and evicts the key with the oldest idle time.",
+            "allkeys-lru vs volatile-lru: `allkeys-lru` evicts any key when memory fills up; `volatile-lru` restricts eviction to keys configured with an explicit TTL, preserving unexpired persistent state.",
+            "Redis LFU (Logarithmic Morris Counter): Redis repurposes those 24 header bits to track an 8-bit logarithmic counter with continuous decay over time, providing frequency-weighted eviction that resists batch scan pollution."
           ]
         }
       ],
       "tradeOffs": [
         {
           "option": "LRU (Least Recently Used)",
-          "pros": "Adapts immediately to sudden recency shifts (e.g., breaking news); simple O(1) mechanics.",
-          "cons": "Vulnerable to cache pollution from sequential scans or one-time bulk queries.",
-          "bestFor": "Session caches, recency-driven news feeds, and general application caching."
+          "pros": "Simple to implement; quickly adapts to shifts in temporal recency (e.g. breaking news).",
+          "cons": "Vulnerable to cache pollution when batch queries or crawlers read through cold data.",
+          "bestFor": "User session stores, ephemeral request caches, and recency-dominated feeds."
         },
         {
-          "option": "LFU / W-TinyLFU (Frequency-Aware Eviction)",
-          "pros": "Scan-resistant; retains consistently popular keys even during one-off read bursts.",
-          "cons": "Requires frequency decay tuning so formerly popular items don't stay stuck in memory forever.",
-          "bestFor": "Product catalogs, CDN edge caches, and skewed power-law Zipfian workloads."
+          "option": "W-TinyLFU (Frequency-Biased Eviction)",
+          "pros": "Resistant to scan pollution; retains high-frequency items even when cold records are read.",
+          "cons": "Requires periodic frequency decay tuning to ensure historical hot items don't stay trapped in memory forever.",
+          "bestFor": "Product catalogs, CDN edge nodes, and Zipfian/power-law traffic distributions."
         }
       ],
-      "interviewTip": "Be ready to code an O(1) LRU Cache from scratch using a HashMap + Doubly Linked List, and follow up by explaining how concurrent in-memory caches avoid lock contention on the linked list during reads.",
-      "jsonUrl": "/api/subtopics/caching/cache-lru.json"
+      "interviewTip": "Be ready to implement an O(1) LRU cache with a Map and Doubly Linked List, but stand out by explaining why high-throughput production systems avoid linked-list locks using asynchronous ring buffers or Redis probabilistic sampling.",
+      "jsonUrl": "/api/subtopics/caching/cache-lru.json",
+      "diagramImageUrl": "/diagrams/arch-cache-lru.svg"
     },
     {
       "id": "cache-invalidation",
@@ -305,51 +311,53 @@
       "readingTime": "9 min read",
       "difficulty": "Advanced",
       "keyTakeaways": [
-        "Relying on dual-writes in application code (`db.update()` then `redis.del()`) fails when the process crashes between the two calls or when multiple services mutate the same DB table.",
-        "Change Data Capture (CDC) tailing the database WAL/binlog (via Debezium + Kafka) decouples cache invalidation from application code and guarantees eventual convergence.",
-        "Memcached Leases (or Redis version tokens) solve the classic Stale-Set race condition between a concurrent cache-miss reader and an invalidating writer."
+        "Dual-writes in application code (`db.update()` then `redis.del()`) inevitably drift when processes crash, transactions roll back, or network partitions occur.",
+        "Change Data Capture (CDC) tailing the database WAL/binlog decouples invalidation from application services and guarantees eventual cache convergence.",
+        "Memcached Lease Tokens and versioned tombstone checks resolve the classic race where a slow cache-miss reader overwrites a newer database commit."
       ],
       "architectureDiagram": "               CDC-DRIVEN RELIABLE CACHE INVALIDATION\n  [Service A] --+\n                |--> 1. Write --> [PostgreSQL Primary]\n  [Service B] --+                         |\n                                    (2. WAL / Binlog)\n                                          v\n                                [Debezium / Kafka Stream]\n                                          |\n                                          v\n                              [Cache Invalidator Consumer]\n                                          |\n                             (3. DEL / Versioned Update)\n                                          v\n                                   [Redis Cluster]",
       "sections": [
         {
-          "heading": "Why Application Dual-Writes Fail & How Leases Fix Stale Sets",
-          "body": "Consider what happens when Reader A gets a cache miss, reads `v1` from the DB, and pauses due to a GC pause or network blip. Meanwhile, Writer B updates the DB to `v2` and runs `DEL key` on the cache. Finally, Reader A wakes up and executes `SET key v1`, poisoning the cache with stale data until the TTL expires! Meta solved this in Memcached (`McLease`) using 64-bit Lease Tokens.",
+          "heading": "The Application Dual-Write Illusion and Stale Overwrites",
+          "body": "When application code manages both database updates and cache invalidation, partial failure is inevitable. If the application commits a change to PostgreSQL and crashes before firing `DEL key` to Redis, the cache remains out of sync until TTL expiry. Worse is the concurrent interleaving race: Reader A misses the cache and reads version 1 from the database. A GC pause freezes Reader A. Meanwhile, Writer B commits version 2 to the database and cleanly deletes the key from Redis. Reader A unpauses and issues `SET key v1`, overwriting the fresh invalidation and permanently poisoning the cache.",
           "bullets": [
-            "How Leases Work: On a cache miss, the cache grants Reader A a 64-bit lease token. When Writer B calls `DEL key`, the cache invalidates any outstanding lease tokens for that key. When Reader A belatedly calls `SET key v1 (with lease)`, the cache rejects the write because the lease was invalidated!",
-            "Database-Generated Monotonic Versions: In Redis, store a hash containing `version` (or DB `xmin`/`updated_at_ns`) and use a Lua script on cache population that only overwrites if the incoming version is strictly greater.",
-            "CDC Pipeline Invalidation: Instead of sprinkling `redis.del()` across 15 microservices, stream Postgres WAL via Debezium and have a dedicated consumer invalidate all affected cache keys and composite keys."
+            "Memcached Lease Tokens: On a cache miss, the engine hands the reader a 64-bit lease. If a writer invalidates the key before the reader returns, the lease is revoked. When the slow reader attempts its `SET`, the cache detects the stale lease and rejects the write.",
+            "Database-Driven Monotonic Versions: Store a database transaction ID (`xmin`) or nanosecond timestamp with the cached payload. Execute cache populations through a Lua script that verifies `incoming_version > current_version` before overwriting.",
+            "CDC-Driven Decoupled Invalidation: Tail the primary database write-ahead log using Debezium and Kafka. When an update commits to disk, a dedicated invalidator consumer consumes the change event and clears the corresponding cache keys, insulating cache coherence from application crashes."
           ],
           "codeSnippet": {
             "title": "Race-Free Cache Population Using Lua Version Check",
             "code": "-- Lua script: Only populate or update cache if incoming DB version > cached version\n-- Prevents slow cache-miss readers from overwriting newer invalidations/tombstones!\nlocal currentVersion = tonumber(redis.call('HGET', KEYS[1], 'ver') or '0')\nlocal incomingVersion = tonumber(ARGV[1])\n\nif incomingVersion > currentVersion then\n  redis.call('HSET', KEYS[1], 'ver', ARGV[1], 'data', ARGV[2])\n  redis.call('EXPIRE', KEYS[1], tonumber(ARGV[3]))\n  return 1\nend\nreturn 0\n\n-- On Write Invalidation: Instead of raw DEL (which forgets the version),\n-- write a short-lived tombstone with the new version and empty data!"
-          }
+          },
+          "diagramImageUrl": "/diagrams/arch-cache-invalidation.svg"
         },
         {
-          "heading": "Invalidating Composite Queries & Local L1 Caches",
-          "body": "Invalidating a single entity key (`user:123`) is straightforward, but what about cached list queries (`merchant:42:products:page:1`) or in-memory L1 caches inside 100 Node.js/Java application pods?",
+          "heading": "Invalidating Complex Queries and Local Pod Memory",
+          "body": "Clearing a single primary key like `user:123` is simple. The problem becomes painful when dealing with composite queries (such as filtered product lists or pagination pages) and multi-tier L1 in-process caches.",
           "bullets": [
-            "Namespace / Generation Token (Epoch Key): Instead of deleting 500 pagination keys for `merchant:42`, store a version integer at `merchant:42:epoch` (e.g., `7`) and construct list keys as `merchant:42:v7:page:1`. Incrementing `epoch` to `8` instantly invalidates all pages in O(1)!",
-            "L1 In-Process Cache Invalidation: Use Redis Client-Side Caching (RESP3 invalidation tracking) or Redis Pub/Sub / Kafka broadcast to notify all application pods to evict keys from their local RAM caches.",
-            "Cross-Region Cache Invalidation: Read Meta's TAO / Memcache (NSDI '13) McSqueal pattern, tail regional DB binlogs and broadcast invalidation deletes across regional cache clusters."
+            "Namespace Epoch Keys: Instead of hunting down and deleting 500 paginated keys when a merchant adds an item, store an epoch integer at `merchant:42:epoch`. Format cache keys as `merchant:42:v{epoch}:page:1`. Bumping the epoch from 7 to 8 renders all previous pages instantly unreadable in O(1) time without scanning Redis.",
+            "L1 In-Process Coherence: In-process caches (like Guava/Caffeine in application pods) achieve zero network overhead but drift from Redis. Use Redis RESP3 client-side tracking or an invalidation Pub/Sub topic to notify pods to evict changed entries immediately.",
+            "Multi-Region Eventual Consistency: In distributed multi-region deployments, regional caches tail replication streams (following Meta's McSqueal architecture) to drop local keys only after regional database replicas confirm receipt of the write."
           ]
         }
       ],
       "tradeOffs": [
         {
-          "option": "Synchronous App-Level Delete (`DEL` after DB commit)",
-          "pros": "Zero replication lag between DB write and cache invalidation on the happy path.",
-          "cons": "Prone to partial failure if app crashes after DB commit; tightly couples all writers to cache keys.",
-          "bestFor": "Single-service ownership where one microservice owns both the DB table and the Redis cache."
+          "option": "Synchronous Application Invalidation (`DEL` on Write)",
+          "pros": "Zero latency between database commit and cache eviction under ideal network conditions.",
+          "cons": "Fails silently if the process terminates mid-execution; tightly couples write code to cache key schemas.",
+          "bestFor": "Single monoliths or isolated services with dedicated tables and low mutation rates."
         },
         {
-          "option": "Asynchronous CDC (Debezium WAL -> Kafka -> Invalidator)",
-          "pros": "Guaranteed at-least-once invalidation; decouples writers from cache key topology.",
-          "cons": "Introduces 20–100ms pipeline lag between DB commit and cache eviction.",
-          "bestFor": "Large architectures with multiple writers, composite caches, or multi-region replication."
+          "option": "Asynchronous CDC Invalidation (Debezium + Kafka)",
+          "pros": "Guarantees at-least-once eviction; insulates cache correctness from application-level failures.",
+          "cons": "Introduces 20–100ms pipeline replication lag between database commit and cache clearing.",
+          "bestFor": "Complex microservice architectures where multiple services read or write shared entity boundaries."
         }
       ],
-      "interviewTip": "Referencing the 'Namespace Epoch Key' trick for invalidating paginated lists in O(1) and 'Lease Tokens / Tombstone Versions' to prevent stale cache-miss sets demonstrates Staff-level mastery.",
-      "jsonUrl": "/api/subtopics/caching/cache-invalidation.json"
+      "interviewTip": "Bring up the 'Namespace Epoch Key' pattern for invalidating multi-page lists in O(1) and explain how Lease Tokens prevent stale reader overwrites to demonstrate deep distributed systems experience.",
+      "jsonUrl": "/api/subtopics/caching/cache-invalidation.json",
+      "diagramImageUrl": "/diagrams/arch-cache-invalidation.svg"
     },
     {
       "id": "cache-stampede",
@@ -362,51 +370,53 @@
       "readingTime": "8 min read",
       "difficulty": "Advanced",
       "keyTakeaways": [
-        "A Cache Stampede (Dogpiling) happens when a popular cached key expires and thousands of concurrent requests simultaneously miss the cache and hammer the database with identical expensive queries.",
-        "Request Coalescing (`Singleflight` in Go) deduplicates concurrent in-flight cache misses within an application node so only 1 request queries the DB/cache and shares the result with all waiting callers.",
-        "Probabilistic Early Expiration (PER / XFetch) recomputes hot keys asynchronously *before* their TTL expires based on recomputation time and remaining TTL."
+        "A Cache Stampede occurs when a high-traffic key expires, triggering an instantaneous flood of concurrent cache misses that hammer the database with identical heavy queries.",
+        "In-process request coalescing (`Singleflight`) collapses duplicate misses on the same application pod into a single shared database query.",
+        "Probabilistic early expiration (such as the XFetch algorithm) and Soft TTLs trigger asynchronous background refreshes before keys hard-expire, preserving sub-millisecond read latencies."
       ],
       "architectureDiagram": "WITHOUT COALESCING (Stampede: 1,000 DB Queries)   WITH SINGLEFLIGHT + LEASE (1 DB Query)\n1,000 Req ---> [Cache Miss] === 1,000x ===> [DB]   1,000 Req ---> [Singleflight Dedup]\n                               (DB Crashes!)                         | (999 wait in RAM)\n                                                                     +--- 1x ---> [DB]",
       "sections": [
         {
-          "heading": "Request Coalescing (Singleflight) & Distributed Mutex Leases",
-          "body": "When a cached homepage payload or expensive aggregation expires under 10,000 RPS, and the DB query takes 200ms, 2,000 requests will see a cache miss during that 200ms window and launch 2,000 duplicate DB queries. You can eliminate this in two layers: per-process Singleflight and cross-process Distributed Leases.",
+          "heading": "Request Coalescing (Singleflight) and Distributed Mutex Leases",
+          "body": "When an expensive cached payload expires, every concurrent incoming thread sees a cache miss. Under high QPS, thousands of identical, redundant queries queue up at the database within fractions of a second, causing connection pool exhaustion and database CPU saturation. Resolving this requires deduplicating in-flight work.",
           "bullets": [
-            "In-Process Request Coalescing (`Singleflight`): Maintain an in-memory map of `inflightPromises: Map<string, Promise<T>>`. If `key` is already being fetched on this pod, subsequent callers simply `await` the existing Promise. If you have 20 pods, max DB queries drop from 2,000 to at most 20.",
-            "Distributed Lease / Mutex (`SET lock:key 1 NX PX 2000`): Out of those 20 pods, only the 1 pod that acquires the Redis lock queries the database; the other 19 either serve slightly stale data (Soft TTL) or wait briefly for the cache to be populated.",
-            "Never Block Indefinitely: Always bound distributed lock wait times and fall back to serving stale cached data if the recomputation fails."
+            "In-Process Request Coalescing (`Singleflight`): Maintain a local concurrency map of `inflightPromises: Map<string, Promise<T>>`. If thread 1 is already querying the database for key X, threads 2 through 100 simply attach to the existing Promise. Across 20 application pods, database load drops from 1,000 queries to at most 20.",
+            "Distributed Mutex Leases (`SET lock:key 1 NX PX 2000`): To reduce those 20 pod queries down to exactly 1, the first pod to miss acquires a short-lived Redis lock. The winning pod computes the new value and updates Redis; the other 19 pods either wait briefly or immediately serve the slightly stale payload.",
+            "Never Hang on Locks: Enforce strict lock timeouts (e.g. 500ms) and always fall back to serving stale cached data or an empty payload rather than blocking client request threads indefinitely."
           ],
           "codeSnippet": {
             "title": "In-Process Singleflight + Probabilistic Early Expiration (XFetch)",
             "code": "const inflight = new Map<string, Promise<any>>();\n\n// 1. Singleflight: Coalesce concurrent cache misses on the same Node/Pod\nexport function singleflight<T>(key: string, fn: () => Promise<T>): Promise<T> {\n  if (inflight.has(key)) return inflight.get(key)!;\n  const promise = fn().finally(() => inflight.delete(key));\n  inflight.set(key, promise);\n  return promise;\n}\n\n// 2. XFetch Probabilistic Early Expiration Algorithm (VLDB '15)\n// delta = time to recompute (ms), beta = 1.0, expiry = hard expiration timestamp (ms)\nfunction shouldRecomputeEarly(deltaMs: number, expiryMs: number, beta = 1.0): boolean {\n  const now = Date.now();\n  // As (expiry - now) approaches 0, or as request rate rises, probability -> 1\n  return (now - deltaMs * beta * Math.log(Math.random())) >= expiryMs;\n}"
-          }
+          },
+          "diagramImageUrl": "/diagrams/arch-cache-stampede.svg"
         },
         {
-          "heading": "Probabilistic Early Expiration (XFetch Algorithm)",
-          "body": "Instead of waiting for a hot key to hard-expire and then scrambling to coordinate locks, the XFetch algorithm (published in VLDB 2015) stores the recomputation duration (`delta`) alongside the cached item. On every cache hit, the reader rolls a weighted logarithmic die: `now - delta * beta * ln(rand()) >= expiry`. For cold keys that are rarely read, this never triggers early. For hot keys read 1,000 times per second, one lucky request will probabilistically trigger a background refresh a few seconds *before* the TTL expires, so the key never expires under load!",
+          "heading": "Probabilistic Early Refresh (XFetch Algorithm)",
+          "body": "Waiting for a hot key to hard-expire before coordinating a lock is inherently reactive. The XFetch algorithm (VLDB 2015) flips this by probabilistically refreshing hot data before expiration based on how long it takes to recompute.",
           "bullets": [
-            "Zero Lock Coordination Needed: XFetch works purely from local math on each cache hit without extra Redis lock round-trips.",
-            "Self-Tuning by Popularity: The higher the QPS on a key, the more trials per second, guaranteeing an early refresh exclusively for genuinely hot keys.",
-            "Combine with Soft TTL: Even simpler than XFetch, storing a `soft_ttl` inside the cached JSON lets the first reader after `soft_ttl` acquire a non-blocking Redis lock (`SET NX`) to refresh in the background while all other readers immediately receive the still-valid `hard_ttl` payload."
+            "How XFetch Works: Along with the cached value, store the computation time (`delta`). On every read hit, evaluate `now - delta * beta * ln(rand()) >= expiry`. If the random check passes, the reader triggers a background refresh.",
+            "Self-Scaling by Request Volume: Cold keys read once an hour almost never trigger early. A hot key receiving 2,000 reads per second will reliably trigger a quiet background refresh a few seconds before the TTL elapses, ensuring the key never experiences an open-window expiration.",
+            "Soft TTL with Background Async Worker: A simpler operational alternative is storing `soft_expire_at` in the JSON body. When the soft TTL passes, the first reader fires an async queue job to refresh Redis while immediately returning the current data to the user."
           ]
         }
       ],
       "tradeOffs": [
         {
           "option": "In-Process Singleflight + Distributed Lease Lock",
-          "pros": "Strictly caps database load to 1 query across the entire cluster even on a completely cold cache.",
-          "cons": "Callers on a completely cold key must wait for the winner to finish querying the DB.",
-          "bestFor": "Expensive DB queries, cold-cache startups, and API gateway aggregation layers."
+          "pros": "Strictly caps database load to 1 query cluster-wide even during cold starts or cache flushes.",
+          "cons": "Waiting callers on a cold key experience latency equal to the slowest database query duration.",
+          "bestFor": "Heavy analytical queries, reports, and cold-start application boot phases."
         },
         {
-          "option": "Soft TTL / Probabilistic Early Expiration (XFetch)",
-          "pros": "Zero tail-latency spike for users because refreshes happen before hard expiration.",
-          "cons": "Only prevents stampedes on already-cached hot keys; still needs Singleflight for initial cold misses.",
-          "bestFor": "High-QPS feeds, homepage modules, and low-latency p99 SLA services."
+          "option": "Soft TTL / Probabilistic Early Refresh (XFetch)",
+          "pros": "Zero latency penalty for end users because updates run asynchronously before hard expiration.",
+          "cons": "Requires items to already be cached; does not protect against misses on brand-new cold keys.",
+          "bestFor": "High-traffic homepages, public product detail endpoints, and low-latency API SLAs."
         }
       ],
-      "interviewTip": "Combine both techniques in your answer: 'I will use Soft TTL / Probabilistic Early Refresh so hot keys refresh in the background before expiring, and Singleflight request coalescing to protect against cold-start misses.'",
-      "jsonUrl": "/api/subtopics/caching/cache-stampede.json"
+      "interviewTip": "Pair both patterns: propose Soft TTL / Probabilistic Early Refresh to keep hot keys warm before expiration, and back it with Singleflight request coalescing to protect against cold-start misses.",
+      "jsonUrl": "/api/subtopics/caching/cache-stampede.json",
+      "diagramImageUrl": "/diagrams/arch-cache-stampede.svg"
     },
     {
       "id": "cache-hot-keys",
@@ -419,51 +429,53 @@
       "readingTime": "8 min read",
       "difficulty": "Staff+",
       "keyTakeaways": [
-        "Even though a Redis Cluster scales horizontally across 100 shards, any single key (`celebrity:post:99`) hashes to exactly ONE Redis primary node (and its replicas).",
-        "A single Redis process is single-threaded for command execution and tops out around ~100k–150k RPS; a 1M RPS hot key will saturate that one shard's CPU and NIC.",
-        "Solve Hot Keys using Local L1 In-Process Caches (with short TTL / client-side invalidation) or Key Salting/Replication (`key#1 .. key#N`) across all cluster shards."
+        "Sharding a cache horizontally provides cluster throughput, but any individual key hashes to exactly one Redis master node.",
+        "Because Redis processes commands sequentially on a single core, an extreme hot key (200k+ RPS) saturates that single shard's CPU and network interface, causing timeouts for all unrelated keys on the same node.",
+        "Mitigate hot keys using short-TTL in-process L1 caches in application memory or by salting keys across multiple cluster hash slots."
       ],
       "architectureDiagram": "THE HOT KEY PROBLEM (Shard 2 Melts)          SOLUTION: L1 LOCAL CACHE + KEY SALTING\n  1,000,000 RPS for 'viral_post_1'             [App Pods: L1 Cache (2s TTL) absorbs 99%]\n                 |                                                |\n      +----------+----------+                        (Salted Key: 'viral_post_1#' + rand(1..10))\n      |          |          |                                     |\n      v          v          v                        +------------+------------+\n  [Shard 1]  [Shard 2]  [Shard 3]                    v            v            v\n   (5% CPU)  (100% CPU)  (4% CPU)                [Shard 1]    [Shard 2]    [Shard 3]\n             (THROTTLED!)                       (viral#1..3) (viral#4..6) (viral#7..10)",
       "sections": [
         {
-          "heading": "Why Sharding Doesn't Save You From Hot Keys",
-          "body": "In a distributed cache (Redis Cluster or Memcached), consistent hashing or CRC16 hash slots map each key to a specific shard. If a flash sale item, Taylor Swift ticket drop, or viral tweet generates 800,000 reads/sec for a single key, 100% of those requests land on a single Redis shard. Because Redis executes commands on a single main event-loop thread, that shard hits 100% CPU, causing timeouts for every other unrelated key that happens to live on the same shard!",
+          "heading": "The Single-Shard Saturation Trap",
+          "body": "Horizontal scaling solves uniform data distribution, not skewed access patterns. In Redis Cluster, CRC16 hashing assigns each key to one of 16,384 slots mapped across master nodes. When a celebrity tweet, flash-sale SKU, or emergency notification goes viral, traffic doesn't spread across your cluster. It funnels into a single thread on a single machine. Once that thread caps out at 100% CPU, latency spikes, and every other key assigned to that shard begins timing out.",
           "bullets": [
-            "Detection (`redis-cli --hotkeys` & Count-Min Sketch): Track key access frequencies in the client SDK or proxy using a lightweight probabilistic Count-Min Sketch to dynamically detect keys exceeding 5,000 RPS.",
-            "Solution 1: L1 In-Process Memory Cache: Cache hot keys directly inside the application pod's RAM (e.g., Caffeine/LRU with a 1–3 second TTL or Redis RESP3 Client-Side Tracking). 100 app pods can serve 5,000,000 RPS from local RAM with 0 network hops!",
-            "Solution 2: Key Salting / Key Replication: Append a random suffix `1..N` (`viral_post_1#shard_7`) when writing hot keys so copies are distributed across N different hash slots in the Redis cluster."
+            "Hot Key Detection: Use client-side probabilistic sketches (such as Count-Min Sketch in an Envoy proxy or client SDK) or Redis's native `redis-cli --hotkeys` to detect keys exceeding safe traffic thresholds (e.g., >5,000 RPS).",
+            "L1 In-Process Memory Cache: Place a high-speed local LRU cache (e.g. Caffeine or Go Ristretto) inside application pods with a 1–2 second TTL. If you run 80 application pods, an L1 cache absorbs 98% of reads in local RAM with zero network round trips.",
+            "Key Salting (Replication Across Shards): Append a pseudo-random suffix (`item:42#shard_{0..15}`) when writing the key. Writers update all 16 replicas, and readers query a random salt shard, spreading 400,000 RPS across 16 different Redis cluster nodes."
           ],
           "codeSnippet": {
             "title": "Dynamic Hot-Key Salting & L1 Tiered Cache Reader",
             "code": "const HOT_KEY_REPLICA_COUNT = 16;\n\nasync function getHotKeyResilient(baseKey: string, isHotKey: boolean): Promise<string | null> {\n  // Tier 1: Check ultra-fast in-process L1 LRU cache (TTL: 2000ms)\n  const l1Hit = localL1Cache.get(baseKey);\n  if (l1Hit !== undefined) return l1Hit;\n\n  // Tier 2: If flagged as Hot Key by Count-Min Sketch, spread read across 16 hash slots\n  const targetKey = isHotKey\n    ? `${baseKey}:replica_${Math.floor(Math.random() * HOT_KEY_REPLICA_COUNT)}`\n    : baseKey;\n\n  const val = await redisCluster.get(targetKey);\n  if (val && isHotKey) {\n    localL1Cache.set(baseKey, val, { ttl: 2000 });\n  }\n  return val;\n}"
-          }
+          },
+          "diagramImageUrl": "/diagrams/arch-cache-hot-keys.svg"
         },
         {
-          "heading": "Coordinating Writes & Invalidations for Salted Keys",
-          "body": "While salting a hot key (`key#0` through `key#15`) scales read throughput by 16x across the Redis cluster, it amplifies writes and invalidations by 16x. Therefore, you should only salt keys that are dynamically detected as hot or known a priori to be broadcast keys.",
+          "heading": "Trade-offs in Key Salting and Invalidation Coordination",
+          "body": "Key salting scales read throughput linearly with the number of shards, but it introduces operational costs on the write and invalidation paths.",
           "bullets": [
-            "Hash Tags Caveat in Redis Cluster: Recall that in Redis Cluster, `{user123}:profile` hashes only the substring inside `{}`. When salting a hot key to spread across shards, do NOT wrap the base key in `{}` braces, or all 16 copies will still map to the exact same hash slot!",
-            "Read Replicas Per Shard: Adding 3 read replicas to each Redis shard gives a 4x read multiplier, which helps moderate hot keys but is often insufficient for 100x viral spikes compared to L1 caching.",
-            "Redis RESP3 Client-Side Caching (Broadcast Mode): Application nodes subscribe to invalidation prefixes; Redis pushes an invalidate message to pods immediately whenever the hot key changes."
+            "Write & Invalidation Amplification: Salting across 16 shards means every write or `DEL` must execute 16 separate network calls. Salting should only be activated for dynamically identified hot keys, never for the entire keyspace.",
+            "Avoid Hash Tag Trap in Redis Cluster: In Redis Cluster, any text inside curly braces `{...}` forces keys into the same hash slot. Writing `{item:42}#1` through `{item:42}#16` would defeat the purpose entirely by routing all 16 copies to the same physical node!",
+            "Redis Client-Side Caching (RESP3): Using Redis 6+ tracking mode, the server proactively broadcasts invalidation messages to connected application nodes whenever tracked keys change, keeping L1 memory in sync without aggressive polling."
           ]
         }
       ],
       "tradeOffs": [
         {
           "option": "Tiered L1 In-Process Cache (App RAM) + L2 Redis",
-          "pros": "Eliminates network hops completely; scales linearly with the number of stateless app pods.",
-          "cons": "Consumes app pod heap memory; short 1–2s staleness window unless using RESP3 client tracking.",
-          "bestFor": "Read-heavy viral content, feature flags, celebrity profiles, and flash-sale product metadata."
+          "pros": "Zero network hops; read throughput scales directly with the number of stateless application pods.",
+          "cons": "Consumes application heap memory and introduces a brief staleness window unless using RESP3 invalidation broadcasts.",
+          "bestFor": "Celebrity profiles, trending hashtags, flash-sale catalogs, and global feature toggles."
         },
         {
-          "option": "Salted / Replicated Keys across Redis Shards (`key#1..N`)",
-          "pros": "Spreads network and CPU load evenly across all Redis Cluster nodes without app heap overhead.",
-          "cons": "Writes and invalidations must fan out to all N salted copies.",
-          "bestFor": "Large cached payloads or counters shared across thousands of short-lived serverless workers."
+          "option": "Key Salting Across Cluster Shards (`key#1..N`)",
+          "pros": "Spreads CPU and network load across the Redis Cluster without increasing application memory footprint.",
+          "cons": "Multiplies write operations and invalidation fan-out by N.",
+          "bestFor": "Large cached blobs or counters queried by thousands of ephemeral serverless functions without local disk/memory continuity."
         }
       ],
-      "interviewTip": "In any high-scale interview (Twitter, TikTok, Ticketmaster, Flash Sale), explicitly bring up the 'Redis Hot Key single-shard bottleneck' and propose a local in-process L1 cache (1-2s TTL) + Count-Min Sketch hot-key detector.",
-      "jsonUrl": "/api/subtopics/caching/cache-hot-keys.json"
+      "interviewTip": "During high-scale system design interviews, bring up the single-shard hot key bottleneck unprompted, and explain how an in-process L1 cache (1–2s TTL) prevents single-thread CPU starvation.",
+      "jsonUrl": "/api/subtopics/caching/cache-hot-keys.json",
+      "diagramImageUrl": "/diagrams/arch-cache-hot-keys.svg"
     },
     {
       "id": "cache-redis",
@@ -476,51 +488,53 @@
       "readingTime": "10 min read",
       "difficulty": "Intermediate",
       "keyTakeaways": [
-        "Redis achieves 100k+ ops/sec using a single-threaded event loop with I/O multiplexing (`epoll`/`kqueue`), eliminating lock contention and context switches (with multi-threaded network I/O in Redis 6+).",
-        "Beyond simple strings, Redis provides native atomic data structures: Sorted Sets (`ZSET` skip-list + hash table for leaderboards/rate limiters), Hashes, Streams, and HyperLogLog.",
-        "Redis Cluster partitions the keyspace into 16,384 fixed CRC16 hash slots (`CRC16(key) % 16384`) distributed across master nodes without a central proxy."
+        "Redis delivers 100k+ ops/sec via a single-threaded event loop paired with non-blocking I/O multiplexing (`epoll`), eliminating mutex lock contention.",
+        "Beyond simple key-value strings, Redis provides specialized in-memory data structures: Sorted Sets (`ZSET` skip-lists for leaderboards and rate limiters), Hashes, Bitmaps, and HyperLogLogs.",
+        "Redis Cluster partitions state into 16,384 CRC16 hash slots across master nodes without a central proxy layer, requiring `{hash_tag}` grouping for multi-key atomicity."
       ],
       "architectureDiagram": "                     REDIS INTERNALS & CLUSTER TOPOLOGY\n  [Clients] === Pipelined Commands ===> [I/O Multiplexer (epoll / kqueue)]\n                                                       |\n                                        [Single-Threaded Command Loop]\n                                         (Zero Locks! Atomic Lua/Ops)\n                                          /            |            \\\n                                      [ZSET]        [HASH]        [HLL]\n  REDIS CLUSTER (16,384 Hash Slots):\n  +-----------------------+  +-----------------------+  +-----------------------+\n  | Node A: Slots 0..5460 |  | Node B: 5461..10922   |  | Node C: 10923..16383  |\n  +-----------------------+  +-----------------------+  +-----------------------+",
       "sections": [
         {
-          "heading": "Data Structures & Single-Threaded Event Loop",
-          "body": "Because Redis executes commands sequentially on a single thread in RAM, every command (and every embedded Lua script) is atomic by default without needing mutexes. However, this means O(N) commands like `KEYS *`, `SMEMBERS` on a 1M-element set, or slow Lua scripts will block the entire Redis server and cause cascading timeouts.",
+          "heading": "The Single-Threaded Architecture and Data Structure Mechanics",
+          "body": "Executing commands sequentially on a single thread simplifies concurrency: operations are naturally atomic without needing mutex locks. The flip side is operational vulnerability. If an engineer runs `KEYS *` or an unindexed Lua script that takes 500ms to process, Redis stops servicing every other connection for half a second. Client connection pools time out, health checks fail, and services cascade.",
           "bullets": [
-            "Sorted Set (`ZSET`): Backed by both a Hash Table (O(1) score lookup by member) and a Skip List (O(log N) range queries by score/rank). The gold standard for real-time gaming leaderboards (`ZADD`, `ZREVRANGE`), sliding-window rate limiters, and delayed job schedulers.",
-            "HyperLogLog (`PFADD`, `PFCOUNT`): Estimates unique cardinality (e.g., unique daily page visitors) with 0.81% standard error using a fixed 12 KB of memory, even for 100 million unique users!",
-            "Pipelining & Lua Scripting: Pipelining batches multiple commands in a single TCP write to eliminate RTT latency; Lua scripts (`EVAL`) execute multi-step read-modify-write logic atomically inside Redis."
+            "Sorted Sets (`ZSET`): Combines a Hash Table (O(1) lookups by element) with a Skip List (O(log N) range queries by score). Essential for sliding-window rate limiters, priority queues, and real-time leaderboards.",
+            "HyperLogLog: Approximates unique cardinality (like daily unique visitors) with a fixed 12 KB memory footprint and a 0.81% error margin, regardless of whether you track 1,000 or 100,000,000 unique IDs.",
+            "Pipelining vs Lua: Pipelining batches multiple independent commands into a single network socket write to eliminate round-trip latency; Lua scripts run multi-step read-modify-write logic atomically on the Redis server without network round trips."
           ],
           "codeSnippet": {
             "title": "Real-Time Leaderboard & Sliding Window Rate Limiter in Redis",
             "code": "// 1. Leaderboard with ZSET: O(log N) update + O(log N + K) top-K fetch\nawait redis.zIncrBy('leaderboard:weekly:2026_w39', 50, 'player_882');\nconst top10 = await redis.zRangeWithScores('leaderboard:weekly:2026_w39', 0, 9, { REV: true });\nconst myRank = await redis.zRevRank('leaderboard:weekly:2026_w39', 'player_882'); // 0-indexed\n\n// 2. Hash Tags in Redis Cluster: Co-locate related keys on the SAME hash slot\n// Both keys hash ONLY the substring 'user_42' inside {}, enabling multi-key Lua/MGET!\nconst cartKey = '{user_42}:cart';\nconst promoKey = '{user_42}:promo';"
-          }
+          },
+          "diagramImageUrl": "/diagrams/arch-cache-redis.svg"
         },
         {
-          "heading": "Persistence (RDB vs AOF) & Redis Cluster Architecture",
-          "body": "When used for sessions, rate limits, or leaderboards, Redis needs durability across restarts and horizontal scalability beyond a single machine's RAM.",
+          "heading": "Persistence Trade-offs (RDB vs AOF) and Cluster Topologies",
+          "body": "When using Redis for state that cannot be easily recomputed from SQL databases (such as rate-limiting windows or active user sessions), durability and clustering become critical design choices.",
           "bullets": [
-            "RDB Snapshots (`BGSAVE`): Forks a child process using OS Copy-on-Write (CoW) memory pages to write a compact point-in-time binary snapshot. Fast restarts, but loses minutes of data between snapshots.",
-            "AOF (Append-Only File): Logs every write command sequentially (`appendfsync everysec`). Redis 7+ combines an RDB base snapshot with incremental AOF logs for fast recovery and minimal data loss.",
-            "Redis Cluster (16,384 Slots): Smart clients compute `slot = CRC16(key) & 16383` and connect directly to the owning node. If slots are migrating, nodes return `-MOVED` or `-ASK` redirects. Use `{hash_tag}` braces when executing multi-key transactions or Lua scripts so all involved keys reside on the same slot."
+            "RDB Point-in-Time Snapshots: Periodically forks a child process using Linux Copy-on-Write (CoW) to stream memory pages to a compact binary dump on disk. Restarts are rapid, but crashes lose all data written between snapshot intervals.",
+            "Append-Only File (AOF): Logs every mutating command sequentially. Running with `appendfsync everysec` limits data loss to at most 1 second with negligible latency overhead. Redis 7+ combines an RDB snapshot base with an incremental AOF log for fast crash recovery.",
+            "Redis Cluster & Hash Tags: Smart clients hash keys via `CRC16(key) % 16384` and route directly to the owning master node. When running multi-key operations or transactions, enclose the sharding token in curly braces (e.g. `{user_123}:cart` and `{user_123}:profile`) to guarantee both keys land on the same node."
           ]
         }
       ],
       "tradeOffs": [
         {
-          "option": "RDB Point-in-Time Snapshots Only",
-          "pros": "Compact files, minimal disk I/O overhead during normal operation, fastest restart times.",
-          "cons": "Loses all writes since the last snapshot (often 5–15 minutes) on power loss; `fork()` CoW can spike RAM.",
-          "bestFor": "Pure caches where data can be reconstructed from the primary SQL/NoSQL database."
+          "option": "RDB Point-in-Time Snapshots",
+          "pros": "Minimal runtime disk I/O overhead; compact storage files; fastest recovery and restart times.",
+          "cons": "Data written between snapshot intervals is lost on unexpected process or host crashes.",
+          "bestFor": "Pure cache layers where data can be lazily reloaded from backing databases."
         },
         {
-          "option": "Hybrid RDB + AOF (`appendfsync everysec`)",
-          "pros": "Bounds potential data loss to at most 1 second with near-native in-memory performance.",
-          "cons": "Larger disk footprint and background AOF rewrite I/O overhead.",
-          "bestFor": "Session stores, rate limiters, real-time leaderboards, and write-behind buffers."
+          "option": "AOF with `appendfsync everysec`",
+          "pros": "Limits potential data loss to a strict 1-second window; append-only format avoids corruption.",
+          "cons": "Larger disk footprint and background disk rewrite overhead during peak write traffic.",
+          "bestFor": "Session stores, rate limiters, write-behind buffers, and real-time state machines."
         }
       ],
-      "interviewTip": "Know the exact time complexity and internal structure of Redis `ZSET` (Hash Map + Skip List, O(log N)) and explain why `KEYS *` is forbidden in production (use `SCAN` cursor iteration instead).",
-      "jsonUrl": "/api/subtopics/caching/cache-redis.json"
+      "interviewTip": "Emphasize why `KEYS *` is banned in production (explain the single-threaded event loop freeze) and describe how `SCAN` iterates the keyspace safely across multiple small cursor batches.",
+      "jsonUrl": "/api/subtopics/caching/cache-redis.json",
+      "diagramImageUrl": "/diagrams/arch-cache-redis.svg"
     }
   ]
 }

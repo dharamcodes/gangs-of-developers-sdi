@@ -9,49 +9,51 @@
   "readingTime": "8 min read",
   "difficulty": "Advanced",
   "keyTakeaways": [
-    "A Cache Stampede (Dogpiling) happens when a popular cached key expires and thousands of concurrent requests simultaneously miss the cache and hammer the database with identical expensive queries.",
-    "Request Coalescing (`Singleflight` in Go) deduplicates concurrent in-flight cache misses within an application node so only 1 request queries the DB/cache and shares the result with all waiting callers.",
-    "Probabilistic Early Expiration (PER / XFetch) recomputes hot keys asynchronously *before* their TTL expires based on recomputation time and remaining TTL."
+    "A Cache Stampede occurs when a high-traffic key expires, triggering an instantaneous flood of concurrent cache misses that hammer the database with identical heavy queries.",
+    "In-process request coalescing (`Singleflight`) collapses duplicate misses on the same application pod into a single shared database query.",
+    "Probabilistic early expiration (such as the XFetch algorithm) and Soft TTLs trigger asynchronous background refreshes before keys hard-expire, preserving sub-millisecond read latencies."
   ],
   "architectureDiagram": "WITHOUT COALESCING (Stampede: 1,000 DB Queries)   WITH SINGLEFLIGHT + LEASE (1 DB Query)\n1,000 Req ---> [Cache Miss] === 1,000x ===> [DB]   1,000 Req ---> [Singleflight Dedup]\n                               (DB Crashes!)                         | (999 wait in RAM)\n                                                                     +--- 1x ---> [DB]",
   "sections": [
     {
-      "heading": "Request Coalescing (Singleflight) & Distributed Mutex Leases",
-      "body": "When a cached homepage payload or expensive aggregation expires under 10,000 RPS, and the DB query takes 200ms, 2,000 requests will see a cache miss during that 200ms window and launch 2,000 duplicate DB queries. You can eliminate this in two layers: per-process Singleflight and cross-process Distributed Leases.",
+      "heading": "Request Coalescing (Singleflight) and Distributed Mutex Leases",
+      "body": "When an expensive cached payload expires, every concurrent incoming thread sees a cache miss. Under high QPS, thousands of identical, redundant queries queue up at the database within fractions of a second, causing connection pool exhaustion and database CPU saturation. Resolving this requires deduplicating in-flight work.",
       "bullets": [
-        "In-Process Request Coalescing (`Singleflight`): Maintain an in-memory map of `inflightPromises: Map<string, Promise<T>>`. If `key` is already being fetched on this pod, subsequent callers simply `await` the existing Promise. If you have 20 pods, max DB queries drop from 2,000 to at most 20.",
-        "Distributed Lease / Mutex (`SET lock:key 1 NX PX 2000`): Out of those 20 pods, only the 1 pod that acquires the Redis lock queries the database; the other 19 either serve slightly stale data (Soft TTL) or wait briefly for the cache to be populated.",
-        "Never Block Indefinitely: Always bound distributed lock wait times and fall back to serving stale cached data if the recomputation fails."
+        "In-Process Request Coalescing (`Singleflight`): Maintain a local concurrency map of `inflightPromises: Map<string, Promise<T>>`. If thread 1 is already querying the database for key X, threads 2 through 100 simply attach to the existing Promise. Across 20 application pods, database load drops from 1,000 queries to at most 20.",
+        "Distributed Mutex Leases (`SET lock:key 1 NX PX 2000`): To reduce those 20 pod queries down to exactly 1, the first pod to miss acquires a short-lived Redis lock. The winning pod computes the new value and updates Redis; the other 19 pods either wait briefly or immediately serve the slightly stale payload.",
+        "Never Hang on Locks: Enforce strict lock timeouts (e.g. 500ms) and always fall back to serving stale cached data or an empty payload rather than blocking client request threads indefinitely."
       ],
       "codeSnippet": {
         "title": "In-Process Singleflight + Probabilistic Early Expiration (XFetch)",
         "code": "const inflight = new Map<string, Promise<any>>();\n\n// 1. Singleflight: Coalesce concurrent cache misses on the same Node/Pod\nexport function singleflight<T>(key: string, fn: () => Promise<T>): Promise<T> {\n  if (inflight.has(key)) return inflight.get(key)!;\n  const promise = fn().finally(() => inflight.delete(key));\n  inflight.set(key, promise);\n  return promise;\n}\n\n// 2. XFetch Probabilistic Early Expiration Algorithm (VLDB '15)\n// delta = time to recompute (ms), beta = 1.0, expiry = hard expiration timestamp (ms)\nfunction shouldRecomputeEarly(deltaMs: number, expiryMs: number, beta = 1.0): boolean {\n  const now = Date.now();\n  // As (expiry - now) approaches 0, or as request rate rises, probability -> 1\n  return (now - deltaMs * beta * Math.log(Math.random())) >= expiryMs;\n}"
-      }
+      },
+      "diagramImageUrl": "/diagrams/arch-cache-stampede.svg"
     },
     {
-      "heading": "Probabilistic Early Expiration (XFetch Algorithm)",
-      "body": "Instead of waiting for a hot key to hard-expire and then scrambling to coordinate locks, the XFetch algorithm (published in VLDB 2015) stores the recomputation duration (`delta`) alongside the cached item. On every cache hit, the reader rolls a weighted logarithmic die: `now - delta * beta * ln(rand()) >= expiry`. For cold keys that are rarely read, this never triggers early. For hot keys read 1,000 times per second, one lucky request will probabilistically trigger a background refresh a few seconds *before* the TTL expires, so the key never expires under load!",
+      "heading": "Probabilistic Early Refresh (XFetch Algorithm)",
+      "body": "Waiting for a hot key to hard-expire before coordinating a lock is inherently reactive. The XFetch algorithm (VLDB 2015) flips this by probabilistically refreshing hot data before expiration based on how long it takes to recompute.",
       "bullets": [
-        "Zero Lock Coordination Needed: XFetch works purely from local math on each cache hit without extra Redis lock round-trips.",
-        "Self-Tuning by Popularity: The higher the QPS on a key, the more trials per second, guaranteeing an early refresh exclusively for genuinely hot keys.",
-        "Combine with Soft TTL: Even simpler than XFetch, storing a `soft_ttl` inside the cached JSON lets the first reader after `soft_ttl` acquire a non-blocking Redis lock (`SET NX`) to refresh in the background while all other readers immediately receive the still-valid `hard_ttl` payload."
+        "How XFetch Works: Along with the cached value, store the computation time (`delta`). On every read hit, evaluate `now - delta * beta * ln(rand()) >= expiry`. If the random check passes, the reader triggers a background refresh.",
+        "Self-Scaling by Request Volume: Cold keys read once an hour almost never trigger early. A hot key receiving 2,000 reads per second will reliably trigger a quiet background refresh a few seconds before the TTL elapses, ensuring the key never experiences an open-window expiration.",
+        "Soft TTL with Background Async Worker: A simpler operational alternative is storing `soft_expire_at` in the JSON body. When the soft TTL passes, the first reader fires an async queue job to refresh Redis while immediately returning the current data to the user."
       ]
     }
   ],
   "tradeOffs": [
     {
       "option": "In-Process Singleflight + Distributed Lease Lock",
-      "pros": "Strictly caps database load to 1 query across the entire cluster even on a completely cold cache.",
-      "cons": "Callers on a completely cold key must wait for the winner to finish querying the DB.",
-      "bestFor": "Expensive DB queries, cold-cache startups, and API gateway aggregation layers."
+      "pros": "Strictly caps database load to 1 query cluster-wide even during cold starts or cache flushes.",
+      "cons": "Waiting callers on a cold key experience latency equal to the slowest database query duration.",
+      "bestFor": "Heavy analytical queries, reports, and cold-start application boot phases."
     },
     {
-      "option": "Soft TTL / Probabilistic Early Expiration (XFetch)",
-      "pros": "Zero tail-latency spike for users because refreshes happen before hard expiration.",
-      "cons": "Only prevents stampedes on already-cached hot keys; still needs Singleflight for initial cold misses.",
-      "bestFor": "High-QPS feeds, homepage modules, and low-latency p99 SLA services."
+      "option": "Soft TTL / Probabilistic Early Refresh (XFetch)",
+      "pros": "Zero latency penalty for end users because updates run asynchronously before hard expiration.",
+      "cons": "Requires items to already be cached; does not protect against misses on brand-new cold keys.",
+      "bestFor": "High-traffic homepages, public product detail endpoints, and low-latency API SLAs."
     }
   ],
-  "interviewTip": "Combine both techniques in your answer: 'I will use Soft TTL / Probabilistic Early Refresh so hot keys refresh in the background before expiring, and Singleflight request coalescing to protect against cold-start misses.'",
-  "jsonUrl": "/api/subtopics/caching/cache-stampede.json"
+  "interviewTip": "Pair both patterns: propose Soft TTL / Probabilistic Early Refresh to keep hot keys warm before expiration, and back it with Singleflight request coalescing to protect against cold-start misses.",
+  "jsonUrl": "/api/subtopics/caching/cache-stampede.json",
+  "diagramImageUrl": "/diagrams/arch-cache-stampede.svg"
 }

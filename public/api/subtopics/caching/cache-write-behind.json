@@ -9,49 +9,51 @@
   "readingTime": "8 min read",
   "difficulty": "Advanced",
   "keyTakeaways": [
-    "Write-Behind (Write-Back) acknowledges writes immediately after updating the fast in-memory cache, queuing persistence to the database asynchronously.",
-    "Multiple rapid updates to the same key within the flush window are coalesced into a single database `UPDATE`, drastically reducing DB IOPS.",
-    "Because the cache holds uncommitted dirty data before it reaches the DB, node crashes can cause permanent data loss unless backed by replicated WAL/streams."
+    "Write-Behind (Write-Back) acknowledges writes immediately after updating fast in-memory storage, delegating disk persistence to asynchronous background flushers.",
+    "Write coalescing merges thousands of rapid mutations to the same key into a single bulk database update, dropping database IOPS by multiple orders of magnitude.",
+    "The core trade-off is durability: uncommitted dirty data in the cache is vulnerable to node crashes unless backed by replicated append-only logs or write streams."
   ],
   "architectureDiagram": "                       WRITE-BEHIND (WRITE-BACK) PIPELINE\n\n[Clients] -- 100k Writes/sec --> [Redis / In-Memory Cache] (1. Immediate ACK < 1ms)\n                                            |\n                                  (2. Dirty Key Queue /\n                                   Write Coalescing Window: 5s)\n                                            |\n                                            v\n                                 [Async Batch Flusher Worker]\n                                            |\n                                  (3. Bulk Upsert: 500 rows/batch)\n                                            v\n                                   [PostgreSQL / MySQL]",
   "sections": [
     {
-      "heading": "Write Coalescing & Batch Persistence",
-      "body": "Imagine a viral video receiving 50,000 view increments per second. Executing 50,000 individual `UPDATE videos SET views = views + 1` statements per second against PostgreSQL will saturate row locks and WAL I/O. With Write-Behind, each view increments a Redis counter (`HINCRBY`) and records the `video_id` in a dirty set. Every 5 seconds, a background worker drains the dirty set and executes a single bulk `UPDATE` statement in PostgreSQL.",
+      "heading": "Write Coalescing to Protect Database Disk I/O",
+      "body": "At 50,000 requests per second, row-level locks on relational tables turn writes into a serialized bottleneck. If 50,000 users click like or watch a video within a 5-second window, writing directly to Postgres means 250,000 individual transactions. Write-Behind turns this upside down: the application increments an in-memory Redis counter, tags the entity ID as dirty, and returns HTTP 200 in sub-millisecond time. A background batch worker wakes up every 5 seconds, drains the dirty delta, and issues a single bulk update.",
       "bullets": [
-        "Massive Write Compression: 250,000 increments to 100 videos over 5 seconds collapse into a single SQL batch update of 100 rows!",
-        "Sub-Millisecond Write Latency: Clients only wait for an in-memory RAM operation, isolating user latency from database load spikes.",
-        "CPU & OS Page Cache Analogy: Linux OS page cache and CPU L1/L2 caches use Write-Back natively, marking pages with a 'dirty bit' and flushing asynchronously."
+        "Orders-of-Magnitude IOPS Reduction: 250,000 point updates collapse into a single batched SQL statement modifying a handful of rows.",
+        "Isolating Client Latency: Callers never wait on database lock acquisition, disk flush, or replication lag; latency remains tied strictly to network and RAM.",
+        "The Operating System Precedent: This is the exact pattern the Linux OS uses with dirty pages in the page cache, deferring disk sync (`fsync`) to background flush daemons."
       ],
       "codeSnippet": {
         "title": "Atomic Write-Behind Coalescing with Redis Lua & Batch Flush",
         "code": "// 1. Fast Write Path: Increment counter and mark entity dirty atomically\nasync function recordVideoView(videoId: string): Promise<void> {\n  await redis.multi()\n    .hincrby('video:views:delta', videoId, 1)\n    .sadd('video:views:dirty_ids', videoId)\n    .exec();\n}\n\n// 2. Background Worker (runs every 5s): Drain delta atomically & bulk-flush to DB\nconst luaDrain = `\n  local delta = redis.call('HGET', 'video:views:delta', ARGV[1])\n  if delta then\n    redis.call('HDEL', 'video:views:delta', ARGV[1])\n    redis.call('SREM', 'video:views:dirty_ids', ARGV[1])\n  end\n  return delta\n`;"
-      }
+      },
+      "diagramImageUrl": "/diagrams/arch-cache-write-behind.svg"
     },
     {
-      "heading": "Durability Risks & Failure Recovery",
-      "body": "Because Write-Behind violates strict ACID durability by acknowledging writes before they hit persistent disk, engineers must carefully bound the blast radius of a cache node failure.",
+      "heading": "Bounded Data Loss and Crash Recovery",
+      "body": "The reason engineers don't use Write-Behind everywhere is simple: it violates ACID durability (the 'D'). Acknowledge first and persist later means any failure between the two introduces data loss. The operational task is bounding that loss window.",
       "bullets": [
-        "Redis AOF + Replication: Configure Redis with `appendfsync everysec` and a replica, or push mutations onto a durable Kafka topic alongside the Redis update.",
-        "Idempotent Retry Handling: If the batch worker crashes after updating the DB but before clearing the Redis delta, a naive retry would double-count. Store a flush batch ID or flush absolute snapshots rather than blind deltas where possible.",
-        "Backpressure Protection: If the backing database goes down for maintenance, dirty keys will accumulate in Redis RAM; enforce a max memory threshold that degrades gracefully."
+        "Durability Guardrails: Pair Redis with `appendfsync everysec` and active replication, or dual-publish mutations to an append-only stream (like Kafka) alongside memory updates.",
+        "Idempotent Retry Handling: If the flusher commits to Postgres but crashes before evicting the dirty delta from Redis, the next worker run might double-count. Write snapshots or monotonically increasing sequence values rather than raw blind increments whenever possible.",
+        "Backpressure and Memory Spikes: If the primary database suffers downtime, dirty writes accumulate in Redis RAM. Set clear memory saturation alerts and bounded queue limits to degrade gracefully instead of running the cache out of memory."
       ]
     }
   ],
   "tradeOffs": [
     {
       "option": "Write-Behind (Write-Back) Caching",
-      "pros": "Sub-millisecond write latency; orders-of-magnitude reduction in DB write IOPS via coalescing.",
-      "cons": "Window of potential data loss on cache failure; complex error recovery if DB rejects a batch.",
-      "bestFor": "View/like counters, user presence/last-seen timestamps, gaming leaderboards, and rate limiters."
+      "pros": "Sub-millisecond write latency; collapses extreme write concurrency into compact bulk database updates.",
+      "cons": "Risk of data loss if the cache node crashes before dirty entries are flushed to persistent disk.",
+      "bestFor": "View counts, telemetry ingestion, user presence status, and real-time gaming leaderboards."
     },
     {
-      "option": "Synchronous Database / Write-Through",
-      "pros": "Strict durability (RPO = 0); immediate database constraints validation.",
-      "cons": "Cannot absorb sudden 100x write spikes on hot keys without row-lock saturation.",
-      "bestFor": "Financial balances, inventory deduction, and order creation."
+      "option": "Synchronous Database Write",
+      "pros": "Zero data loss window (strict RPO = 0); immediate validation of schema constraints and foreign keys.",
+      "cons": "Directly exposes client latency to database lock contention, disk I/O bottlenecks, and connection limits.",
+      "bestFor": "Account balances, billing charges, and inventory decrement operations."
     }
   ],
-  "interviewTip": "Use Write-Behind in interviews whenever you have high-frequency, loss-tolerant mutations (like 'User Last Active Timestamp', 'Video Playback Progress', or 'Like Counters'), and explicitly mention 'write coalescing' over a 5-second window.",
-  "jsonUrl": "/api/subtopics/caching/cache-write-behind.json"
+  "interviewTip": "Whenever you encounter high-frequency, loss-tolerant metrics (such as video views or user click telemetry), propose Write-Behind with a 5-second write coalescing window to demonstrate production resource efficiency.",
+  "jsonUrl": "/api/subtopics/caching/cache-write-behind.json",
+  "diagramImageUrl": "/diagrams/arch-cache-write-behind.svg"
 }

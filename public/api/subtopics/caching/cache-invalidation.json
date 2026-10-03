@@ -9,49 +9,51 @@
   "readingTime": "9 min read",
   "difficulty": "Advanced",
   "keyTakeaways": [
-    "Relying on dual-writes in application code (`db.update()` then `redis.del()`) fails when the process crashes between the two calls or when multiple services mutate the same DB table.",
-    "Change Data Capture (CDC) tailing the database WAL/binlog (via Debezium + Kafka) decouples cache invalidation from application code and guarantees eventual convergence.",
-    "Memcached Leases (or Redis version tokens) solve the classic Stale-Set race condition between a concurrent cache-miss reader and an invalidating writer."
+    "Dual-writes in application code (`db.update()` then `redis.del()`) inevitably drift when processes crash, transactions roll back, or network partitions occur.",
+    "Change Data Capture (CDC) tailing the database WAL/binlog decouples invalidation from application services and guarantees eventual cache convergence.",
+    "Memcached Lease Tokens and versioned tombstone checks resolve the classic race where a slow cache-miss reader overwrites a newer database commit."
   ],
   "architectureDiagram": "               CDC-DRIVEN RELIABLE CACHE INVALIDATION\n  [Service A] --+\n                |--> 1. Write --> [PostgreSQL Primary]\n  [Service B] --+                         |\n                                    (2. WAL / Binlog)\n                                          v\n                                [Debezium / Kafka Stream]\n                                          |\n                                          v\n                              [Cache Invalidator Consumer]\n                                          |\n                             (3. DEL / Versioned Update)\n                                          v\n                                   [Redis Cluster]",
   "sections": [
     {
-      "heading": "Why Application Dual-Writes Fail & How Leases Fix Stale Sets",
-      "body": "Consider what happens when Reader A gets a cache miss, reads `v1` from the DB, and pauses due to a GC pause or network blip. Meanwhile, Writer B updates the DB to `v2` and runs `DEL key` on the cache. Finally, Reader A wakes up and executes `SET key v1`, poisoning the cache with stale data until the TTL expires! Meta solved this in Memcached (`McLease`) using 64-bit Lease Tokens.",
+      "heading": "The Application Dual-Write Illusion and Stale Overwrites",
+      "body": "When application code manages both database updates and cache invalidation, partial failure is inevitable. If the application commits a change to PostgreSQL and crashes before firing `DEL key` to Redis, the cache remains out of sync until TTL expiry. Worse is the concurrent interleaving race: Reader A misses the cache and reads version 1 from the database. A GC pause freezes Reader A. Meanwhile, Writer B commits version 2 to the database and cleanly deletes the key from Redis. Reader A unpauses and issues `SET key v1`, overwriting the fresh invalidation and permanently poisoning the cache.",
       "bullets": [
-        "How Leases Work: On a cache miss, the cache grants Reader A a 64-bit lease token. When Writer B calls `DEL key`, the cache invalidates any outstanding lease tokens for that key. When Reader A belatedly calls `SET key v1 (with lease)`, the cache rejects the write because the lease was invalidated!",
-        "Database-Generated Monotonic Versions: In Redis, store a hash containing `version` (or DB `xmin`/`updated_at_ns`) and use a Lua script on cache population that only overwrites if the incoming version is strictly greater.",
-        "CDC Pipeline Invalidation: Instead of sprinkling `redis.del()` across 15 microservices, stream Postgres WAL via Debezium and have a dedicated consumer invalidate all affected cache keys and composite keys."
+        "Memcached Lease Tokens: On a cache miss, the engine hands the reader a 64-bit lease. If a writer invalidates the key before the reader returns, the lease is revoked. When the slow reader attempts its `SET`, the cache detects the stale lease and rejects the write.",
+        "Database-Driven Monotonic Versions: Store a database transaction ID (`xmin`) or nanosecond timestamp with the cached payload. Execute cache populations through a Lua script that verifies `incoming_version > current_version` before overwriting.",
+        "CDC-Driven Decoupled Invalidation: Tail the primary database write-ahead log using Debezium and Kafka. When an update commits to disk, a dedicated invalidator consumer consumes the change event and clears the corresponding cache keys, insulating cache coherence from application crashes."
       ],
       "codeSnippet": {
         "title": "Race-Free Cache Population Using Lua Version Check",
         "code": "-- Lua script: Only populate or update cache if incoming DB version > cached version\n-- Prevents slow cache-miss readers from overwriting newer invalidations/tombstones!\nlocal currentVersion = tonumber(redis.call('HGET', KEYS[1], 'ver') or '0')\nlocal incomingVersion = tonumber(ARGV[1])\n\nif incomingVersion > currentVersion then\n  redis.call('HSET', KEYS[1], 'ver', ARGV[1], 'data', ARGV[2])\n  redis.call('EXPIRE', KEYS[1], tonumber(ARGV[3]))\n  return 1\nend\nreturn 0\n\n-- On Write Invalidation: Instead of raw DEL (which forgets the version),\n-- write a short-lived tombstone with the new version and empty data!"
-      }
+      },
+      "diagramImageUrl": "/diagrams/arch-cache-invalidation.svg"
     },
     {
-      "heading": "Invalidating Composite Queries & Local L1 Caches",
-      "body": "Invalidating a single entity key (`user:123`) is straightforward, but what about cached list queries (`merchant:42:products:page:1`) or in-memory L1 caches inside 100 Node.js/Java application pods?",
+      "heading": "Invalidating Complex Queries and Local Pod Memory",
+      "body": "Clearing a single primary key like `user:123` is simple. The problem becomes painful when dealing with composite queries (such as filtered product lists or pagination pages) and multi-tier L1 in-process caches.",
       "bullets": [
-        "Namespace / Generation Token (Epoch Key): Instead of deleting 500 pagination keys for `merchant:42`, store a version integer at `merchant:42:epoch` (e.g., `7`) and construct list keys as `merchant:42:v7:page:1`. Incrementing `epoch` to `8` instantly invalidates all pages in O(1)!",
-        "L1 In-Process Cache Invalidation: Use Redis Client-Side Caching (RESP3 invalidation tracking) or Redis Pub/Sub / Kafka broadcast to notify all application pods to evict keys from their local RAM caches.",
-        "Cross-Region Cache Invalidation: Read Meta's TAO / Memcache (NSDI '13) McSqueal pattern, tail regional DB binlogs and broadcast invalidation deletes across regional cache clusters."
+        "Namespace Epoch Keys: Instead of hunting down and deleting 500 paginated keys when a merchant adds an item, store an epoch integer at `merchant:42:epoch`. Format cache keys as `merchant:42:v{epoch}:page:1`. Bumping the epoch from 7 to 8 renders all previous pages instantly unreadable in O(1) time without scanning Redis.",
+        "L1 In-Process Coherence: In-process caches (like Guava/Caffeine in application pods) achieve zero network overhead but drift from Redis. Use Redis RESP3 client-side tracking or an invalidation Pub/Sub topic to notify pods to evict changed entries immediately.",
+        "Multi-Region Eventual Consistency: In distributed multi-region deployments, regional caches tail replication streams (following Meta's McSqueal architecture) to drop local keys only after regional database replicas confirm receipt of the write."
       ]
     }
   ],
   "tradeOffs": [
     {
-      "option": "Synchronous App-Level Delete (`DEL` after DB commit)",
-      "pros": "Zero replication lag between DB write and cache invalidation on the happy path.",
-      "cons": "Prone to partial failure if app crashes after DB commit; tightly couples all writers to cache keys.",
-      "bestFor": "Single-service ownership where one microservice owns both the DB table and the Redis cache."
+      "option": "Synchronous Application Invalidation (`DEL` on Write)",
+      "pros": "Zero latency between database commit and cache eviction under ideal network conditions.",
+      "cons": "Fails silently if the process terminates mid-execution; tightly couples write code to cache key schemas.",
+      "bestFor": "Single monoliths or isolated services with dedicated tables and low mutation rates."
     },
     {
-      "option": "Asynchronous CDC (Debezium WAL -> Kafka -> Invalidator)",
-      "pros": "Guaranteed at-least-once invalidation; decouples writers from cache key topology.",
-      "cons": "Introduces 20–100ms pipeline lag between DB commit and cache eviction.",
-      "bestFor": "Large architectures with multiple writers, composite caches, or multi-region replication."
+      "option": "Asynchronous CDC Invalidation (Debezium + Kafka)",
+      "pros": "Guarantees at-least-once eviction; insulates cache correctness from application-level failures.",
+      "cons": "Introduces 20–100ms pipeline replication lag between database commit and cache clearing.",
+      "bestFor": "Complex microservice architectures where multiple services read or write shared entity boundaries."
     }
   ],
-  "interviewTip": "Referencing the 'Namespace Epoch Key' trick for invalidating paginated lists in O(1) and 'Lease Tokens / Tombstone Versions' to prevent stale cache-miss sets demonstrates Staff-level mastery.",
-  "jsonUrl": "/api/subtopics/caching/cache-invalidation.json"
+  "interviewTip": "Bring up the 'Namespace Epoch Key' pattern for invalidating multi-page lists in O(1) and explain how Lease Tokens prevent stale reader overwrites to demonstrate deep distributed systems experience.",
+  "jsonUrl": "/api/subtopics/caching/cache-invalidation.json",
+  "diagramImageUrl": "/diagrams/arch-cache-invalidation.svg"
 }
