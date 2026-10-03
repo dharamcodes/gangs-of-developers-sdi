@@ -4,6 +4,7 @@ export interface SubtopicSection {
   bullets?: string[];
   erDiagramUrl?: string;
   diagramImageUrl?: string;
+  flowDiagramUrl?: string;
   asciiDiagram?: string;
   codeSnippet?: {
     title: string;
@@ -29,6 +30,7 @@ export interface SubtopicSummary {
   readingTime: string;
   difficulty: "Foundational" | "Intermediate" | "Advanced" | "Staff+";
   diagramImageUrl?: string;
+  flowDiagramUrl?: string;
   jsonUrl: string;
 }
 

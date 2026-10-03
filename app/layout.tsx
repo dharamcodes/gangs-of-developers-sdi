@@ -19,7 +19,24 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){
+              try {
+                var m = localStorage.getItem('god_handbook_theme_mode');
+                if (!m) {
+                  m = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+                }
+                document.documentElement.setAttribute('data-theme', m);
+                document.documentElement.style.colorScheme = m;
+                document.documentElement.style.backgroundColor = m === 'dark' ? '#070b14' : '#f4f1ea';
+              } catch(e){}
+            })();`,
+          }}
+        />
+      </head>
       <body>
         <AppRouterCacheProvider>{children}</AppRouterCacheProvider>
         <Analytics />
