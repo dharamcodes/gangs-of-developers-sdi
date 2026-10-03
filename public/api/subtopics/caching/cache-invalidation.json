@@ -13,24 +13,24 @@
     "Change Data Capture (CDC) tailing the database WAL/binlog (via Debezium + Kafka) decouples cache invalidation from application code and guarantees eventual convergence.",
     "Memcached Leases (or Redis version tokens) solve the classic Stale-Set race condition between a concurrent cache-miss reader and an invalidating writer."
   ],
-  "architectureDiagram": "               CDC-DRIVEN RELIABLE CACHE INVALIDATION\n  [Service A] --+\n                |--> 1. Write --> [PostgreSQL Primary]\n  [Service B] --+                         |\n                                    (2. WAL / Binlog)\n                                          v\n                                [Debezium / Kafka Stream]\n                                          |\n                                          v\n                              [Cache Invalidator Consumer]\n                                          |\n                             (3. DEL / Versioned Update)\n                                          v\n                                   [Redis Cluster]",
+  "architectureDiagram": "CDC-DRIVEN RELIABLE CACHE INVALIDATION\n  [Service A] --+\n                |--> 1. Write --> [PostgreSQL Primary]\n  [Service B] --+                         |\n                                    (2. WAL / Binlog)\n                                          v\n                                [Debezium / Kafka Stream]\n                                          |\n                                          v\n                              [Cache Invalidator Consumer]\n                                          |\n                             (3. DEL / Versioned Update)\n                                          v\n                                   [Redis Cluster]",
   "sections": [
     {
       "heading": "1. Architectural Fundamentals & Core Mechanics",
-      "body": "Cache Invalidation is a foundational architectural concept in distributed systems. Solving one of computer science's hardest problems: CDC-driven invalidation, race-free leases, and multi-region cache coherence. Fundamentally, Consider what happens when Reader A gets a cache miss, reads `v1` from the DB, and pauses due to a GC pause or network blip. Meanwhile, Writer B updates the DB to `v2` and runs `DEL key` on the cache. Finally, Reader A wakes up and executes `SET key v1`—poisoning the cache with stale data until the TTL expires! Meta solved this in Memcached (`McLease`) using 64-bit Lease Tokens.",
+      "body": "Consider what happens when Reader A gets a cache miss, reads `v1` from the DB, and pauses due to a GC pause or network blip. Meanwhile, Writer B updates the DB to `v2` and runs `DEL key` on the cache. Finally, Reader A wakes up and executes `SET key v1`, poisoning the cache with stale data until the TTL expires! Meta solved this in Memcached (`McLease`) using 64-bit Lease Tokens.",
       "bullets": [
         "**Core Architectural Principle**: Relying on dual-writes in application code (`db.update()` then `redis.del()`) fails when the process crashes between the two calls or when multiple services mutate the same DB table.",
         "**Problem Space & Invariants**: Change Data Capture (CDC) tailing the database WAL/binlog (via Debezium + Kafka) decouples cache invalidation from application code and guarantees eventual convergence.",
         "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
       ],
-      "asciiDiagram": "               CDC-DRIVEN RELIABLE CACHE INVALIDATION\n  [Service A] --+\n                |--> 1. Write --> [PostgreSQL Primary]\n  [Service B] --+                         |\n                                    (2. WAL / Binlog)\n                                          v\n                                [Debezium / Kafka Stream]\n                                          |\n                                          v\n                              [Cache Invalidator Consumer]\n                                          |\n                             (3. DEL / Versioned Update)\n                                          v\n                                   [Redis Cluster]"
+      "asciiDiagram": "CDC-DRIVEN RELIABLE CACHE INVALIDATION\n  [Service A] --+\n                |--> 1. Write --> [PostgreSQL Primary]\n  [Service B] --+                         |\n                                    (2. WAL / Binlog)\n                                          v\n                                [Debezium / Kafka Stream]\n                                          |\n                                          v\n                              [Cache Invalidator Consumer]\n                                          |\n                             (3. DEL / Versioned Update)\n                                          v\n                                   [Redis Cluster]"
     },
     {
       "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "In production distributed systems, cache invalidation manifests across several distinct architectural classifications, operational modes, and implementation strategies:",
+      "body": "Distributed architectures apply specific implementation patterns and topologies for Cache Invalidation:",
       "bullets": [
-        "**Synchronous App-Level Delete (`DEL` after DB commit)**: Focuses on zero replication lag between db write and cache invalidation on the happy path. Best suited for Single-service ownership where one microservice owns both the DB table and the Redis cache..",
-        "**Asynchronous CDC (Debezium WAL -> Kafka -> Invalidator)**: Focuses on guaranteed at-least-once invalidation; decouples writers from cache key topology. Best suited for Large architectures with multiple writers, composite caches, or multi-region replication..",
+        "**Synchronous App-Level Delete (`DEL` after DB commit)**: Provides zero replication lag between db write and cache invalidation on the happy path. Best suited for Single-service ownership where one microservice owns both the DB table and the Redis cache.",
+        "**Asynchronous CDC (Debezium WAL -> Kafka -> Invalidator)**: Provides guaranteed at-least-once invalidation; decouples writers from cache key topology. Best suited for Large architectures with multiple writers, composite caches, or multi-region replication.",
         "How Leases Work: On a cache miss, the cache grants Reader A a 64-bit lease token. When Writer B calls `DEL key`, the cache invalidates any outstanding lease tokens for that key. When Reader A belatedly calls `SET key v1 (with lease)`, the cache rejects the write because the lease was invalidated!",
         "Database-Generated Monotonic Versions: In Redis, store a hash containing `version` (or DB `xmin`/`updated_at_ns`) and use a Lua script on cache population that only overwrites if the incoming version is strictly greater.",
         "Namespace / Generation Token (Epoch Key): Instead of deleting 500 pagination keys for `merchant:42`, store a version integer at `merchant:42:epoch` (e.g., `7`) and construct list keys as `merchant:42:v7:page:1`. Incrementing `epoch` to `8` instantly invalidates all pages in O(1)!",
@@ -43,27 +43,27 @@
     },
     {
       "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Adopting appropriate design patterns around cache invalidation unlocks critical performance, scalability, and operational advantages for modern backend platforms:",
+      "body": "Production deployments apply Cache Invalidation across targeted operational scenarios:",
       "bullets": [
-        "**Where to Use — High-Impact Scenarios**: Optimal for Single-service ownership where one microservice owns both the DB table and the Redis cache. and environments requiring Zero replication lag between DB write and cache invalidation on the happy path..",
-        "**Where to Use — High-Throughput Scenarios**: Recommended for Large architectures with multiple writers, composite caches, or multi-region replication. where Guaranteed at-least-once invalidation; decouples writers from cache key topology..",
-        "**How to Use — Engineering Implementation**: Invalidating a single entity key (`user:123`) is straightforward, but what about cached list queries (`merchant:42:products:page:1`) or in-memory L1 caches inside 100 Node.js/Java application pods?. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
+        "**Where to Use: High-Impact Scenarios**: Optimal for Single-service ownership where one microservice owns both the DB table and the Redis cache, suited for environments requiring Zero replication lag between DB write and cache invalidation on the happy path.",
+        "**Where to Use: High-Throughput Scenarios**: Recommended for Large architectures with multiple writers, composite caches, or multi-region replication, where Guaranteed at-least-once invalidation; decouples writers from cache key topology.",
+        "**How to Use: Engineering Implementation**: Invalidating a single entity key (`user:123`) is straightforward, but what about cached list queries (`merchant:42:products:page:1`) or in-memory L1 caches inside 100 Node.js/Java application pods?. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
         "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
       ]
     },
     {
       "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "While essential for scalable engineering, cache invalidation introduces substantial architectural trade-offs, operational failure modes, and anti-patterns if applied inappropriately:",
+      "body": "Improper implementation of Cache Invalidation introduces operational bottlenecks and failure modes:",
       "bullets": [
-        "**Where to Avoid — Trade-Off Bottlenecks**: Avoid when constraints impose prone to partial failure if app crashes after db commit; tightly couples all writers to cache keys.",
-        "**Where to Avoid — Complexity Ceiling**: Avoid premature optimization when introduces 20–100ms pipeline lag between db commit and cache eviction.",
+        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: prone to partial failure if app crashes after db commit; tightly couples all writers to cache keys.",
+        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: introduces 20–100ms pipeline lag between db commit and cache eviction.",
         "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
         "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
       ]
     },
     {
       "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Mastering cache invalidation is a defining trait of Staff-level distributed systems engineers. Navigating the delicate balance between performance, reliability, and simplicity ensures architectures scale sustainably without introducing unmanageable operational friction.",
+      "body": "Technical guidelines and evaluation criteria for Cache Invalidation:",
       "bullets": [
         "**Staff+ Golden Rule**: Memcached Leases (or Redis version tokens) solve the classic Stale-Set race condition between a concurrent cache-miss reader and an invalidating writer.",
         "**Staff+ Interview Playbook**: Referencing the 'Namespace Epoch Key' trick for invalidating paginated lists in O(1) and 'Lease Tokens / Tombstone Versions' to prevent stale cache-miss sets demonstrates Staff-level mastery."

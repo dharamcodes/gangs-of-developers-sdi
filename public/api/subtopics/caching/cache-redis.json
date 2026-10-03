@@ -13,26 +13,26 @@
     "Beyond simple strings, Redis provides native atomic data structures: Sorted Sets (`ZSET` skip-list + hash table for leaderboards/rate limiters), Hashes, Streams, and HyperLogLog.",
     "Redis Cluster partitions the keyspace into 16,384 fixed CRC16 hash slots (`CRC16(key) % 16384`) distributed across master nodes without a central proxy."
   ],
-  "architectureDiagram": "                     REDIS INTERNALS & CLUSTER TOPOLOGY\n  [Clients] === Pipelined Commands ===> [I/O Multiplexer (epoll / kqueue)]\n                                                       |\n                                        [Single-Threaded Command Loop]\n                                         (Zero Locks! Atomic Lua/Ops)\n                                          /            |            \\\n                                      [ZSET]        [HASH]        [HLL]\n  REDIS CLUSTER (16,384 Hash Slots):\n  +-----------------------+  +-----------------------+  +-----------------------+\n  | Node A: Slots 0..5460 |  | Node B: 5461..10922   |  | Node C: 10923..16383  |\n  +-----------------------+  +-----------------------+  +-----------------------+",
+  "architectureDiagram": "REDIS INTERNALS & CLUSTER TOPOLOGY\n  [Clients] === Pipelined Commands ===> [I/O Multiplexer (epoll / kqueue)]\n                                                       |\n                                        [Single-Threaded Command Loop]\n                                         (Zero Locks! Atomic Lua/Ops)\n                                          /            |            \\\n                                      [ZSET]        [HASH]        [HLL]\n  REDIS CLUSTER (16,384 Hash Slots):\n  +-----------------------+  +-----------------------+  +-----------------------+\n  | Node A: Slots 0..5460 |  | Node B: 5461..10922   |  | Node C: 10923..16383  |\n  +-----------------------+  +-----------------------+  +-----------------------+",
   "sections": [
     {
       "heading": "1. Architectural Fundamentals & Core Mechanics",
-      "body": "Redis is a foundational architectural concept in distributed systems. Single-threaded event loop architecture, core data structures, RDB vs AOF persistence, and Redis Cluster 16,384 hash slots. Fundamentally, Because Redis executes commands sequentially on a single thread in RAM, every command (and every embedded Lua script) is atomic by default without needing mutexes. However, this means O(N) commands like `KEYS *`, `SMEMBERS` on a 1M-element set, or slow Lua scripts will block the entire Redis server and cause cascading timeouts.",
+      "body": "Because Redis executes commands sequentially on a single thread in RAM, every command (and every embedded Lua script) is atomic by default without needing mutexes. However, this means O(N) commands like `KEYS *`, `SMEMBERS` on a 1M-element set, or slow Lua scripts will block the entire Redis server and cause cascading timeouts.",
       "bullets": [
         "**Core Architectural Principle**: Redis achieves 100k+ ops/sec using a single-threaded event loop with I/O multiplexing (`epoll`/`kqueue`), eliminating lock contention and context switches (with multi-threaded network I/O in Redis 6+).",
         "**Problem Space & Invariants**: Beyond simple strings, Redis provides native atomic data structures: Sorted Sets (`ZSET` skip-list + hash table for leaderboards/rate limiters), Hashes, Streams, and HyperLogLog.",
         "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
       ],
-      "asciiDiagram": "                     REDIS INTERNALS & CLUSTER TOPOLOGY\n  [Clients] === Pipelined Commands ===> [I/O Multiplexer (epoll / kqueue)]\n                                                       |\n                                        [Single-Threaded Command Loop]\n                                         (Zero Locks! Atomic Lua/Ops)\n                                          /            |            \\\n                                      [ZSET]        [HASH]        [HLL]\n  REDIS CLUSTER (16,384 Hash Slots):\n  +-----------------------+  +-----------------------+  +-----------------------+\n  | Node A: Slots 0..5460 |  | Node B: 5461..10922   |  | Node C: 10923..16383  |\n  +-----------------------+  +-----------------------+  +-----------------------+"
+      "asciiDiagram": "REDIS INTERNALS & CLUSTER TOPOLOGY\n  [Clients] === Pipelined Commands ===> [I/O Multiplexer (epoll / kqueue)]\n                                                       |\n                                        [Single-Threaded Command Loop]\n                                         (Zero Locks! Atomic Lua/Ops)\n                                          /            |            \\\n                                      [ZSET]        [HASH]        [HLL]\n  REDIS CLUSTER (16,384 Hash Slots):\n  +-----------------------+  +-----------------------+  +-----------------------+\n  | Node A: Slots 0..5460 |  | Node B: 5461..10922   |  | Node C: 10923..16383  |\n  +-----------------------+  +-----------------------+  +-----------------------+"
     },
     {
       "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "In production distributed systems, redis manifests across several distinct architectural classifications, operational modes, and implementation strategies:",
+      "body": "Distributed architectures apply specific implementation patterns and topologies for Redis:",
       "bullets": [
-        "**RDB Point-in-Time Snapshots Only**: Focuses on compact files, minimal disk i/o overhead during normal operation, fastest restart times. Best suited for Pure caches where data can be reconstructed from the primary SQL/NoSQL database..",
-        "**Hybrid RDB + AOF (`appendfsync everysec`)**: Focuses on bounds potential data loss to at most 1 second with near-native in-memory performance. Best suited for Session stores, rate limiters, real-time leaderboards, and write-behind buffers..",
+        "**RDB Point-in-Time Snapshots Only**: Provides compact files, minimal disk i/o overhead during normal operation, fastest restart times. Best suited for Pure caches where data can be reconstructed from the primary SQL/NoSQL database.",
+        "**Hybrid RDB + AOF (`appendfsync everysec`)**: Provides bounds potential data loss to at most 1 second with near-native in-memory performance. Best suited for Session stores, rate limiters, real-time leaderboards, and write-behind buffers.",
         "Sorted Set (`ZSET`): Backed by both a Hash Table (O(1) score lookup by member) and a Skip List (O(log N) range queries by score/rank). The gold standard for real-time gaming leaderboards (`ZADD`, `ZREVRANGE`), sliding-window rate limiters, and delayed job schedulers.",
-        "HyperLogLog (`PFADD`, `PFCOUNT`): Estimates unique cardinality (e.g., unique daily page visitors) with 0.81% standard error using a fixed 12 KB of memory—even for 100 million unique users!",
+        "HyperLogLog (`PFADD`, `PFCOUNT`): Estimates unique cardinality (e.g., unique daily page visitors) with 0.81% standard error using a fixed 12 KB of memory: even for 100 million unique users!",
         "RDB Snapshots (`BGSAVE`): Forks a child process using OS Copy-on-Write (CoW) memory pages to write a compact point-in-time binary snapshot. Fast restarts, but loses minutes of data between snapshots.",
         "AOF (Append-Only File): Logs every write command sequentially (`appendfsync everysec`). Redis 7+ combines an RDB base snapshot with incremental AOF logs for fast recovery and minimal data loss."
       ],
@@ -43,27 +43,27 @@
     },
     {
       "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Adopting appropriate design patterns around redis unlocks critical performance, scalability, and operational advantages for modern backend platforms:",
+      "body": "Production deployments apply Redis across targeted operational scenarios:",
       "bullets": [
-        "**Where to Use — High-Impact Scenarios**: Optimal for Pure caches where data can be reconstructed from the primary SQL/NoSQL database. and environments requiring Compact files, minimal disk I/O overhead during normal operation, fastest restart times..",
-        "**Where to Use — High-Throughput Scenarios**: Recommended for Session stores, rate limiters, real-time leaderboards, and write-behind buffers. where Bounds potential data loss to at most 1 second with near-native in-memory performance..",
-        "**How to Use — Engineering Implementation**: When used for sessions, rate limits, or leaderboards, Redis needs durability across restarts and horizontal scalability beyond a single machine's RAM.. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
+        "**Where to Use: High-Impact Scenarios**: Optimal for Pure caches where data can be reconstructed from the primary SQL/NoSQL database, suited for environments requiring Compact files, minimal disk I/O overhead during normal operation, fastest restart times.",
+        "**Where to Use: High-Throughput Scenarios**: Recommended for Session stores, rate limiters, real-time leaderboards, and write-behind buffers, where Bounds potential data loss to at most 1 second with near-native in-memory performance.",
+        "**How to Use: Engineering Implementation**: When used for sessions, rate limits, or leaderboards, Redis needs durability across restarts and horizontal scalability beyond a single machine's RAM. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
         "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
       ]
     },
     {
       "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "While essential for scalable engineering, redis introduces substantial architectural trade-offs, operational failure modes, and anti-patterns if applied inappropriately:",
+      "body": "Improper implementation of Redis introduces operational bottlenecks and failure modes:",
       "bullets": [
-        "**Where to Avoid — Trade-Off Bottlenecks**: Avoid when constraints impose loses all writes since the last snapshot (often 5–15 minutes) on power loss; `fork()` cow can spike ram.",
-        "**Where to Avoid — Complexity Ceiling**: Avoid premature optimization when larger disk footprint and background aof rewrite i/o overhead.",
+        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: loses all writes since the last snapshot (often 5–15 minutes) on power loss; `fork()` cow can spike ram.",
+        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: larger disk footprint and background aof rewrite i/o overhead.",
         "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
         "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
       ]
     },
     {
       "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Mastering redis is a defining trait of Staff-level distributed systems engineers. Navigating the delicate balance between performance, reliability, and simplicity ensures architectures scale sustainably without introducing unmanageable operational friction.",
+      "body": "Technical guidelines and evaluation criteria for Redis:",
       "bullets": [
         "**Staff+ Golden Rule**: Redis Cluster partitions the keyspace into 16,384 fixed CRC16 hash slots (`CRC16(key) % 16384`) distributed across master nodes without a central proxy.",
         "**Staff+ Interview Playbook**: Know the exact time complexity and internal structure of Redis `ZSET` (Hash Map + Skip List, O(log N)) and explain why `KEYS *` is forbidden in production (use `SCAN` cursor iteration instead)."

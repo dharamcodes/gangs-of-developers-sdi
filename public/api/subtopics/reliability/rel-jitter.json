@@ -13,26 +13,26 @@
     "Full Jitter ($\\text{random}(0, \\min(\\text{cap}, \\text{base} \\cdot 2^n))$) minimizes total server work and completion time under contention.",
     "Apply jitter not only to error retries, but also to cache TTLs, scheduled cron jobs, and heartbeat timers."
   ],
-  "architectureDiagram": "Synchronized Retries (Exponential Backoff WITHOUT Jitter):\nLoad ^   |        |                 |                                   |\n     |   |        |                 |                                   |\n     +---+--------+-----------------+-----------------------------------+---> Time\n        t=0     t=100ms           t=300ms                             t=700ms\n\nDesynchronized Retries (Exponential Backoff WITH Full Jitter):\nLoad ^   |  .. ... .. . . ... . . .. . . . .. . . . . . . . . . . . . . .\n     +---+------------------------------------------------------------------> Time",
+  "architectureDiagram": "Synchronized Retries (Exponential Backoff WITHOUT Jitter):\nLoad ^   |        |                 |                                   |\n     |   |        |                 |                                   |\n     +---+--------+-----------------+-----------------------------------+---> Time\n        t=0     t=100ms           t=300ms                             t=700ms\n\nDesynchronized Retries (Exponential Backoff WITH Full Jitter):\nLoad ^   |  . . . . . . . . . . . . . . . . . . . . . . . . . . .\n     +---+------------------------------------------------------------------> Time",
   "sections": [
     {
       "heading": "1. Architectural Fundamentals & Core Mechanics",
-      "body": "Jitter is a foundational architectural concept in distributed systems. Desynchronizing correlated client retries and cron bursts using controlled randomness. Fundamentally, Imagine a database blip lasts for 50ms at `t = 0`, causing 10,000 concurrent requests to fail simultaneously. If all 10,000 clients use deterministic exponential backoff (`100ms`, `200ms`, `400ms`), all 10,000 clients will sleep for exactly 100ms and slam the database in unison at `t = 100ms`. The database crashes again from the synchronized spike, causing all 10,000 clients to slam it again at `t = 300ms` and `t = 700ms`. Exponential backoff merely stretches the interval between thundering herds; **Jitter** adds randomness to spread the spike into a flat, sustainable load.",
+      "body": "Imagine a database blip lasts for 50ms at `t = 0`, causing 10,000 concurrent requests to fail simultaneously. If all 10,000 clients use deterministic exponential backoff (`100ms`, `200ms`, `400ms`), all 10,000 clients will sleep for exactly 100ms and slam the database in unison at `t = 100ms`. The database crashes again from the synchronized spike, causing all 10,000 clients to slam it again at `t = 300ms` and `t = 700ms`. Exponential backoff merely stretches the interval between thundering herds; **Jitter** adds randomness to spread the spike into a flat, sustainable load.",
       "bullets": [
         "**Core Architectural Principle**: Exponential backoff WITHOUT jitter still causes synchronized retry waves when thousands of clients fail at the exact same millisecond.",
         "**Problem Space & Invariants**: Full Jitter ($\\text{random}(0, \\min(\\text{cap}, \\text{base} \\cdot 2^n))$) minimizes total server work and completion time under contention.",
         "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
       ],
-      "asciiDiagram": "Synchronized Retries (Exponential Backoff WITHOUT Jitter):\nLoad ^   |        |                 |                                   |\n     |   |        |                 |                                   |\n     +---+--------+-----------------+-----------------------------------+---> Time\n        t=0     t=100ms           t=300ms                             t=700ms\n\nDesynchronized Retries (Exponential Backoff WITH Full Jitter):\nLoad ^   |  .. ... .. . . ... . . .. . . . .. . . . . . . . . . . . . . .\n     +---+------------------------------------------------------------------> Time"
+      "asciiDiagram": "Synchronized Retries (Exponential Backoff WITHOUT Jitter):\nLoad ^   |        |                 |                                   |\n     |   |        |                 |                                   |\n     +---+--------+-----------------+-----------------------------------+---> Time\n        t=0     t=100ms           t=300ms                             t=700ms\n\nDesynchronized Retries (Exponential Backoff WITH Full Jitter):\nLoad ^   |  . . . . . . . . . . . . . . . . . . . . . . . . . . .\n     +---+------------------------------------------------------------------> Time"
     },
     {
       "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "In production distributed systems, jitter manifests across several distinct architectural classifications, operational modes, and implementation strategies:",
+      "body": "Distributed architectures apply specific implementation patterns and topologies for Jitter:",
       "bullets": [
-        "**Full Jitter (`random(0, ceiling)`)**: Focuses on empirically proven (aws simulations) to yield the fewest total calls and fastest recovery under heavy contention. Best suited for General microservice RPC retries, database lock contention (OCC), and S3/DynamoDB clients..",
-        "**Equal Jitter (`ceiling/2 + random(0, ceiling/2)`)**: Focuses on prevents immediate near-zero retries by enforcing at least half of the exponential delay. Best suited for Rate-limited third-party APIs where retrying too early is strictly penalized..",
-        "**Full Jitter**: `sleep = random(0, min(cap, base * 2 ** attempt))` — widest spread, lowest server spike.",
-        "**Equal Jitter**: `temp = min(cap, base * 2 ** attempt); sleep = temp / 2 + random(0, temp / 2)` — guarantees a minimum floor wait.",
+        "**Full Jitter (`random(0, ceiling)`)**: Provides empirically proven (aws simulations) to yield the fewest total calls and fastest recovery under heavy contention. Best suited for General microservice RPC retries, database lock contention (OCC), and S3/DynamoDB clients.",
+        "**Equal Jitter (`ceiling/2 + random(0, ceiling/2)`)**: Provides prevents immediate near-zero retries by enforcing at least half of the exponential delay. Best suited for Rate-limited third-party APIs where retrying too early is strictly penalized.",
+        "**Full Jitter**: `sleep = random(0, min(cap, base * 2 ** attempt))`: widest spread, lowest server spike.",
+        "**Equal Jitter**: `temp = min(cap, base * 2 ** attempt); sleep = temp / 2 + random(0, temp / 2)`: guarantees a minimum floor wait.",
         "**Cache TTL Jitter**: Store keys with `TTL = baseTtl + random(-0.1 * baseTtl, +0.1 * baseTtl)` to smear expirations over time.",
         "**Client Polling / Telemetry Splay**: Seed periodic client timers with a hash of the `device_id` or random startup offset."
       ],
@@ -43,27 +43,27 @@
     },
     {
       "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Adopting appropriate design patterns around jitter unlocks critical performance, scalability, and operational advantages for modern backend platforms:",
+      "body": "Production deployments apply Jitter across targeted operational scenarios:",
       "bullets": [
-        "**Where to Use — High-Impact Scenarios**: Optimal for General microservice RPC retries, database lock contention (OCC), and S3/DynamoDB clients. and environments requiring Empirically proven (AWS simulations) to yield the fewest total calls and fastest recovery under heavy contention..",
-        "**Where to Use — High-Throughput Scenarios**: Recommended for Rate-limited third-party APIs where retrying too early is strictly penalized. where Prevents immediate near-zero retries by enforcing at least half of the exponential delay..",
-        "**How to Use — Engineering Implementation**: Correlated synchronization happens anywhere timers exist in a distributed system. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
+        "**Where to Use: High-Impact Scenarios**: Optimal for General microservice RPC retries, database lock contention (OCC), and S3/DynamoDB clients, suited for environments requiring Empirically proven (AWS simulations) to yield the fewest total calls and fastest recovery under heavy contention.",
+        "**Where to Use: High-Throughput Scenarios**: Recommended for Rate-limited third-party APIs where retrying too early is strictly penalized, where Prevents immediate near-zero retries by enforcing at least half of the exponential delay.",
+        "**How to Use: Engineering Implementation**: Correlated synchronization happens anywhere timers exist in a distributed system. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
         "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
       ]
     },
     {
       "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "While essential for scalable engineering, jitter introduces substantial architectural trade-offs, operational failure modes, and anti-patterns if applied inappropriately:",
+      "body": "Improper implementation of Jitter introduces operational bottlenecks and failure modes:",
       "bullets": [
-        "**Where to Avoid — Trade-Off Bottlenecks**: Avoid when constraints impose can occasionally pick a very small sleep value (near 0ms) on higher attempts.",
-        "**Where to Avoid — Complexity Ceiling**: Avoid premature optimization when concentrates retries into half the time window, producing ~2x higher peak load than full jitter.",
+        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: can occasionally pick a very small sleep value (near 0ms) on higher attempts.",
+        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: concentrates retries into half the time window, producing ~2x higher peak load than full jitter.",
         "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
         "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
       ]
     },
     {
       "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Mastering jitter is a defining trait of Staff-level distributed systems engineers. Navigating the delicate balance between performance, reliability, and simplicity ensures architectures scale sustainably without introducing unmanageable operational friction.",
+      "body": "Technical guidelines and evaluation criteria for Jitter:",
       "bullets": [
         "**Staff+ Golden Rule**: Apply jitter not only to error retries, but also to cache TTLs, scheduled cron jobs, and heartbeat timers.",
         "**Staff+ Interview Playbook**: Write out the exact one-line formula for Full Jitter (`random(0, min(cap, base * 2^attempt))`) and also mention applying jitter to **Redis cache TTLs** and **WebSocket reconnects**."

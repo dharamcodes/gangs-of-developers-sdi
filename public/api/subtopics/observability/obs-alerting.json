@@ -13,24 +13,24 @@
     "Multi-window, multi-burn-rate alerting pairs a long window (e.g., 1h) with a short confirmation window (e.g., 5m) to achieve fast detection and instant reset once an outage resolves.",
     "Combat alert fatigue via deduplication, hierarchical inhibition (suppressing 50 microservice alerts when the core database or network switch is down), and mandatory runbook links."
   ],
-  "architectureDiagram": " Incoming Error Spike\n          |\n          +---> [Short Window: 5m Burn Rate > 14.4x] ---+\n          |     (Confirms outage is STILL active now)   |---> [AND Gate] ---> PAGE ON-CALL\n          +---> [Long Window:  1h Burn Rate > 14.4x] ---+     (2% budget      (PagerDuty)\n                (Confirms statistical significance)            burned in 1h)\n\n          +---> [Slow Burn: 6h & 30m Burn Rate > 6x] -------> [AND Gate] ---> PAGE / WARN\n          +---> [Crawl Burn: 3d & 6h Burn Rate > 1x] -------> [AND Gate] ---> JIRA TICKET",
+  "architectureDiagram": "Incoming Error Spike\n          |\n          +---> [Short Window: 5m Burn Rate > 14.4x] ---+\n          |     (Confirms outage is STILL active now)   |---> [AND Gate] ---> PAGE ON-CALL\n          +---> [Long Window:  1h Burn Rate > 14.4x] ---+     (2% budget      (PagerDuty)\n                (Confirms statistical significance)            burned in 1h)\n\n          +---> [Slow Burn: 6h & 30m Burn Rate > 6x] -------> [AND Gate] ---> PAGE / WARN\n          +---> [Crawl Burn: 3d & 6h Burn Rate > 1x] -------> [AND Gate] ---> JIRA TICKET",
   "sections": [
     {
       "heading": "1. Architectural Fundamentals & Core Mechanics",
-      "body": "Alerting is a foundational architectural concept in distributed systems. Multi-window multi-burn-rate SLO alerting, alert fatigue prevention, and automated runbook triage. Fundamentally, Static threshold alerts (e.g., `error_rate > 1% for 5m`) suffer from either poor precision (false positives on brief blips) or poor recall (missing a steady 0.5% error leak that exhausts a 99.9% monthly budget in 6 days). Google SRE's **Burn Rate** model measures how fast the service is consuming its 30-day error budget relative to a sustainable $1\\times$ rate.",
+      "body": "Static threshold alerts (e.g., `error_rate > 1% for 5m`) suffer from either poor precision (false positives on brief blips) or poor recall (missing a steady 0.5% error leak that exhausts a 99.9% monthly budget in 6 days). Google SRE's **Burn Rate** model measures how fast the service is consuming its 30-day error budget relative to a sustainable $1\\times$ rate.",
       "bullets": [
         "**Core Architectural Principle**: Page humans only on actionable, user-facing symptom breaches (SLO burn rate); route cause-based or slow-burning saturation warnings to async tickets.",
         "**Problem Space & Invariants**: Multi-window, multi-burn-rate alerting pairs a long window (e.g., 1h) with a short confirmation window (e.g., 5m) to achieve fast detection and instant reset once an outage resolves.",
         "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
       ],
-      "asciiDiagram": " Incoming Error Spike\n          |\n          +---> [Short Window: 5m Burn Rate > 14.4x] ---+\n          |     (Confirms outage is STILL active now)   |---> [AND Gate] ---> PAGE ON-CALL\n          +---> [Long Window:  1h Burn Rate > 14.4x] ---+     (2% budget      (PagerDuty)\n                (Confirms statistical significance)            burned in 1h)\n\n          +---> [Slow Burn: 6h & 30m Burn Rate > 6x] -------> [AND Gate] ---> PAGE / WARN\n          +---> [Crawl Burn: 3d & 6h Burn Rate > 1x] -------> [AND Gate] ---> JIRA TICKET"
+      "asciiDiagram": "Incoming Error Spike\n          |\n          +---> [Short Window: 5m Burn Rate > 14.4x] ---+\n          |     (Confirms outage is STILL active now)   |---> [AND Gate] ---> PAGE ON-CALL\n          +---> [Long Window:  1h Burn Rate > 14.4x] ---+     (2% budget      (PagerDuty)\n                (Confirms statistical significance)            burned in 1h)\n\n          +---> [Slow Burn: 6h & 30m Burn Rate > 6x] -------> [AND Gate] ---> PAGE / WARN\n          +---> [Crawl Burn: 3d & 6h Burn Rate > 1x] -------> [AND Gate] ---> JIRA TICKET"
     },
     {
       "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "In production distributed systems, alerting manifests across several distinct architectural classifications, operational modes, and implementation strategies:",
+      "body": "Distributed architectures apply specific implementation patterns and topologies for Alerting:",
       "bullets": [
-        "**Multi-Window Burn-Rate Alerting**: Focuses on high precision and recall; mathematically tied to customer slos; resets quickly after remediation. Best suited for Production Tier-0 and Tier-1 services with defined availability and latency SLOs..",
-        "**Static Cause-Based Threshold Alerting (e.g., CPU > 85%)**: Focuses on simple to configure and understand; works even on zero-traffic background workers. Best suited for Stateful storage disk space (`disk_free < 15%`), certificate expiration, and dead-letter queue growth..",
+        "**Multi-Window Burn-Rate Alerting**: Provides high precision and recall; mathematically tied to customer slos; resets quickly after remediation. Best suited for Production Tier-0 and Tier-1 services with defined availability and latency SLOs.",
+        "**Static Cause-Based Threshold Alerting (e.g., CPU > 85%)**: Provides simple to configure and understand; works even on zero-traffic background workers. Best suited for Stateful storage disk space (`disk_free < 15%`), certificate expiration, and dead-letter queue growth.",
         "Burn Rate Definition: A burn rate of $1\\times$ consumes 100% of the 30-day error budget in exactly 30 days. A burn rate of $14.4\\times$ consumes 2% of the entire monthly budget in just 1 hour (exhausting 100% in 50 hours).",
         "Why Two Windows (1h AND 5m) Are Required: Alerting solely on a 1-hour window means that after a 10-minute severe outage is fixed, the 1-hour average remains elevated for another 50 minutes, keeping the alert falsely firing.",
         "Alert Inhibition & Grouping: Configure Alertmanager to group alerts by `cluster` and `namespace`, and inhibit downstream application alerts when a root-cause infrastructure alert (`DatabaseClusterDown`) is active.",
@@ -43,27 +43,27 @@
     },
     {
       "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Adopting appropriate design patterns around alerting unlocks critical performance, scalability, and operational advantages for modern backend platforms:",
+      "body": "Production deployments apply Alerting across targeted operational scenarios:",
       "bullets": [
-        "**Where to Use — High-Impact Scenarios**: Optimal for Production Tier-0 and Tier-1 services with defined availability and latency SLOs. and environments requiring High precision and recall; mathematically tied to customer SLOs; resets quickly after remediation..",
-        "**Where to Use — High-Throughput Scenarios**: Recommended for Stateful storage disk space (`disk_free < 15%`), certificate expiration, and dead-letter queue growth. where Simple to configure and understand; works even on zero-traffic background workers..",
-        "**How to Use — Engineering Implementation**: When an underlying shared dependency (like a NAT gateway, core Postgres cluster, or Redis shard) fails, dozens of downstream services simultaneously breach their thresholds. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
+        "**Where to Use: High-Impact Scenarios**: Optimal for Production Tier-0 and Tier-1 services with defined availability and latency SLOs, suited for environments requiring High precision and recall; mathematically tied to customer SLOs; resets quickly after remediation.",
+        "**Where to Use: High-Throughput Scenarios**: Recommended for Stateful storage disk space (`disk_free < 15%`), certificate expiration, and dead-letter queue growth, where Simple to configure and understand; works even on zero-traffic background workers.",
+        "**How to Use: Engineering Implementation**: When an underlying shared dependency (like a NAT gateway, core Postgres cluster, or Redis shard) fails, dozens of downstream services simultaneously breach their thresholds. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
         "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
       ]
     },
     {
       "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "While essential for scalable engineering, alerting introduces substantial architectural trade-offs, operational failure modes, and anti-patterns if applied inappropriately:",
+      "body": "Improper implementation of Alerting introduces operational bottlenecks and failure modes:",
       "bullets": [
-        "**Where to Avoid — Trade-Off Bottlenecks**: Avoid when constraints impose harder for junior engineers to intuit promql ratios compared to simple static thresholds; requires pre-computed recording rules.",
-        "**Where to Avoid — Complexity Ceiling**: Avoid premature optimization when high false-positive rate (cpu at 90% during gc or batch compression may have zero user impact), causing alert fatigue.",
+        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: harder for junior engineers to intuit promql ratios compared to simple static thresholds; requires pre-computed recording rules.",
+        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: high false-positive rate (cpu at 90% during gc or batch compression may have zero user impact), causing alert fatigue.",
         "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
         "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
       ]
     },
     {
       "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Mastering alerting is a defining trait of Staff-level distributed systems engineers. Navigating the delicate balance between performance, reliability, and simplicity ensures architectures scale sustainably without introducing unmanageable operational friction.",
+      "body": "Technical guidelines and evaluation criteria for Alerting:",
       "bullets": [
         "**Staff+ Golden Rule**: Combat alert fatigue via deduplication, hierarchical inhibition (suppressing 50 microservice alerts when the core database or network switch is down), and mandatory runbook links.",
         "**Staff+ Interview Playbook**: Explain the difference between a 'Page' (wake a human at 3 AM because customers are actively burning >2% of the monthly error budget in an hour) and a 'Ticket' (handle during business hours because a slow burn will exhaust budget in 10 days)."

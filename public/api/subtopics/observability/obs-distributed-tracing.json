@@ -13,25 +13,25 @@
     "Context propagation (W3C traceparent header) must cross both synchronous RPC boundaries (HTTP/gRPC) and asynchronous message broker envelopes (Kafka headers).",
     "Tail-based sampling buffers complete traces in memory to guarantee 100% capture of errors and high-latency outliers while sampling only 1% of healthy baseline traffic."
   ],
-  "architectureDiagram": "Client Request\n  | traceparent: 00-4bf92f3577b34da6...-00f067aa0ba902b7-01\n  v\n[API Gateway Span A: 0ms ======================== 180ms]\n   |--> [Auth Service Span B: 5ms == 20ms]\n   +--> [Order Service Span C: 22ms ============= 175ms]\n           |--> [Postgres Query Span D: 25ms == 45ms]\n           +--> [Payment RPC Span E: 48ms ======= 170ms (ERROR 504)]\n\nSpan Stream ---> [Consistent Hash Load Balancer (by trace_id)]\n                       |\n                       v\n               [OTel Tail-Sampling Collector Pool]\n               (Keep 100% if error/latency>500ms, else 1%)\n                       |\n                       v\n               [Tempo / Jaeger / ClickHouse Trace Store]",
+  "architectureDiagram": "Client Request\n  | traceparent: 00-4bf92f3577b34da6.-00f067aa0ba902b7-01\n  v\n[API Gateway Span A: 0ms ======================== 180ms]\n   |--> [Auth Service Span B: 5ms == 20ms]\n   +--> [Order Service Span C: 22ms ============= 175ms]\n           |--> [Postgres Query Span D: 25ms == 45ms]\n           +--> [Payment RPC Span E: 48ms ======= 170ms (ERROR 504)]\n\nSpan Stream ---> [Consistent Hash Load Balancer (by trace_id)]\n                       |\n                       v\n               [OTel Tail-Sampling Collector Pool]\n               (Keep 100% if error/latency>500ms, else 1%)\n                       |\n                       v\n               [Tempo / Jaeger / ClickHouse Trace Store]",
   "sections": [
     {
       "heading": "1. Architectural Fundamentals & Core Mechanics",
-      "body": "Distributed Tracing is a foundational architectural concept in distributed systems. W3C Trace Context propagation, causal span DAGs, and head-based vs tail-based sampling strategies. Fundamentally, When a request traverses 20 microservices, metrics tell you *which* service is slow, and logs tell you *what* error occurred locally, but only a distributed trace reveals the critical path, serial vs parallel fan-out, and N+1 sequential database calls caused by an upstream caller.",
+      "body": "When a request traverses 20 microservices, metrics tell you *which* service is slow, and logs tell you *what* error occurred locally, but only a distributed trace reveals the critical path, serial vs parallel fan-out, and N+1 sequential database calls caused by an upstream caller.",
       "bullets": [
         "**Core Architectural Principle**: Distributed tracing reconstructs the causal Directed Acyclic Graph (DAG) of a single request across microservices, queues, and databases using a shared Trace ID and parent-child Span IDs.",
         "**Problem Space & Invariants**: Context propagation (W3C traceparent header) must cross both synchronous RPC boundaries (HTTP/gRPC) and asynchronous message broker envelopes (Kafka headers).",
         "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
       ],
-      "asciiDiagram": "Client Request\n  | traceparent: 00-4bf92f3577b34da6...-00f067aa0ba902b7-01\n  v\n[API Gateway Span A: 0ms ======================== 180ms]\n   |--> [Auth Service Span B: 5ms == 20ms]\n   +--> [Order Service Span C: 22ms ============= 175ms]\n           |--> [Postgres Query Span D: 25ms == 45ms]\n           +--> [Payment RPC Span E: 48ms ======= 170ms (ERROR 504)]\n\nSpan Stream ---> [Consistent Hash Load Balancer (by trace_id)]\n                       |\n                       v\n               [OTel Tail-Sampling Collector Pool]\n               (Keep 100% if error/latency>500ms, else 1%)\n                       |\n                       v\n               [Tempo / Jaeger / ClickHouse Trace Store]",
+      "asciiDiagram": "Client Request\n  | traceparent: 00-4bf92f3577b34da6.-00f067aa0ba902b7-01\n  v\n[API Gateway Span A: 0ms ======================== 180ms]\n   |--> [Auth Service Span B: 5ms == 20ms]\n   +--> [Order Service Span C: 22ms ============= 175ms]\n           |--> [Postgres Query Span D: 25ms == 45ms]\n           +--> [Payment RPC Span E: 48ms ======= 170ms (ERROR 504)]\n\nSpan Stream ---> [Consistent Hash Load Balancer (by trace_id)]\n                       |\n                       v\n               [OTel Tail-Sampling Collector Pool]\n               (Keep 100% if error/latency>500ms, else 1%)\n                       |\n                       v\n               [Tempo / Jaeger / ClickHouse Trace Store]",
       "diagramImageUrl": "/diagrams/arch-obs-distributed-tracing.svg"
     },
     {
       "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "In production distributed systems, distributed tracing manifests across several distinct architectural classifications, operational modes, and implementation strategies:",
+      "body": "Distributed architectures apply specific implementation patterns and topologies for Distributed Tracing:",
       "bullets": [
-        "**Head-Based Sampling**: Focuses on stateless, zero collector buffering memory, minimal network egress from application pods. Best suited for Ultra-high-QPS edge services where collector memory buffering is cost-prohibitive..",
-        "**Tail-Based Sampling**: Focuses on guarantees 100% capture of anomalous traces (5xx errors, p99 latency spikes) while keeping storage low. Best suited for Mission-critical payment, checkout, and multi-hop microservice architectures requiring high debuggability..",
+        "**Head-Based Sampling**: Provides stateless, zero collector buffering memory, minimal network egress from application pods. Best suited for Ultra-high-QPS edge services where collector memory buffering is cost-prohibitive.",
+        "**Tail-Based Sampling**: Guarantees 100% capture of anomalous traces (5xx errors, p99 latency spikes) while keeping storage low. Best suited for Mission-critical payment, checkout, and multi-hop microservice architectures requiring high debuggability.",
         "Trace & Span Hierarchy: A Trace is a tree/DAG of Spans sharing a 128-bit `trace_id`. Each Span has a 64-bit `span_id`, a `parent_span_id`, start/end monotonic timestamps, attributes, and status.",
         "W3C Trace Context Standard: Propagated via HTTP/gRPC metadata header `traceparent: 00-<trace-id>-<parent-span-id>-<trace-flags>`, plus optional `baggage` for cross-cutting routing keys (e.g., `synthetic-test=true`).",
         "Head-Based Sampling: The ingress gateway rolls a dice (e.g., 1%) and sets the `sampled=01` flag in `traceparent`. Every downstream service obeys the flag. Cheap and stateless, but misses 99% of rare errors.",
@@ -44,27 +44,27 @@
     },
     {
       "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Adopting appropriate design patterns around distributed tracing unlocks critical performance, scalability, and operational advantages for modern backend platforms:",
+      "body": "Production deployments apply Distributed Tracing across targeted operational scenarios:",
       "bullets": [
-        "**Where to Use — High-Impact Scenarios**: Optimal for Ultra-high-QPS edge services where collector memory buffering is cost-prohibitive. and environments requiring Stateless, zero collector buffering memory, minimal network egress from application pods..",
-        "**Where to Use — High-Throughput Scenarios**: Recommended for Mission-critical payment, checkout, and multi-hop microservice architectures requiring high debuggability. where Guarantees 100% capture of anomalous traces (5xx errors, p99 latency spikes) while keeping storage low..",
-        "**How to Use — Engineering Implementation**: Storing 100% of spans at high scale is prohibitively expensive. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
+        "**Where to Use: High-Impact Scenarios**: Optimal for Ultra-high-QPS edge services where collector memory buffering is cost-prohibitive, suited for environments requiring Stateless, zero collector buffering memory, minimal network egress from application pods.",
+        "**Where to Use: High-Throughput Scenarios**: Recommended for Mission-critical payment, checkout, and multi-hop microservice architectures requiring high debuggability, where Guarantees 100% capture of anomalous traces (5xx errors, p99 latency spikes) while keeping storage low.",
+        "**How to Use: Engineering Implementation**: Storing 100% of spans at high scale is prohibitively expensive. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
         "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
       ]
     },
     {
       "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "While essential for scalable engineering, distributed tracing introduces substantial architectural trade-offs, operational failure modes, and anti-patterns if applied inappropriately:",
+      "body": "Improper implementation of Distributed Tracing introduces operational bottlenecks and failure modes:",
       "bullets": [
-        "**Where to Avoid — Trade-Off Bottlenecks**: Avoid when constraints impose blind to whether a request will fail or stall downstream; captures only a tiny fraction of rare 5xx errors.",
-        "**Where to Avoid — Complexity Ceiling**: Avoid premature optimization when requires trace_id-affinitized stateful collector pools and full span network transmission from apps to collectors.",
+        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: blind to whether a request will fail or stall downstream; captures only a tiny fraction of rare 5xx errors.",
+        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: requires trace_id-affinitized stateful collector pools and full span network transmission from apps to collectors.",
         "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
         "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
       ]
     },
     {
       "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Mastering distributed tracing is a defining trait of Staff-level distributed systems engineers. Navigating the delicate balance between performance, reliability, and simplicity ensures architectures scale sustainably without introducing unmanageable operational friction.",
+      "body": "Technical guidelines and evaluation criteria for Distributed Tracing:",
       "bullets": [
         "**Staff+ Golden Rule**: Tail-based sampling buffers complete traces in memory to guarantee 100% capture of errors and high-latency outliers while sampling only 1% of healthy baseline traffic.",
         "**Staff+ Interview Playbook**: If asked how to implement tail-based sampling at scale, explain that a two-tier collector architecture with consistent hashing on `trace_id` is mandatory so all spans belonging to the same trace arrive at the same stateful collector instance."

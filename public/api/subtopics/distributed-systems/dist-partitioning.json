@@ -17,7 +17,7 @@
   "sections": [
     {
       "heading": "1. Architectural Fundamentals & Core Mechanics",
-      "body": "Partitioning is a foundational architectural concept in distributed systems. Distributed data placement, Document-Partitioned (Local) vs Term-Partitioned (Global) secondary indexes, and rebalancing strategies. Fundamentally, Partitioning by primary key is easy, but secondary indexes are the Achilles' heel of distributed databases. When you index a secondary field like `status` or `email` across a 50-node cluster, you face a fundamental trade-off between Local Indexes (Document-Partitioned) and Global Indexes (Term-Partitioned).",
+      "body": "Partitioning by primary key is easy, but secondary indexes are the Achilles' heel of distributed databases. When you index a secondary field like `status` or `email` across a 50-node cluster, you face a fundamental trade-off between Local Indexes (Document-Partitioned) and Global Indexes (Term-Partitioned).",
       "bullets": [
         "**Core Architectural Principle**: Distributed partitioning splits data across cluster nodes so storage and query load scale linearly with cluster size.",
         "**Problem Space & Invariants**: Local (Document-Partitioned) Secondary Indexes keep the index on the same node as the primary record: writes are fast (single node), but secondary reads must scatter-gather across all partitions.",
@@ -27,10 +27,10 @@
     },
     {
       "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "In production distributed systems, partitioning manifests across several distinct architectural classifications, operational modes, and implementation strategies:",
+      "body": "Distributed architectures apply specific implementation patterns and topologies for Partitioning:",
       "bullets": [
-        "**Local Secondary Index (Document-Partitioned)**: Focuses on single-node atomic writes; no cross-node index synchronization overhead. Best suited for Full-text search (Elasticsearch) and workloads where queries almost always include the partition key..",
-        "**Global Secondary Index (Term-Partitioned)**: Focuses on point lookups and range scans on the secondary index hit a single partition in o(1) network hops. Best suited for Looking up users by `email` or `phone_number` when the table is partitioned by `user_id`..",
+        "**Local Secondary Index (Document-Partitioned)**: Provides single-node atomic writes; no cross-node index synchronization overhead. Best suited for Full-text search (Elasticsearch) and workloads where queries almost always include the partition key.",
+        "**Global Secondary Index (Term-Partitioned)**: Provides point lookups and range scans on the secondary index hit a single partition in o(1) network hops. Best suited for Looking up users by `email` or `phone_number` when the table is partitioned by `user_id`.",
         "Local Secondary Index (Elasticsearch shards, MongoDB, Cassandra): Each partition maintains its own secondary index covering *only* the documents stored on that partition. Writing a document updates only 1 node, but querying by the secondary index requires querying all 50 partitions in parallel (tail latency amplification).",
         "Global Secondary Index (DynamoDB GSI, CockroachDB): The secondary index is partitioned independently by the indexed term (`hash(email)`). A lookup by `email` goes directly to 1 node! However, inserting a single item now requires updating the primary partition AND sending network updates to the remote GSI partition(s).",
         "Never Use `hash(key) % N_machines`: Changing `N` from 10 to 11 invalidates ~91% of keys simultaneously.",
@@ -43,27 +43,27 @@
     },
     {
       "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Adopting appropriate design patterns around partitioning unlocks critical performance, scalability, and operational advantages for modern backend platforms:",
+      "body": "Production deployments apply Partitioning across targeted operational scenarios:",
       "bullets": [
-        "**Where to Use — High-Impact Scenarios**: Optimal for Full-text search (Elasticsearch) and workloads where queries almost always include the partition key. and environments requiring Single-node atomic writes; no cross-node index synchronization overhead..",
-        "**Where to Use — High-Throughput Scenarios**: Recommended for Looking up users by `email` or `phone_number` when the table is partitioned by `user_id`. where Point lookups and range scans on the secondary index hit a single partition in O(1) network hops..",
-        "**How to Use — Engineering Implementation**: As cluster traffic grows or nodes fail, partitions must move between machines ('rebalancing'). Always establish explicit thresholds, measurement baselines, and automated monitoring.",
+        "**Where to Use: High-Impact Scenarios**: Optimal for Full-text search (Elasticsearch) and workloads where queries almost always include the partition key, suited for environments requiring Single-node atomic writes; no cross-node index synchronization overhead.",
+        "**Where to Use: High-Throughput Scenarios**: Recommended for Looking up users by `email` or `phone_number` when the table is partitioned by `user_id`, where Point lookups and range scans on the secondary index hit a single partition in O(1) network hops.",
+        "**How to Use: Engineering Implementation**: As cluster traffic grows or nodes fail, partitions must move between machines ('rebalancing'). Always establish explicit thresholds, measurement baselines, and automated monitoring.",
         "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
       ]
     },
     {
       "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "While essential for scalable engineering, partitioning introduces substantial architectural trade-offs, operational failure modes, and anti-patterns if applied inappropriately:",
+      "body": "Improper implementation of Partitioning introduces operational bottlenecks and failure modes:",
       "bullets": [
-        "**Where to Avoid — Trade-Off Bottlenecks**: Avoid when constraints impose secondary index queries require scatter-gather across all partitions (vulnerable to p99 tail latency).",
-        "**Where to Avoid — Complexity Ceiling**: Avoid premature optimization when writes fan out across multiple nodes; index is typically eventually consistent.",
+        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: secondary index queries require scatter-gather across all partitions (vulnerable to p99 tail latency).",
+        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: writes fan out across multiple nodes; index is typically eventually consistent.",
         "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
         "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
       ]
     },
     {
       "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Mastering partitioning is a defining trait of Staff-level distributed systems engineers. Navigating the delicate balance between performance, reliability, and simplicity ensures architectures scale sustainably without introducing unmanageable operational friction.",
+      "body": "Technical guidelines and evaluation criteria for Partitioning:",
       "bullets": [
         "**Staff+ Golden Rule**: Global (Term-Partitioned) Secondary Indexes partition the index itself by the indexed attribute: secondary reads hit a single partition, but writes must update multiple nodes asynchronously.",
         "**Staff+ Interview Playbook**: If your system design requires querying an entity by two different attributes (e.g., `order_id` and `user_id`), explain how a Global Secondary Index (partitioned by `user_id` and updated asynchronously) avoids scatter-gather queries."

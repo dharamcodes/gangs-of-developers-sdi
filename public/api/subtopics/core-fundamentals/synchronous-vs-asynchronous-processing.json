@@ -17,7 +17,7 @@
   "sections": [
     {
       "heading": "1. Architectural Fundamentals & Core Mechanics",
-      "body": "Synchronous vs Asynchronous Processing is a foundational architectural concept in distributed systems. Decoupling request-response paths with message queues, event streams, backpressure control, and dead-letter queues. Fundamentally, In a synchronous request-response model (HTTP/gRPC), the caller thread or connection waits for the downstream service to finish. If a user uploads a video and the API synchronously transcodes it into 4 resolutions, the HTTP connection hangs for minutes, threads exhaust, and any blip restarts the whole upload. By shifting to asynchronous processing, the API persists the raw video to object storage, publishes a `VideoUploaded` job to a queue, and immediately returns `202 Accepted` with a status polling URL or WebSocket channel.",
+      "body": "In a synchronous request-response model (HTTP/gRPC), the caller thread or connection waits for the downstream service to finish. If a user uploads a video and the API synchronously transcodes it into 4 resolutions, the HTTP connection hangs for minutes, threads exhaust, and any blip restarts the whole upload. By shifting to asynchronous processing, the API persists the raw video to object storage, publishes a `VideoUploaded` job to a queue, and immediately returns `202 Accepted` with a status polling URL or WebSocket channel.",
       "bullets": [
         "**Core Architectural Principle**: Synchronous calls block the caller until work completes, creating tight temporal coupling and cascading failure chains across microservices.",
         "**Problem Space & Invariants**: Asynchronous processing buffers work in durable queues (SQS, RabbitMQ, Kafka), absorbing traffic spikes (load leveling) and isolating downstream outages.",
@@ -27,10 +27,10 @@
     },
     {
       "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "In production distributed systems, synchronous vs asynchronous processing manifests across several distinct architectural classifications, operational modes, and implementation strategies:",
+      "body": "Distributed architectures apply specific implementation patterns and topologies for Synchronous vs Asynchronous Processing:",
       "bullets": [
-        "**Synchronous Processing (Direct RPC / HTTP)**: Focuses on immediate deterministic result returned to caller, simpler debugging and stack traces, no message broker infrastructure. Best suited for Authentication checks, fetching user profile data, balance verification, and immediate search queries..",
-        "**Asynchronous Processing (Message Queues / Event Streams)**: Focuses on sub-20ms api response times, absorbs massive traffic spikes, isolates failures across services, enables fan-out to multiple consumers. Best suited for Media transcoding, email/push notifications, PDF generation, webhook delivery, and post-checkout order fulfillment..",
+        "**Synchronous Processing (Direct RPC / HTTP)**: Provides immediate deterministic result returned to caller, simpler debugging and stack traces, no message broker infrastructure. Best suited for Authentication checks, fetching user profile data, balance verification, and immediate search queries.",
+        "**Asynchronous Processing (Message Queues / Event Streams)**: Provides sub-20ms api response times, absorbs massive traffic spikes, isolates failures across services, enables fan-out to multiple consumers. Best suited for Media transcoding, email/push notifications, PDF generation, webhook delivery, and post-checkout order fulfillment.",
         "Load Leveling (Shock Absorption): If a flash sale generates 100,000 orders/sec, the queue buffers the burst while workers drain it steadily at the database's safe 5,000 writes/sec limit.",
         "Fault Isolation: If the downstream Email or Analytics service crashes for 2 hours, user checkouts continue unimpeded; messages simply accumulate in the broker until recovery.",
         "Backpressure: When queue depth crosses a high-water mark, apply rate limiting or shed non-critical load (`HTTP 429` or `503 Retry-After`) at the edge.",
@@ -38,32 +38,32 @@
       ],
       "codeSnippet": {
         "title": "Async Job Producer + Resilient Worker with DLQ Routing",
-        "code": "// 1. API Handler: Fast admission & enqueue (<15ms)\nexport async function handleVideoUpload(req: UploadRequest, queue: QueueClient) {\n  const jobId = crypto.randomUUID();\n  await queue.publish(\"video-transcode-jobs\", {\n    jobId,\n    s3Key: req.s3Key,\n    resolutions: [\"1080p\", \"720p\", \"480p\"],\n    attempt: 1,\n  });\n  return { status: 202, jobId, statusUrl: `/api/v1/jobs/${jobId}` };\n}\n\n// 2. Worker: Retries with Exponential Backoff, routes Poison Pills to DLQ\nexport async function processJob(msg: JobMessage, queue: QueueClient) {\n  try {\n    await transcodeFfmpeg(msg.s3Key, msg.resolutions);\n  } catch (err) {\n    if (msg.attempt >= 5) {\n      await queue.publish(\"video-transcode-DLQ\", { ...msg, error: String(err) });\n    } else {\n      const backoffMs = Math.pow(2, msg.attempt) * 1000 + Math.random() * 500;\n      await queue.publishDelayed(\"video-transcode-jobs\", { ...msg, attempt: msg.attempt + 1 }, backoffMs);\n    }\n  }\n}"
+        "code": "// 1. API Handler: Fast admission & enqueue (<15ms)\nexport async function handleVideoUpload(req: UploadRequest, queue: QueueClient) {\n  const jobId = crypto.randomUUID();\n  await queue.publish(\"video-transcode-jobs\", {\n    jobId,\n    s3Key: req.s3Key,\n    resolutions: [\"1080p\", \"720p\", \"480p\"],\n    attempt: 1,\n  });\n  return { status: 202, jobId, statusUrl: `/api/v1/jobs/${jobId}` };\n}\n\n// 2. Worker: Retries with Exponential Backoff, routes Poison Pills to DLQ\nexport async function processJob(msg: JobMessage, queue: QueueClient) {\n  try {\n    await transcodeFfmpeg(msg.s3Key, msg.resolutions);\n  } catch (err) {\n    if (msg.attempt >= 5) {\n      await queue.publish(\"video-transcode-DLQ\", { .msg, error: String(err) });\n    } else {\n      const backoffMs = Math.pow(2, msg.attempt) * 1000 + Math.random() * 500;\n      await queue.publishDelayed(\"video-transcode-jobs\", { .msg, attempt: msg.attempt + 1 }, backoffMs);\n    }\n  }\n}"
       }
     },
     {
       "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Adopting appropriate design patterns around synchronous vs asynchronous processing unlocks critical performance, scalability, and operational advantages for modern backend platforms:",
+      "body": "Production deployments apply Synchronous vs Asynchronous Processing across targeted operational scenarios:",
       "bullets": [
-        "**Where to Use — High-Impact Scenarios**: Optimal for Authentication checks, fetching user profile data, balance verification, and immediate search queries. and environments requiring Immediate deterministic result returned to caller, simpler debugging and stack traces, no message broker infrastructure..",
-        "**Where to Use — High-Throughput Scenarios**: Recommended for Media transcoding, email/push notifications, PDF generation, webhook delivery, and post-checkout order fulfillment. where Sub-20ms API response times, absorbs massive traffic spikes, isolates failures across services, enables fan-out to multiple consumers..",
-        "**How to Use — Engineering Implementation**: Asynchronous queues are not magic infinite sinks. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
+        "**Where to Use: High-Impact Scenarios**: Optimal for Authentication checks, fetching user profile data, balance verification, and immediate search queries, suited for environments requiring Immediate deterministic result returned to caller, simpler debugging and stack traces, no message broker infrastructure.",
+        "**Where to Use: High-Throughput Scenarios**: Recommended for Media transcoding, email/push notifications, PDF generation, webhook delivery, and post-checkout order fulfillment, where Sub-20ms API response times, absorbs massive traffic spikes, isolates failures across services, enables fan-out to multiple consumers.",
+        "**How to Use: Engineering Implementation**: Asynchronous queues are not magic infinite sinks. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
         "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
       ]
     },
     {
       "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "While essential for scalable engineering, synchronous vs asynchronous processing introduces substantial architectural trade-offs, operational failure modes, and anti-patterns if applied inappropriately:",
+      "body": "Improper implementation of Synchronous vs Asynchronous Processing introduces operational bottlenecks and failure modes:",
       "bullets": [
-        "**Where to Avoid — Trade-Off Bottlenecks**: Avoid when constraints impose latency equals the sum of all downstream calls, cascading timeouts if any dependency slows down, zero burst buffering.",
-        "**Where to Avoid — Complexity Ceiling**: Avoid premature optimization when client must poll or listen via websockets/webhooks for completion, eventual consistency, operational overhead of kafka/rabbitmq.",
+        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: latency equals the sum of all downstream calls, cascading timeouts if any dependency slows down, zero burst buffering.",
+        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: client must poll or listen via websockets/webhooks for completion, eventual consistency, operational overhead of kafka/rabbitmq.",
         "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
         "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
       ]
     },
     {
       "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Mastering synchronous vs asynchronous processing is a defining trait of Staff-level distributed systems engineers. Navigating the delicate balance between performance, reliability, and simplicity ensures architectures scale sustainably without introducing unmanageable operational friction.",
+      "body": "Technical guidelines and evaluation criteria for Synchronous vs Asynchronous Processing:",
       "bullets": [
         "**Staff+ Golden Rule**: Every production async pipeline must include retry with exponential backoff + jitter, idempotency keys, and a Dead-Letter Queue (DLQ) for poison pills.",
         "**Staff+ Interview Playbook**: Whenever you draw a message queue in an interview, immediately add two details without waiting to be asked: (1) a Dead-Letter Queue (DLQ) for failed retries, and (2) how the client learns the async task finished (polling, WebSocket, or push notification)."

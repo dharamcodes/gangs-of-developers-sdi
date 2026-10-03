@@ -17,7 +17,7 @@
   "sections": [
     {
       "heading": "1. Architectural Fundamentals & Core Mechanics",
-      "body": "Cache Stampede is a foundational architectural concept in distributed systems. Mitigating dogpiling and thundering herds using Singleflight Request Coalescing, Distributed Leases, and Probabilistic Early Expiration (XFetch). Fundamentally, When a cached homepage payload or expensive aggregation expires under 10,000 RPS, and the DB query takes 200ms, 2,000 requests will see a cache miss during that 200ms window and launch 2,000 duplicate DB queries. You can eliminate this in two layers: per-process Singleflight and cross-process Distributed Leases.",
+      "body": "When a cached homepage payload or expensive aggregation expires under 10,000 RPS, and the DB query takes 200ms, 2,000 requests will see a cache miss during that 200ms window and launch 2,000 duplicate DB queries. You can eliminate this in two layers: per-process Singleflight and cross-process Distributed Leases.",
       "bullets": [
         "**Core Architectural Principle**: A Cache Stampede (Dogpiling) happens when a popular cached key expires and thousands of concurrent requests simultaneously miss the cache and hammer the database with identical expensive queries.",
         "**Problem Space & Invariants**: Request Coalescing (`Singleflight` in Go) deduplicates concurrent in-flight cache misses within an application node so only 1 request queries the DB/cache and shares the result with all waiting callers.",
@@ -27,10 +27,10 @@
     },
     {
       "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "In production distributed systems, cache stampede manifests across several distinct architectural classifications, operational modes, and implementation strategies:",
+      "body": "Distributed architectures apply specific implementation patterns and topologies for Cache Stampede:",
       "bullets": [
-        "**In-Process Singleflight + Distributed Lease Lock**: Focuses on strictly caps database load to 1 query across the entire cluster even on a completely cold cache. Best suited for Expensive DB queries, cold-cache startups, and API gateway aggregation layers..",
-        "**Soft TTL / Probabilistic Early Expiration (XFetch)**: Focuses on zero tail-latency spike for users because refreshes happen before hard expiration. Best suited for High-QPS feeds, homepage modules, and low-latency p99 SLA services..",
+        "**In-Process Singleflight + Distributed Lease Lock**: Provides strictly caps database load to 1 query across the entire cluster even on a completely cold cache. Best suited for Expensive DB queries, cold-cache startups, and API gateway aggregation layers.",
+        "**Soft TTL / Probabilistic Early Expiration (XFetch)**: Provides zero tail-latency spike for users because refreshes happen before hard expiration. Best suited for High-QPS feeds, homepage modules, and low-latency p99 SLA services.",
         "In-Process Request Coalescing (`Singleflight`): Maintain an in-memory map of `inflightPromises: Map<string, Promise<T>>`. If `key` is already being fetched on this pod, subsequent callers simply `await` the existing Promise. If you have 20 pods, max DB queries drop from 2,000 to at most 20.",
         "Distributed Lease / Mutex (`SET lock:key 1 NX PX 2000`): Out of those 20 pods, only the 1 pod that acquires the Redis lock queries the database; the other 19 either serve slightly stale data (Soft TTL) or wait briefly for the cache to be populated.",
         "Zero Lock Coordination Needed: XFetch works purely from local math on each cache hit without extra Redis lock round-trips.",
@@ -43,27 +43,27 @@
     },
     {
       "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Adopting appropriate design patterns around cache stampede unlocks critical performance, scalability, and operational advantages for modern backend platforms:",
+      "body": "Production deployments apply Cache Stampede across targeted operational scenarios:",
       "bullets": [
-        "**Where to Use — High-Impact Scenarios**: Optimal for Expensive DB queries, cold-cache startups, and API gateway aggregation layers. and environments requiring Strictly caps database load to 1 query across the entire cluster even on a completely cold cache..",
-        "**Where to Use — High-Throughput Scenarios**: Recommended for High-QPS feeds, homepage modules, and low-latency p99 SLA services. where Zero tail-latency spike for users because refreshes happen before hard expiration..",
-        "**How to Use — Engineering Implementation**: Instead of waiting for a hot key to hard-expire and then scrambling to coordinate locks, the XFetch algorithm (published in VLDB 2015) stores the recomputation duration (`delta`) alongside the cached item. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
+        "**Where to Use: High-Impact Scenarios**: Optimal for Expensive DB queries, cold-cache startups, and API gateway aggregation layers, suited for environments requiring Strictly caps database load to 1 query across the entire cluster even on a completely cold cache.",
+        "**Where to Use: High-Throughput Scenarios**: Recommended for High-QPS feeds, homepage modules, and low-latency p99 SLA services, where Zero tail-latency spike for users because refreshes happen before hard expiration.",
+        "**How to Use: Engineering Implementation**: Instead of waiting for a hot key to hard-expire and then scrambling to coordinate locks, the XFetch algorithm (published in VLDB 2015) stores the recomputation duration (`delta`) alongside the cached item. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
         "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
       ]
     },
     {
       "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "While essential for scalable engineering, cache stampede introduces substantial architectural trade-offs, operational failure modes, and anti-patterns if applied inappropriately:",
+      "body": "Improper implementation of Cache Stampede introduces operational bottlenecks and failure modes:",
       "bullets": [
-        "**Where to Avoid — Trade-Off Bottlenecks**: Avoid when constraints impose callers on a completely cold key must wait for the winner to finish querying the db.",
-        "**Where to Avoid — Complexity Ceiling**: Avoid premature optimization when only prevents stampedes on already-cached hot keys; still needs singleflight for initial cold misses.",
+        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: callers on a completely cold key must wait for the winner to finish querying the db.",
+        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: only prevents stampedes on already-cached hot keys; still needs singleflight for initial cold misses.",
         "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
         "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
       ]
     },
     {
       "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Mastering cache stampede is a defining trait of Staff-level distributed systems engineers. Navigating the delicate balance between performance, reliability, and simplicity ensures architectures scale sustainably without introducing unmanageable operational friction.",
+      "body": "Technical guidelines and evaluation criteria for Cache Stampede:",
       "bullets": [
         "**Staff+ Golden Rule**: Probabilistic Early Expiration (PER / XFetch) recomputes hot keys asynchronously *before* their TTL expires based on recomputation time and remaining TTL.",
         "**Staff+ Interview Playbook**: Combine both techniques in your answer: 'I will use Soft TTL / Probabilistic Early Refresh so hot keys refresh in the background before expiring, and Singleflight request coalescing to protect against cold-start misses.'"

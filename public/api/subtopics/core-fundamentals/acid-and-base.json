@@ -17,7 +17,7 @@
   "sections": [
     {
       "heading": "1. Architectural Fundamentals & Core Mechanics",
-      "body": "ACID & BASE is a foundational architectural concept in distributed systems. Contrasting transactional database guarantees (Atomicity, Consistency, Isolation, Durability) with distributed NoSQL paradigms (Basically Available, Soft state, Eventually consistent). Fundamentally, ACID guarantees that database transactions are processed reliably even in the presence of crashes and concurrent access. **Atomicity** ensures all statements in a transaction succeed or none do (via undo logs). **Consistency** ensures application-defined invariants (foreign keys, constraints) hold. **Isolation** prevents concurrent transactions from corrupting each other. **Durability** ensures committed data survives power loss via a Write-Ahead Log (WAL) flushed to non-volatile disk.",
+      "body": "ACID guarantees that database transactions are processed reliably even in the presence of crashes and concurrent access. **Atomicity** ensures all statements in a transaction succeed or none do (via undo logs). **Consistency** ensures application-defined invariants (foreign keys, constraints) hold. **Isolation** prevents concurrent transactions from corrupting each other. **Durability** ensures committed data survives power loss via a Write-Ahead Log (WAL) flushed to non-volatile disk.",
       "bullets": [
         "**Core Architectural Principle**: ACID governs multi-operation database transactions on a single engine or NewSQL cluster, whereas BASE prioritizes availability and partition resilience across distributed shards.",
         "**Problem Space & Invariants**: Isolation is the most nuanced letter in ACID: most production SQL databases default to 'Read Committed' or 'Repeatable Read' (Snapshot Isolation), NOT true 'Serializable' isolation.",
@@ -28,10 +28,10 @@
     },
     {
       "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "In production distributed systems, acid & base manifests across several distinct architectural classifications, operational modes, and implementation strategies:",
+      "body": "Distributed architectures apply specific implementation patterns and topologies for ACID & BASE:",
       "bullets": [
-        "**ACID Transactions (RDBMS / NewSQL like Spanner)**: Focuses on eliminates partial failure states, prevents race anomalies (dirty reads, lost updates), offloads complexity to the db engine. Best suited for Core banking, ticket/inventory reservation, billing ledgers, and monolithic or modular-monolith data layers..",
-        "**BASE + Saga Pattern (NoSQL + Event Streams)**: Focuses on massive horizontal write scalability, services remain loosely coupled and independently deployable, no cross-service lock waiting. Best suited for Cross-service e-commerce checkout workflows (Order -> Payment -> Warehouse -> Notification) and high-scale ingestion..",
+        "**ACID Transactions (RDBMS / NewSQL like Spanner)**: Provides eliminates partial failure states, prevents race anomalies (dirty reads, lost updates), offloads complexity to the db engine. Best suited for Core banking, ticket/inventory reservation, billing ledgers, and monolithic or modular-monolith data layers.",
+        "**BASE + Saga Pattern (NoSQL + Event Streams)**: Provides massive horizontal write scalability, services remain loosely coupled and independently deployable, no cross-service lock waiting. Best suited for Cross-service e-commerce checkout workflows (Order -> Payment -> Warehouse -> Notification) and high-scale ingestion.",
         "Read Uncommitted: Allows 'Dirty Reads' (reading uncommitted data from another transaction).",
         "Read Committed (Postgres Default): Prevents dirty reads, but allows 'Non-Repeatable Reads' and 'Lost Updates'.",
         "Why 2PC Struggles at Scale: A coordinator waiting on 5 microservices holds locks across all of them; if 1 node stalls, the entire pipeline freezes.",
@@ -39,32 +39,32 @@
       ],
       "codeSnippet": {
         "title": "Preventing Lost Updates & Double Booking with ACID Row Locking",
-        "code": "-- Without proper Isolation, two concurrent requests read status='AVAILABLE'\n-- and both book the same seat! Use SELECT ... FOR UPDATE or Optimistic Concurrency:\n\nBEGIN TRANSACTION;\n\n-- Acquires an exclusive row-level lock (Pessimistic Locking)\nSELECT seat_id, status FROM concert_seats\nWHERE seat_id = 'A12' AND status = 'AVAILABLE'\nFOR UPDATE;\n\n-- If row returned, update status and insert booking atomically\nUPDATE concert_seats SET status = 'BOOKED', user_id = 'u_99' WHERE seat_id = 'A12';\nINSERT INTO bookings (booking_id, seat_id, user_id) VALUES ('b_501', 'A12', 'u_99');\n\nCOMMIT;"
+        "code": "-- Without proper Isolation, two concurrent requests read status='AVAILABLE'\n-- and both book the same seat! Use SELECT . FOR UPDATE or Optimistic Concurrency:\n\nBEGIN TRANSACTION;\n\n-- Acquires an exclusive row-level lock (Pessimistic Locking)\nSELECT seat_id, status FROM concert_seats\nWHERE seat_id = 'A12' AND status = 'AVAILABLE'\nFOR UPDATE;\n\n-- If row returned, update status and insert booking atomically\nUPDATE concert_seats SET status = 'BOOKED', user_id = 'u_99' WHERE seat_id = 'A12';\nINSERT INTO bookings (booking_id, seat_id, user_id) VALUES ('b_501', 'A12', 'u_99');\n\nCOMMIT;"
       }
     },
     {
       "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Adopting appropriate design patterns around acid & base unlocks critical performance, scalability, and operational advantages for modern backend platforms:",
+      "body": "Production deployments apply ACID & BASE across targeted operational scenarios:",
       "bullets": [
-        "**Where to Use — High-Impact Scenarios**: Optimal for Core banking, ticket/inventory reservation, billing ledgers, and monolithic or modular-monolith data layers. and environments requiring Eliminates partial failure states, prevents race anomalies (dirty reads, lost updates), offloads complexity to the DB engine..",
-        "**Where to Use — High-Throughput Scenarios**: Recommended for Cross-service e-commerce checkout workflows (Order -> Payment -> Warehouse -> Notification) and high-scale ingestion. where Massive horizontal write scalability, services remain loosely coupled and independently deployable, no cross-service lock waiting..",
-        "**How to Use — Engineering Implementation**: Coined as the diametric opposite of ACID on the spectrum, **BASE** stands for **Basically Available** (the system guarantees partial or degraded availability under failure), **Soft state** (the state of the system may change over time even without input due to background replication/TTL), and **Eventually consistent** (replicas converge asynchronously). Always establish explicit thresholds, measurement baselines, and automated monitoring.",
+        "**Where to Use: High-Impact Scenarios**: Optimal for Core banking, ticket/inventory reservation, billing ledgers, and monolithic or modular-monolith data layers, suited for environments requiring Eliminates partial failure states, prevents race anomalies (dirty reads, lost updates), offloads complexity to the DB engine.",
+        "**Where to Use: High-Throughput Scenarios**: Recommended for Cross-service e-commerce checkout workflows (Order -> Payment -> Warehouse -> Notification) and high-scale ingestion, where Massive horizontal write scalability, services remain loosely coupled and independently deployable, no cross-service lock waiting.",
+        "**How to Use: Engineering Implementation**: Coined as the diametric opposite of ACID on the spectrum, **BASE** stands for **Basically Available** (the system guarantees partial or degraded availability under failure), **Soft state** (the state of the system may change over time even without input due to background replication/TTL), and **Eventually consistent** (replicas converge asynchronously). Always establish explicit thresholds, measurement baselines, and automated monitoring.",
         "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
       ]
     },
     {
       "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "While essential for scalable engineering, acid & base introduces substantial architectural trade-offs, operational failure modes, and anti-patterns if applied inappropriately:",
+      "body": "Improper implementation of ACID & BASE introduces operational bottlenecks and failure modes:",
       "bullets": [
-        "**Where to Avoid — Trade-Off Bottlenecks**: Avoid when constraints impose lock contention under high write concurrency (hot rows), difficult to scale horizontally across independent microservices.",
-        "**Where to Avoid — Complexity Ceiling**: Avoid premature optimization when temporary intermediate states are visible to users, requires engineering idempotent consumers and compensating rollback logic.",
+        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: lock contention under high write concurrency (hot rows), difficult to scale horizontally across independent microservices.",
+        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: temporary intermediate states are visible to users, requires engineering idempotent consumers and compensating rollback logic.",
         "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
         "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
       ]
     },
     {
       "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Mastering acid & base is a defining trait of Staff-level distributed systems engineers. Navigating the delicate balance between performance, reliability, and simplicity ensures architectures scale sustainably without introducing unmanageable operational friction.",
+      "body": "Technical guidelines and evaluation criteria for ACID & BASE:",
       "bullets": [
         "**Staff+ Golden Rule**: When spanning multiple microservices or heterogeneous databases, replacing distributed 2PC ACID transactions with the BASE-aligned Saga pattern avoids blocking locks.",
         "**Staff+ Interview Playbook**: When designing a ticket-booking or payment system, explicitly name the concurrency anomaly you are preventing ('To prevent Lost Updates and Double Booking, I will use PostgreSQL ACID transactions with `SELECT FOR UPDATE` or optimistic version columns')."

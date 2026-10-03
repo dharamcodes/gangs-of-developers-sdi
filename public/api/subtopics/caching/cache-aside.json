@@ -10,30 +10,30 @@
   "difficulty": "Foundational",
   "keyTakeaways": [
     "In Cache-Aside (Lazy Loading), the application orchestrates both the cache and the database: on a cache miss, it reads from the DB, populates the cache, and returns the data.",
-    "On a write, the application should update the database first and then DELETE (invalidate) the cache key—rather than updating the cache—to avoid out-of-order write races.",
+    "On a write, the application should update the database first and then DELETE (invalidate) the cache key: rather than updating the cache: to avoid out-of-order write races.",
     "Cache-Aside is resilient to cache cluster failures: if Redis goes down, requests fall back to the database (though circuit breakers/rate limiters are needed to prevent DB overload)."
   ],
-  "architectureDiagram": "                     CACHE-ASIDE READ & WRITE FLOW\nREAD PATH (Cache Miss):                      WRITE PATH (Invalidate on Write):\n  [App Server] -- 1. GET key --> [Redis]       [App Server] -- 1. UPDATE row -> [Database]\n       |         (Miss: nil)                     |                              |\n       +--------- 2. SELECT ---> [Database]      +------------ 2. DEL key ----> [Redis]\n       |         (Returns row)                   (Next read will lazy-load fresh value)\n       +--------- 3. SETEX ----> [Redis]",
+  "architectureDiagram": "CACHE-ASIDE READ & WRITE FLOW\nREAD PATH (Cache Miss):                      WRITE PATH (Invalidate on Write):\n  [App Server] -- 1. GET key --> [Redis]       [App Server] -- 1. UPDATE row -> [Database]\n       |         (Miss: nil)                     |                              |\n       +--------- 2. SELECT ---> [Database]      +------------ 2. DEL key ----> [Redis]\n       |         (Returns row)                   (Next read will lazy-load fresh value)\n       +--------- 3. SETEX ----> [Redis]",
   "sections": [
     {
       "heading": "1. Architectural Fundamentals & Core Mechanics",
-      "body": "Cache-Aside is a foundational architectural concept in distributed systems. Lazy-loading cache pattern, read/write flows, and solving the classic read-modify-write race condition. Fundamentally, A common mistake in Cache-Aside is updating the cache after updating the database. If Request A and Request B concurrently update the same row, Request A might write to the DB first, then Request B writes to the DB second, but due to network jitter Request B updates Redis first and Request A updates Redis second—leaving Redis permanently poisoned with stale data until TTL expiry. Deleting the cache key (`DEL`) forces the next reader to fetch the authoritative row from the database.",
+      "body": "A common mistake in Cache-Aside is updating the cache after updating the database. If Request A and Request B concurrently update the same row, Request A might write to the DB first, then Request B writes to the DB second, but due to network jitter Request B updates Redis first and Request A updates Redis second, leaving Redis permanently poisoned with stale data until TTL expiry. Deleting the cache key (`DEL`) forces the next reader to fetch the authoritative row from the database.",
       "bullets": [
         "**Core Architectural Principle**: In Cache-Aside (Lazy Loading), the application orchestrates both the cache and the database: on a cache miss, it reads from the DB, populates the cache, and returns the data.",
-        "**Problem Space & Invariants**: On a write, the application should update the database first and then DELETE (invalidate) the cache key—rather than updating the cache—to avoid out-of-order write races.",
+        "**Problem Space & Invariants**: On a write, the application should update the database first and then DELETE (invalidate) the cache key: rather than updating the cache: to avoid out-of-order write races.",
         "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
       ],
       "diagramImageUrl": "/diagrams/arch-cache-aside.svg",
-      "asciiDiagram": "                     CACHE-ASIDE READ & WRITE FLOW\nREAD PATH (Cache Miss):                      WRITE PATH (Invalidate on Write):\n  [App Server] -- 1. GET key --> [Redis]       [App Server] -- 1. UPDATE row -> [Database]\n       |         (Miss: nil)                     |                              |\n       +--------- 2. SELECT ---> [Database]      +------------ 2. DEL key ----> [Redis]\n       |         (Returns row)                   (Next read will lazy-load fresh value)\n       +--------- 3. SETEX ----> [Redis]"
+      "asciiDiagram": "CACHE-ASIDE READ & WRITE FLOW\nREAD PATH (Cache Miss):                      WRITE PATH (Invalidate on Write):\n  [App Server] -- 1. GET key --> [Redis]       [App Server] -- 1. UPDATE row -> [Database]\n       |         (Miss: nil)                     |                              |\n       +--------- 2. SELECT ---> [Database]      +------------ 2. DEL key ----> [Redis]\n       |         (Returns row)                   (Next read will lazy-load fresh value)\n       +--------- 3. SETEX ----> [Redis]"
     },
     {
       "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "In production distributed systems, cache-aside manifests across several distinct architectural classifications, operational modes, and implementation strategies:",
+      "body": "Distributed architectures apply specific implementation patterns and topologies for Cache-Aside:",
       "bullets": [
-        "**Cache-Aside (Lazy Loading)**: Focuses on simple to reason about; caches only requested data; decoupled data model from db schema. Best suited for General-purpose read-heavy APIs, user profiles, product catalogs, and CMS pages..",
-        "**Pre-Warming / Eager Cache Population**: Focuses on zero cache-miss latency penalty for users; guarantees predictable p99 read latency. Best suited for Homepage featured items, feature flags, and celebrity social media posts..",
+        "**Cache-Aside (Lazy Loading)**: Provides simple to reason about; caches only requested data; decoupled data model from db schema. Best suited for General-purpose read-heavy APIs, user profiles, product catalogs, and CMS pages.",
+        "**Pre-Warming / Eager Cache Population**: Provides zero cache-miss latency penalty for users; guarantees predictable p99 read latency. Best suited for Homepage featured items, feature flags, and celebrity social media posts.",
         "Only Requested Data is Cached: Keeps cache memory utilization focused purely on the active working set.",
-        "Read/Write Race Condition: Even with `DEL` on write, a tiny race exists where a concurrent reader experiences a cache miss before a write commits, reads the old DB value, and populates Redis after the writer's `DEL`. Use `SET ... NX` with short TTLs or Leases (Memcached `gets/cas`) to mitigate.",
+        "Read/Write Race Condition: Even with `DEL` on write, a tiny race exists where a concurrent reader experiences a cache miss before a write commits, reads the old DB value, and populates Redis after the writer's `DEL`. Use `SET . NX` with short TTLs or Leases (Memcached `gets/cas`) to mitigate.",
         "Negative Caching: Store a sentinel value (`\"__NULL__\"`) in Redis with a short TTL (e.g., 30–60 seconds) when the DB returns 0 rows.",
         "Bloom Filter Prefix Guard: Maintain a compact Bloom filter of all valid entity IDs; reject requests for IDs not present in the Bloom filter before querying Redis or the DB."
       ],
@@ -44,27 +44,27 @@
     },
     {
       "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Adopting appropriate design patterns around cache-aside unlocks critical performance, scalability, and operational advantages for modern backend platforms:",
+      "body": "Production deployments apply Cache-Aside across targeted operational scenarios:",
       "bullets": [
-        "**Where to Use — High-Impact Scenarios**: Optimal for General-purpose read-heavy APIs, user profiles, product catalogs, and CMS pages. and environments requiring Simple to reason about; caches only requested data; decoupled data model from DB schema..",
-        "**Where to Use — High-Throughput Scenarios**: Recommended for Homepage featured items, feature flags, and celebrity social media posts. where Zero cache-miss latency penalty for users; guarantees predictable p99 read latency..",
-        "**How to Use — Engineering Implementation**: If a malicious client or bug repeatedly requests non-existent IDs (e.g., `user_id = -1` or random UUIDs), every request misses the cache and hits the database directly—known as Cache Penetration. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
+        "**Where to Use: High-Impact Scenarios**: Optimal for General-purpose read-heavy APIs, user profiles, product catalogs, and CMS pages, suited for environments requiring Simple to reason about; caches only requested data; decoupled data model from DB schema.",
+        "**Where to Use: High-Throughput Scenarios**: Recommended for Homepage featured items, feature flags, and celebrity social media posts, where Zero cache-miss latency penalty for users; guarantees predictable p99 read latency.",
+        "**How to Use: Engineering Implementation**: If a malicious client or bug repeatedly requests non-existent IDs (e.g., `user_id = -1` or random UUIDs), every request misses the cache and hits the database directly: known as Cache Penetration. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
         "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
       ]
     },
     {
       "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "While essential for scalable engineering, cache-aside introduces substantial architectural trade-offs, operational failure modes, and anti-patterns if applied inappropriately:",
+      "body": "Improper implementation of Cache-Aside introduces operational bottlenecks and failure modes:",
       "bullets": [
-        "**Where to Avoid — Trade-Off Bottlenecks**: Avoid when constraints impose first read always suffers a cache-miss latency penalty (3 network hops).",
-        "**Where to Avoid — Complexity Ceiling**: Avoid premature optimization when wastes ram caching items that may never be read; requires background sync pipelines.",
+        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: first read always suffers a cache-miss latency penalty (3 network hops).",
+        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: wastes ram caching items that may never be read; requires background sync pipelines.",
         "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
         "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
       ]
     },
     {
       "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Mastering cache-aside is a defining trait of Staff-level distributed systems engineers. Navigating the delicate balance between performance, reliability, and simplicity ensures architectures scale sustainably without introducing unmanageable operational friction.",
+      "body": "Technical guidelines and evaluation criteria for Cache-Aside:",
       "bullets": [
         "**Staff+ Golden Rule**: Cache-Aside is resilient to cache cluster failures: if Redis goes down, requests fall back to the database (though circuit breakers/rate limiters are needed to prevent DB overload).",
         "**Staff+ Interview Playbook**: Always specify that on a write in Cache-Aside, you update the DB first and then DELETE the cache entry (not update it), and mention adding random jitter to TTLs."
