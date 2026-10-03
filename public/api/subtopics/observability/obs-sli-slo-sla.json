@@ -5,53 +5,53 @@
   "topicNumber": 10,
   "subtopicNumber": "10.6",
   "title": "SLI / SLO / SLA",
-  "subtitle": "Quantifying reliability through Service Level Indicators, Objectives, Contractual Agreements, and Error Budgets.",
+  "subtitle": "Service Level Indicators, Objectives, Agreements, and Error Budget math in production systems.",
   "readingTime": "9 min read",
   "difficulty": "Intermediate",
   "keyTakeaways": [
-    "An SLI is a quantitative ratio of good events to valid events; an SLO is the internal target percentage for that SLI over a window; an SLA is an external legal contract with financial penalties.",
-    "The Error Budget (100% - SLO%) converts reliability from a subjective debate between Product and SRE into an objective, spendable currency for feature velocity and chaos testing.",
-    "In a serial dependency chain of N services, composite availability is the product of each component's availability, meaning downstream services must maintain stricter SLOs than the user-facing edge."
+    "An SLI is a concrete ratio of successful events to valid events; an SLO is your internal reliability target over a rolling window; an SLA is the external legal contract with financial penalties.",
+    "The Error Budget (100% - SLO%) turns reliability from an emotional argument between Product and SRE into an objective threshold: burn it on feature releases or spend it on reliability fixes.",
+    "Composite availability multiplies in serial chains: four synchronous microservices each running at 99.9% produce a system that caps out at 99.6% availability at the edge."
   ],
   "architectureDiagram": "+---------------------------------------------------------------------+\n| SLI (Indicator):  Good Events / Total Valid Events                  |\n|                   e.g., HTTP 2xx/3xx/4xx(excl 429) in < 200ms       |\n+----------------------------------+----------------------------------+\n                                   |\n                                   v\n+---------------------------------------------------------------------+\n| SLO (Objective):  SLI >= 99.9% over rolling 30-day window           |\n|                   Error Budget = 0.1% (43.2 minutes / 30 days)      |\n+----------------------------------+----------------------------------+\n                                   |\n        +--------------------------+--------------------------+\n        | Budget Remaining > 0%                               | Budget Exhausted (0%)\n        v                                                     v\n[Ship Features, Run Chaos Tests]              [Feature Freeze, Reliability Sprint]\n                                   |\n                                   v (Buffer Margin)\n+---------------------------------------------------------------------+\n| SLA (Agreement):  External contract >= 99.5% (Financial Credits)    |\n+---------------------------------------------------------------------+",
   "sections": [
     {
-      "heading": "Precision SLI Formulation & Error Budget Governance",
-      "body": "Reliability is not binary; aiming for 100% availability is both mathematically impossible and economically wasteful. By defining explicit Service Level Objectives (SLOs), engineering teams align on how much unreliability is acceptable in exchange for rapid product innovation.",
+      "heading": "Formulating SLIs and Enforcing Error Budget Policy",
+      "body": "Aiming for 100% availability is a mistake: it is economically ruinous and stops teams from shipping code. A reliable service only needs to be reliable enough that users do not notice or complain. We quantify that balance using Service Level Objectives (SLOs) backed by event-based indicators.",
       "bullets": [
-        "Event-Based vs Time-Based SLIs: Prefer event-based ratios (`good_requests / valid_requests`) over time-window uptime (`healthy_minutes / total_minutes`) so outages during peak traffic are weighted heavier than 3 AM blips.",
-        "The Table of Nines (30-Day Window): 99.0% (2 nines) = 7.2 hours downtime/month; 99.9% (3 nines) = 43.2 minutes; 99.99% (4 nines) = 4.32 minutes; 99.999% (5 nines) = 25.9 seconds.",
-        "Internal SLO vs External SLA Cushion: Always set the internal engineering SLO tighter (e.g., 99.95%) than the contractual customer SLA (e.g., 99.9%) to trigger corrective action before owing financial credits."
+        "Event-based vs time-based SLIs: Measuring uptime minutes (like a synthetic ping every 60 seconds) hides peak-traffic outages. An event ratio (`successful_requests / valid_requests`) properly weights a catastrophic 5-minute failure during peak rush hour over a 5-minute glitch at 4 AM.",
+        "The Table of Nines over a 30-day window: 99.0% allows 7.2 hours of downtime; 99.9% allows 43.2 minutes; 99.99% allows 4.32 minutes; 99.999% allows just 25.9 seconds. Every additional nine roughly increases infrastructure and engineering operational costs by an order of magnitude.",
+        "The SLA buffer margin: Always set the internal engineering SLO significantly tighter than the external contractual SLA (for instance, an internal SLO of 99.95% against a 99.9% customer SLA). This gives on-call engineers time to triage and recover before legal penalty credits kick in."
       ],
       "codeSnippet": {
-        "title": "Event-Based Availability & Latency SLI with Error Budget Math",
-        "code": "# Good Events: Non-5xx responses that completed within 300ms\n# Valid Events: All requests excluding client-side 4xx (except 429 rate-limits)\n\n# PromQL 30-Day Rolling Availability SLI\n1 - (\n  sum(increase(http_requests_total{status=~\"5..|429\"}[30d]))\n  /\n  sum(increase(http_requests_total{status!~\"40[0-4]\"}[30d]))\n)\n\n# Remaining Error Budget Fraction (for a 99.9% / 0.001 error budget target):\n# budget_remaining = 1 - ((1 - current_sli) / (1 - 0.999))"
+        "title": "Event-Based Availability SLI & Error Budget Prometheus Query",
+        "code": "# Calculate 30-day availability SLI excluding client-side bad requests (4xx except 429)\n# Good events: HTTP responses not returning 5xx or rate-limiting 429\n1 - (\n  sum(increase(http_requests_total{status=~\"5..|429\"}[30d]))\n  /\n  sum(increase(http_requests_total{status!~\"40[0-4]\"}[30d]))\n)\n\n# Remaining error budget fraction for a 99.9% target (0.001 allowed failure rate):\n# remaining_budget = 1 - ((1 - current_sli) / (1 - 0.999))"
       }
     },
     {
-      "heading": "Composite Availability Math & Dependency Bounds",
-      "body": "A user-facing endpoint cannot be more reliable than its hard synchronous dependencies unless it implements fallbacks, caching, or circuit breaking. Understanding serial vs parallel reliability probability is essential for architectural sizing.",
+      "heading": "Composite Availability and Dependency Limits",
+      "body": "Your service cannot be more available than the synchronous dependencies it relies on. When an edge gateway depends on multiple services in series, their availabilities multiply, degrading total system uptime.",
       "bullets": [
-        "Serial Dependencies Multiply: If API Gateway (99.9%) synchronously calls Auth (99.9%), Order (99.9%), and Inventory (99.9%), the composite ceiling is $0.999^4 = 99.6\\%$, violating a 99.9% edge SLO!",
-        "Redundant Parallel Dependencies Add: Two independent replicas or regions each with 99% availability fail simultaneously with probability $(1 - 0.99)^2 = 0.0001$, yielding $99.99\\%$ composite availability.",
-        "Decoupling Hard Dependencies: To achieve a 99.99% edge SLO when calling a 99.9% third-party service, you must make the call asynchronous (queue) or serve stale cached fallback data during third-party outages."
+        "Serial dependencies degrade rapidly: If the checkout endpoint synchronously invokes Auth (99.9%), Inventory (99.9%), Order (99.9%), and Payment (99.9%), your maximum theoretical availability is 0.999^4 = 99.6%. A single downstream hiccup takes down the caller.",
+        "Parallel redundant components improve uptime: Two independent replicas or cloud regions each with 99.0% availability only fail simultaneously if both collapse: (1 - 0.99)^2 = 0.0001, providing 99.99% availability.",
+        "Decoupling synchronous chains: To hit a 99.99% edge target while calling upstream services that only promise 99.9%, you have to eliminate synchronous coupling using asynchronous message queues, local read caches, or graceful degraded responses."
       ]
     }
   ],
   "tradeOffs": [
     {
-      "option": "Strict High-Nines SLO (99.99%+)",
-      "pros": "Near-zero customer disruption; builds deep enterprise trust for critical financial or auth infrastructure.",
-      "cons": "Exponentially higher cloud cost (multi-region active-active), slower deployment velocity, strict change control.",
-      "bestFor": "Core identity/authentication, payment processing, DNS/edge routing, and control-plane primitives."
+      "option": "Strict Four-Nines SLO (99.99%+)",
+      "pros": "Near-zero user-perceived downtime; builds high customer trust for core infrastructure like billing or authentication.",
+      "cons": "Requires multi-region active-active deployments, zero-downtime rolling schemas, strict freeze periods, and high infra costs.",
+      "bestFor": "Payment gateways, user identity providers, telecommunications routing, and DNS services."
     },
     {
       "option": "Moderate SLO (99.5% - 99.9%)",
-      "pros": "Generous error budget enables rapid CI/CD experimentation, single-region simplicity, and lower infra spend.",
-      "cons": "Allows up to 43 minutes to 3.6 hours of monthly degradation.",
-      "bestFor": "Internal tools, analytics dashboards, recommendation feeds, and batch reporting pipelines."
+      "pros": "Gives teams room to experiment and ship daily without getting blocked by error-budget gatekeepers.",
+      "cons": "Allows 43 minutes to 3.6 hours of monthly degradation, which may frustrate enterprise customers on critical paths.",
+      "bestFor": "Internal developer portals, analytics pipelines, recommendation engines, and non-blocking back-office tooling."
     }
   ],
-  "interviewTip": "Use composite SLO math during architecture reviews: if the interviewer asks for 'four nines (99.99%) availability,' calculate on the whiteboard how three serial microservices at 99.95% each drop overall availability to 99.85%, justifying why you need async queues or local caches.",
+  "interviewTip": "When an interviewer asks for four nines (99.99%) availability, do not just say yes. Write the math on the board: four synchronous microservices at 99.95% multiply out to 99.80%. Point out that without asynchronous queues or caching fallbacks, the system mathematically cannot meet that target.",
   "jsonUrl": "/api/subtopics/observability/obs-sli-slo-sla.json"
 }

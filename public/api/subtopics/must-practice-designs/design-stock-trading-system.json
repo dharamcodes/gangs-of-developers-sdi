@@ -5,50 +5,45 @@
   "topicNumber": 13,
   "subtopicNumber": "13.12",
   "title": "Stock Trading System",
-  "subtitle": "Designing an ultra-low-latency electronic exchange & brokerage with LMAX Disruptor, deterministic single-threaded Limit Order Books, and Raft-replicated event journals",
+  "subtitle": "Ultra-low-latency electronic exchange: LMAX Disruptor, deterministic single-threaded matching, and Raft journaling.",
   "readingTime": "20 min",
   "difficulty": "Staff+",
   "keyTakeaways": [
-    "Never use database locks or multi-threaded mutexes inside a Limit Order Book (LOB): partition matching engines by `symbol` and run each symbol's order book on a single pinned CPU core using an LMAX Disruptor ring buffer.",
-    "Achieve fault tolerance via Deterministic State Machine Replication: sequence every command through a Raft-replicated append-only journal (Aeron Cluster / Chronicle Queue) so standby replicas reconstruct the exact same in-memory Order Book in microseconds.",
-    "Model price levels with a dual data structure: a `TreeMap<Long, PriceLevel>` (or flat array indexed by tick offset) for $O(1)$ best bid/ask lookup and doubly-linked lists of `OrderNode`s at each price level for $O(1)$ FIFO time-priority matching and $O(1)$ cancellation via `HashMap<Long, OrderNode>`."
+    "Never use database locks or multi-threaded mutexes inside a Limit Order Book (LOB): partition matching engines by symbol and run each symbol on a single pinned CPU core using an LMAX Disruptor lock-free ring buffer.",
+    "Achieve high availability through Deterministic State Machine Replication: sequence every incoming order through a Raft-replicated append-only journal so standby replicas reconstruct the exact same order book in microseconds.",
+    "Model price levels using a dual data structure: a TreeMap (or flat array indexed by price tick) for O(1) best bid/ask lookups, paired with doubly-linked lists of orders at each price level for O(1) FIFO time-priority matching and O(1) order cancellation."
   ],
   "architectureDiagram": "+-------------------+     FIX 4.2/5.0 / SBE     +---------------------------+\n| Institutional &   | <=======================> | Order Gateway (FIX/REST)  |\n| Retail Clients    |    WebSocket / HTTPS      | Session & Sequence Check  |\n+-------------------+                           +-------------+-------------+\n                                                              |\n                                                              v\n                                                +---------------------------+\n                                                | Pre-Trade Risk & Wallet   |\n                                                | Engine (In-Memory Buying  |\n                                                | Power & Position Checks)  |\n                                                +-------------+-------------+\n                                                              |\n                                         UDP Multicast / Aeron IPC (Sequenced)\n                                                              |\n                        +-------------------------------------+-------------------------------------+\n                        |                                                                           |\n                        v (Symbol Shard: AAPL.G)                                                   v (Symbol Shard: H.Z)\n+-----------------------------------------------------------------------+   +---------------------------------------+\n| DETERMINISTIC MATCHING ENGINE SHARD 1 (Pinned Core, LMAX Disruptor)   |   | MATCHING ENGINE SHARD 2               |\n|  1. Raft / Aeron Consensus Log (Append-Only Memory-Mapped Journal)    |   | (Hot Primary + Warm Followers)        |\n|  2. In-Memory Limit Order Book (Bids Max-Heap/Tree, Asks Min-Heap)    |   +---------------------------------------+\n|  3. Price-Time FIFO Execution Loop (< 5 microseconds)                 |\n+-----------------------+-------------------------------+---------------+\n                        |                               |\n          +-------------+                               +-------------------+\n          | Execution Reports (Fills/Acks)                                  | Market Data (L1 Top-of-Book / L2 Depth)\n          v                                                                 v\n+---------------------------------------+                       +-----------------------------------+\n| Post-Trade Clearing & Ledger Svc      |                       | Market Data Publisher (ITCH/WS)   |\n| (Double-Entry PostgreSQL + Kafka)     |                       | (Candlestick Aggregator + Fanout) |\n+---------------------------------------+                       +-----------------------------------+",
   "sections": [
     {
       "heading": "1. Requirements Engineering & Scope Boundaries",
-      "body": "We are designing both the retail/institutional Order Management Gateway (brokerage pre-trade risk + wallet reservation) and the core Exchange Matching Engine that executes Limit and Market orders with strict price-time priority.",
+      "body": "An Electronic Stock Trading Exchange matches buyers and sellers in real time based on Price-Time Priority (FIFO), maintaining deterministic order books and sub-millisecond execution latencies.",
       "bullets": [
-        "Functional: Order Placement & Cancellation: Support `LIMIT` and `MARKET` orders (`BUY` / `SELL`), Time-in-Force (`DAY`, `IOC`, `FOK`), and sub-millisecond order cancellations.",
-        "Functional: Pre-Trade Risk & Buying Power Validation: Synchronously verify sufficient cash balance (for buys) or share inventory/margin limits (for sells) and reserve funds before routing to the matching engine.",
-        "Functional: Price-Time Priority Matching (FIFO): Match incoming aggressive orders against resting orders in the Limit Order Book (LOB) strictly by best price first, then earliest arrival sequence number.",
-        "Functional: Real-Time Market Data Feeds: Broadcast Level-1 (Best Bid/Offer & Last Trade) and Level-2 (Order Book Depth across price levels) plus OHLCV candlestick bars (1s, 1m, 1h, 1d).",
-        "Non-Functional: Ultra-Low Deterministic Latency: Matching engine execution time < 50 microseconds P99 (sub-10 milliseconds end-to-end for retail REST gateways; < 500 microseconds for institutional FIX gateways).",
-        "Non-Functional: Strict Determinism & Zero Data Loss: 100% deterministic replayability from the sequenced command log; zero lost trades (`RPO = 0`) and automatic sub-second failover (`RTO < 200ms`).",
-        "Out of Scope: Multi-leg options/derivatives pricing models (Black-Scholes Greeks), T+1 regulatory tax reporting (1099-B generation), and dark pool midpoint pegging."
+        "Functional: Place, cancel, and modify Limit and Market orders; match compatible bids and asks according to Price-Time Priority; broadcast real-time market data (Level 2 order books and execution trades).",
+        "Functional: Pre-trade risk checks (verifying margin and available cash before an order reaches the matching engine).",
+        "Non-Functional: Deterministic sub-millisecond matching latency (p99 < 500 microseconds inside the matching core).",
+        "Non-Functional: Strict FIFO fairness: orders at the same price must execute strictly in the order they arrived at the exchange.",
+        "Non-Functional: High durability: zero lost executions once acknowledged to the broker.",
+        "Out of Scope: Options/futures derivative pricing models, high-frequency market-making proprietary trading algorithms, and multi-currency clearinghouse settlement."
       ]
     },
     {
       "heading": "2. Traffic Modeling & Workload Assumptions",
-      "body": "We size the system for a major US equity exchange and high-volume retail brokerage handling market-open and Fed-announcement volatility spikes.",
+      "body": "Electronic exchanges handle intense message throughput during market open and close auctions, characterized by high cancellation-to-trade ratios.",
       "bullets": [
-        "Active Traders & Tradable Instruments: 15 Million DAU retail traders + 500 institutional market makers trading across 8,000 listed equity symbols (e.g., `AAPL`, `NVDA`, `TSLA`, `SPY`).",
-        "Order Events per Trading Day: 1.5 Billion total order events (New Order, Cancel, Modify) during a 6.5-hour trading session (23,400 seconds): market makers generate ~10–15 cancellations/quotes per executed trade.",
-        "Executed Trades (Fills) per Day: 150 Million matched trades (300 Million ledger postings) per day.",
-        "Read:Write Ratio: Inside the matching engine, 100% of commands are sequenced state transitions; externally, 1 order book mutation triggers fan-out to tens of thousands of subscribed market-data WebSocket streams (~100:1 egress-to-ingress).",
-        "Peak Traffic Multiplier: 10x burst at 09:30:00 EST Market Open and 16:00:00 EST Market Close.",
-        "Payload Sizes: Binary SBE/FIX Order Command = 128 bytes; In-Memory Order Node = 128 bytes (cache-line aligned); Trade Execution Fill Event = 256 bytes; L2 Market Data Tick = 64 bytes."
+        "Order Throughput: 100,000 orders and cancels per second across the exchange, peaking at 500,000 ops/second during market open.",
+        "Order-to-Trade Ratio: In modern electronic markets, 95% of orders are cancels or price adjustments placed by algorithmic market makers; only ~5% result in executed trades.",
+        "Symbol Cardinality: 10,000 active stock tickers, with 80% of volume concentrated in the top 200 liquid symbols (e.g., AAPL, NVDA, SPY).",
+        "Latency Budget: Ingress gateway pre-trade risk check < 100us; matching engine execution < 50us; journaling < 200us."
       ]
     },
     {
       "heading": "3. Back-of-the-Envelope Capacity Calculations",
-      "body": "Because the US trading day is concentrated into 23,400 seconds (6.5 hours) with extreme 10x spikes at the opening bell, QPS must be calculated against active market seconds rather than 86,400 seconds.",
+      "body": "Capacity in a trading engine is measured in nanoseconds of CPU execution time and network packet transmission rather than terabytes of disk.",
       "bullets": [
-        "Order Ingress QPS: 1.5 Billion order events / 23,400s = ~64,100 orders/sec average -> 641,000 orders/sec at 10x Market Open peak.",
-        "Trade Execution QPS: 150 Million fills / 23,400s = ~6,410 trades/sec average -> 64,100 trades/sec at 10x peak.",
-        "Matching Engine Memory (RAM): 50 Million maximum concurrent resting open orders across all 8,000 symbols * 128 bytes = 6.4 GB raw in-memory LOB state + 15M active user risk/wallet accounts * 256 bytes = 3.84 GB -> easily fits inside L3 cache / 32 GB RAM per bare-metal node with zero swap or GC pauses.",
-        "5-Year Regulatory Audit & Ledger Storage (SEC Rule 17a-4): 1.5B order events/day * 128 B (192 GB/day) + 150M fills/day * 256 B (38.4 GB/day) = ~230.4 GB/trading day. At 252 trading days/year * 5 years = 1,260 trading days * 230.4 GB = ~290.3 TB raw -> ~871 TB with 3x replication.",
-        "Ingress & Market Data Egress Bandwidth: Ingress = 641,000 peak orders/sec * 128 B = 82 MB/sec peak. Egress (Market Data Multicast + WebSocket fan-out to 2M concurrent streaming clients receiving 20 updates/sec * 64 B) = 2.56 GB/sec (20.5 Gbps) at edge fan-out."
+        "Matching engine budget: 50,000 orders/sec on a single hot symbol means the matching engine has an upper bound of 20 microseconds per order. Multi-threaded locking overhead (mutex lock/unlock takes 50-100ns plus context switch costs) makes locks unacceptable.",
+        "Journal storage: 500,000 orders/sec * 128 bytes per binary order record = ~64 MB/s of sequential append-only disk write, easily handled by high-end NVMe SSDs.",
+        "Market data broadcast bandwidth: 50,000 matched trades/sec * 64 bytes binary UDP multicast packet = ~3.2 MB/s outbound multicast stream."
       ],
       "codeSnippet": {
         "title": "Stock Exchange & Brokerage Capacity Estimation Sheet",
@@ -57,13 +52,12 @@
     },
     {
       "heading": "4. API Interface Contracts & Data Domain Models",
-      "body": "Core external REST/gRPC/WebSocket API contracts, request/response payloads, and underlying storage entities with primary keys (PK), foreign keys (FK), secondary/clustering indexes (IDX), and relationship cardinalities.",
+      "body": "Financial exchanges communicate using high-performance binary protocols (like Simple Binary Encoding / SBE) or standard FIX (Financial Information eXchange) over TCP.",
       "bullets": [
-        "POST /api/v1/orders (or FIX 4.4 NewOrderSingle): Pre-trade risk check reserves buying power and sequences command into the matching ring buffer.",
-        "DELETE /api/v1/orders/{orderId} (or FIX OrderCancelRequest): Removes node in O(1) via HashMap + doubly-linked PriceLevel pointer.",
-        "WebSocket / Multicast Market Data Feed: Broadcasts L1 Top-of-Book (BBO) and L2 Depth deltas in real time."
+        "New Order Single (FIX 4.4 / SBE): Message containing `ClOrdID`, `Symbol`, `Side` (`BUY`|`SELL`), `OrderQty`, `Price`, `OrdType` (`LIMIT`|`MARKET`), `TimeInForce`.",
+        "Execution Report: Broadcasts `ExecID`, `OrderID`, `ExecType` (`NEW`|`TRADE`|`CANCELED`), `LastShares`, `LastPx`, `LeavesQty`.",
+        "In-Memory Limit Order Book: `Order` struct (`order_id`, `price`, `quantity`, `timestamp`, `prev`, `next`), `PriceLevel` struct (`price`, `total_volume`, `head_order`, `tail_order`)."
       ],
-      "erDiagramUrl": "/diagrams/er-design-stock-trading-system.svg",
       "codeSnippet": {
         "title": "API Contracts & Storage Entity Schemas",
         "code": "// 1. Place Limit Order\nPOST /api/v1/orders\nHeaders:\n  X-Client-Order-Id: cl_ord_991823\nRequest:\n{\n  \"account_id\": \"acct_7712\",\n  \"symbol\": \"AAPL\",\n  \"side\": \"BUY\",\n  \"order_type\": \"LIMIT\",\n  \"time_in_force\": \"GTC\",\n  \"price_ticks\": 22550, // $225.50 in integer cents\n  \"quantity\": 100\n}\nResponse (200 OK: Sequenced & Matched):\n{\n  \"order_id\": \"900182736451\",\n  \"sequence_no\": 48192031,\n  \"status\": \"PARTIALLY_FILLED\",\n  \"filled_qty\": 60,\n  \"remaining_qty\": 40,\n  \"avg_fill_price_ticks\": 22545\n}\n\n// ---------------------------------------------------------------------------\n// Core Storage Entities & Schema Definitions\n// ---------------------------------------------------------------------------\nENTITY orders_sequenced_log (Aeron / Raft Replicated Command Log) {\n  [PK ] sequence_no            BIGINT (Monotonic)\n  [IDX] order_id               BIGINT\n  [IDX] symbol                 VARCHAR(12)\n        side_and_type          ENUM('BUY_LIMIT','SELL_LIMIT')\n        price_ticks            BIGINT (Cents/Ticks)\n}\n\nENTITY in_memory_order_book (LMAX Single-Threaded RAM State) {\n  [PK ] order_id               BIGINT (HashMap O(1))\n  [IDX] price_ticks            BIGINT (TreeMap Level)\n        remaining_qty          INT\n        fifo_prev_ptr          ORDER_NODE_PTR\n        fifo_next_ptr          ORDER_NODE_PTR\n}\n\nENTITY trade_executions (TimescaleDB / Clearing Ledger) {\n  [PK ] execution_id           BIGINT\n  [FK ] buy_order_id           BIGINT\n  [FK ] sell_order_id          BIGINT\n        exec_price_ticks       BIGINT\n        matched_qty            INT\n}\n\n// Relationships: orders_sequenced_log --(1 : 1 (populates book node))--> in_memory_order_book --(1 : N (generates fills))--> trade_executions"
@@ -71,59 +65,58 @@
     },
     {
       "heading": "5. High-Level Architecture Blueprint & Component Topology",
-      "body": "The system separates **Client Protocol Gateways** (FIX 4.2/SBE for institutions, REST/WebSocket for retail), the **Pre-Trade Risk Engine**, the **Deterministic Sequenced Matching Engine** (sharded by symbol range), and the asynchronous **Post-Trade Clearing & Market Data Pipeline**.",
+      "body": "The trading platform follows the LMAX architecture: a sequenced input pipeline feeding a deterministic, single-threaded in-memory matching core.",
       "bullets": [
-        "Order Gateways: Normalize REST JSON and institutional FIX messages into compact binary Simple Binary Encoding (SBE) structs.",
-        "Pre-Trade Risk Service: Sharded by `accountId`. Keeps user cash balances and share positions in memory (backed by a write-ahead log) to perform sub-millisecond buying power checks and reserve funds before an order ever reaches the exchange.",
-        "Sequencer & Raft Log (Aeron Cluster): Assigns a strictly monotonically increasing `sequenceNo` to every command and replicates it to a quorum of 3 nodes in memory-mapped files before the primary matching thread executes it.",
-        "Single-Threaded Matching Engine (LMAX Disruptor): Processes commands sequentially from the ring buffer with zero locks, zero context switches, and $O(1)$ price-level operations, emitting execution reports and market data ticks."
+        "FIX / SBE Gateway: Terminates broker TCP connections, authenticates sessions, and decodes binary packets.",
+        "Pre-Trade Risk Engine: In-memory validator ensuring the broker has sufficient margin and has not breached risk limits.",
+        "Sequencer & Replicated Journal (Aeron / Raft): Assigns a strict monotonic sequence number to every order and writes to an append-only log across 3 nodes before matching.",
+        "Single-Threaded Matching Engine: Consumes sequenced orders from an in-memory lock-free ring buffer (LMAX Disruptor) and updates the in-memory order book.",
+        "Market Data Publisher: Broadcasts matched trade feeds and Level 2 depth via UDP Multicast to market participants."
       ],
       "diagramImageUrl": "/diagrams/design-stock-trading-system.jpg",
       "asciiDiagram": "+------------------------------------------------------------------------------------+\n|                   CLIENTS (RETAIL MOBILE APPS & INSTITUTIONAL HFT)                 |\n+----------------------+-------------------------------------+-----------------------+\n                       | HTTPS / WebSocket                   | TCP FIX / Binary SBE\n                       v                                     v\n+----------------------------------------+   +---------------------------------------+\n|          RETAIL API GATEWAY            |   |       INSTITUTIONAL FIX GATEWAY       |\n+----------------------+-----------------+   +---------------+-----------------------+\n                       |                                     |\n                       +------------------+------------------+\n                                          |\n                                          v\n+------------------------------------------------------------------------------------+\n|               PRE-TRADE RISK & WALLET ENGINE (Sharded by accountId)                |\n|  * In-memory Cash & Share Reservation (availableCash -= price * qty)               |\n|  * Rejects Wash-Trades, Fat-Finger Price Collars, and Insufficient Buying Power    |\n+-----------------------------------------+------------------------------------------+\n                                          |\n                                          v (Aeron IPC / Sequenced Ring Buffer)\n+------------------------------------------------------------------------------------+\n|         MATCHING ENGINE CLUSTER (Sharded by Symbol: Shard 1 = AAPL, NVDA.)       |\n|                                                                                    |\n|  +------------------------------+     Replicate    +----------------------------+  |\n|  | RAFT COMMAND LOG (Leader)    | ---------------> | RAFT FOLLOWERS (Warm)      |  |\n|  +--------------+---------------+                  | (Identical In-Memory LOB)  |  |\n|                 |                                  +----------------------------+  |\n|                 v                                                                  |\n|  +------------------------------------------------------------------------------+  |\n|  | LMAX DISRUPTOR RING BUFFER -> SINGLE-THREADED LIMIT ORDER BOOK (Pinned Core) |  |\n|  |  * BIDS: TreeMap<Price, PriceLevel> (Descending)                             |  |\n|  |  * ASKS: TreeMap<Price, PriceLevel> (Ascending)                              |  |\n|  |  * ORDERS: Long2ObjectHashMap<OrderNode> (O(1) Cancel by orderId)            |  |\n|  +--------------+-----------------------------------------------+---------------+  |\n+-----------------|-----------------------------------------------|------------------+\n                  | (Execution Reports / Fills)                   | (L1/L2 Ticks)\n                  v                                               v\n+----------------------------------------+   +---------------------------------------+\n|   POST-TRADE CLEARING & LEDGER (Kafka) |   |     MARKET DATA FANOUT & OHLCV        |\n|  * Settles Reserved Cash/Shares        |   |  * Builds 1s/1m Candlestick Bars      |\n|  * Writes Double-Entry Ledger (PGSQL)  |   |  * Pushes L2 Deltas via WebSocket     |\n+----------------------------------------+   +---------------------------------------+"
     },
     {
       "heading": "6. Deep-Dive Execution Flows & Core Logic",
-      "body": "We examine the two foundational low-latency trading paths: pre-trade risk reservation with deterministic sequencing and single-threaded price-time priority order book matching.",
+      "body": "Executing trades with deterministic microsecond latency requires single-threaded memory processing paired with dual data structures.",
       "bullets": [
-        "Pre-Trade Risk Reservation, Raft Sequencer & Disruptor Ring Handoff: When a limit order is submitted via FIX protocol, the risk engine atomically verifies account buying power in memory. The order command is appended to an Aeron Raft log to assign a deterministic sequence number, then passed via a lock-free LMAX Disruptor ring buffer to the matching engine core.",
-        "Price-Time Priority Matching & UDP Multicast Market Data Dissemination: The matching thread processes sequenced order commands from a lock-free ring buffer against the opposite side of the order book (Red-Black tree of price levels, each containing a doubly-linked list of limit orders). Executed fills generate sub-microsecond trade notices broadcast over kernel-bypass UDP multicast."
+        "Why single-threaded beats multi-threaded: Shared-memory concurrency with mutexes or read-write locks causes CPU cache line bouncing and OS thread context switching. Running the matching engine on a single CPU core pinned with `taskset` eliminates lock contention and achieves predictable execution.",
+        "Order book data structure: Maintain two side structures: Bids (sorted descending) and Asks (sorted ascending). Use a B-tree or array of price ticks for $O(1)$ lookup of the best bid/ask, and a doubly-linked list of orders at each price level to enforce FIFO execution.",
+        "Order cancellation in O(1): Maintain an in-memory hash map of `order_id -> OrderNode*`. To cancel an order, look up the node in $O(1)$, unlink it from the doubly-linked list in $O(1)$, and decrement the price level volume."
       ],
-      "flowDiagramUrl": "/diagrams/flow-design-stock-trading-system.svg",
       "diagramImageUrl": "/diagrams/flow-design-stock-trading-system.svg"
     },
     {
       "heading": "7. Production Hardening, Fault Tolerance & Resilience",
-      "body": "Operating a regulated financial exchange requires mechanical sympathy, hardware optimization, and automated market-integrity safeguards.",
+      "body": "Exchanges must guarantee state reproducibility and instantaneous failover without losing a single trade.",
       "bullets": [
-        "Zero-GC Off-Heap Memory & Object Pooling: Replace standard `HashMap<Long, OrderNode>` and `TreeMap` with Agrona/Eclipse Collections primitive maps (`Long2ObjectHashMap`) and pre-allocate a slab of 10 Million `OrderNode` instances at JVM startup so Young/Old GC pauses are literally zero during trading hours.",
-        "Kernel Bypass Networking (DPDK / Solarflare OpenOnload) & CPU Pinning: Pin each matching engine thread to an isolated physical CPU core (`isolcpus`) with hyperthreading disabled, and read UDP multicast/Aeron IPC frames directly from the NIC ring buffer in user space.",
-        "Self-Trade Prevention (STP) & LULD Circuit Breakers: Prevent two orders from the same `accountId` or institutional firm from matching against each other (wash trading), and automatically pause matching for 5 minutes if a stock's price moves outside Limit-Up / Limit-Down (LULD) percentage bands within a rolling 5-minute window.",
-        "Fast Recovery via Memory-Mapped Snapshots + Raft Replay: Periodically snapshot the in-memory LOB from a warm follower node to disk every 5 minutes so a cold node restart only replays the last few minutes of the Chronicle/Aeron event log rather than the entire trading day.",
-        "Double-Entry Immutable Clearing Ledger: Every `MatchFill` event is consumed from Kafka into an append-only double-entry accounting ledger where `SUM(debits) == SUM(credits)` is enforced per transaction batch."
+        "Deterministic state machine replay: Because the matching engine is single-threaded and deterministic, feeding the exact same sequence of input events into an empty engine produces the exact same order book state. If the primary crashes, a warm standby reading the Raft journal takes over in microseconds.",
+        "Memory pre-allocation and zero GC: In Java/C++, allocate all order objects in pre-sized memory pools at startup. Never allocate objects on the heap during active trading hours to prevent garbage collection pauses from halting the matching loop.",
+        "Kernel bypass networking: Use Solarflare OpenOnload or DPDK to read network packets directly from the network interface card (NIC) into application memory, bypassing the Linux kernel network stack and shaving 5 to 10 microseconds off ingress latency."
       ]
     }
   ],
   "tradeOffs": [
     {
-      "option": "Single-Threaded LMAX Disruptor + In-Memory LOB per Symbol Shard",
-      "pros": "Zero lock contention, zero context switching, CPU L1/L2 cache locality, 100% deterministic execution order, and > 1M orders/sec per core.",
-      "cons": "Requires careful symbol-to-shard assignment (hot tickers like NVDA/TSLA need dedicated single-symbol shards) and strict avoidance of any blocking I/O on the matching thread.",
-      "bestFor": "Core stock/crypto exchange matching engines and pre-trade risk engines."
+      "option": "Single-Threaded Pinned Core with LMAX Disruptor",
+      "pros": "Deterministic microsecond latency; zero lock contention; zero thread context switches; clean FIFO ordering.",
+      "cons": "Throughput per symbol is bound by the clock speed of a single CPU core; requires partitioning symbols across cores.",
+      "bestFor": "Electronic exchanges (NASDAQ, LMAX, CME), crypto matching engines, and high-frequency trading platforms."
     },
     {
-      "option": "Multi-Threaded Fine-Grained Locking Order Book",
-      "pros": "Allows multiple threads to mutate different price levels concurrently within the same symbol.",
-      "cons": "In real trading, 95%+ of activity hits the top 1–2 price levels (Best Bid/Ask), causing catastrophic mutex/CAS cache-line bouncing that makes multi-threading slower than a single thread.",
-      "bestFor": "Almost never recommended for high-frequency financial order books."
+      "option": "Multi-Threaded Order Book with Fine-Grained Locks",
+      "pros": "Can leverage multiple CPU cores across a single symbol's price levels.",
+      "cons": "Lock contention, cache line bouncing, and non-deterministic execution times under high volatility.",
+      "bestFor": "Low-frequency trading platforms or internal crossing networks with modest throughput."
     },
     {
-      "option": "Relational Database Row-Locking (`SELECT FOR UPDATE`)",
-      "pros": "Simple ACID transactions out of the box with zero custom replication logic.",
-      "cons": "Capped at ~1,000–2,000 TPS per symbol with 5–20 ms latency, orders of magnitude too slow for a live exchange.",
-      "bestFor": "Low-volume internal auction tools or end-of-day settlement batch processing."
+      "option": "Kernel-Bypass Networking (DPDK / Solarflare EF_VI)",
+      "pros": "Cuts network latency from 15 microseconds down to 1.5 microseconds by bypassing OS socket layers.",
+      "cons": "Requires specialized network hardware, dedicated CPU polling cores, and complex low-level C/C++ driver code.",
+      "bestFor": "Tier 1 electronic exchanges and algorithmic trading firms competing on speed."
     }
   ],
-  "interviewTip": "Always emphasize three golden rules in a Stock Trading interview: (1) Store prices as `long` integer cents or micro-dollars, never `double`/`float`; (2) Never use locks or database queries inside the matching loop, use a single-threaded LMAX Disruptor per symbol shard; and (3) Achieve `O(1)` order cancellation by combining a `HashMap<OrderId, OrderNode>` with a doubly-linked list inside each `PriceLevel`.",
+  "interviewTip": "When asked how an exchange handles high throughput, immediately explain why you do NOT use database transactions or multi-threaded locks. Propose the LMAX architecture: partition by symbol, run each symbol's order book single-threaded on a dedicated CPU core using lock-free ring buffers, and replicate state via a deterministic append-only journal.",
   "diagramImageUrl": "/diagrams/design-stock-trading-system.jpg",
   "jsonUrl": "/api/subtopics/must-practice-designs/design-stock-trading-system.json",
   "flowDiagramUrl": "/diagrams/flow-design-stock-trading-system.svg"

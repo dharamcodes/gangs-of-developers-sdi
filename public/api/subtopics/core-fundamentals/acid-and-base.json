@@ -5,56 +5,56 @@
   "topicNumber": 1,
   "subtopicNumber": "1.7",
   "title": "ACID & BASE",
-  "subtitle": "Contrasting transactional database guarantees (Atomicity, Consistency, Isolation, Durability) with distributed NoSQL paradigms (Basically Available, Soft state, Eventually consistent).",
+  "subtitle": "Contrasting transactional database guarantees (Atomicity, Consistency, Isolation, Durability) with distributed NoSQL patterns.",
   "readingTime": "8 min read",
   "difficulty": "Intermediate",
   "keyTakeaways": [
-    "ACID governs multi-operation database transactions on a single engine or NewSQL cluster, whereas BASE prioritizes availability and partition resilience across distributed shards.",
-    "Isolation is the most nuanced letter in ACID: most production SQL databases default to 'Read Committed' or 'Repeatable Read' (Snapshot Isolation), NOT true 'Serializable' isolation.",
-    "When spanning multiple microservices or heterogeneous databases, replacing distributed 2PC ACID transactions with the BASE-aligned Saga pattern avoids blocking locks."
+    "ACID enforces all-or-nothing guarantees on single database engines or NewSQL clusters; BASE prioritizes availability and horizontal partition resilience.",
+    "Isolation is the most nuanced letter of ACID: most production relational databases default to Read Committed or Repeatable Read, NOT true Serializable isolation.",
+    "Attempting distributed ACID transactions across microservices using Two-Phase Commit (2PC) creates blocking locks; the BASE-aligned Saga pattern avoids this bottleneck."
   ],
   "architectureDiagram": "ACID TRANSACTION (All-or-Nothing Lock/Commit)\n[ Begin Tx ] -> [ Debit $100 ] -> [ Credit $100 ] -> [ WAL fsync + Commit ]\n                    | (Error!)\n                    +-----------> [ Rollback Everything ]\n\nBASE / SAGA PATTERN (Eventual Convergence via Asynchronous Steps)\n[ Order Service ] --(Event)--> [ Payment Svc ] --(Event)--> [ Inventory Svc ]\n       ^                              | (Fails!)\n       +---(Compensating Refund)------+",
   "sections": [
     {
-      "heading": "Deep Dive into ACID & Database Isolation Levels",
-      "body": "ACID guarantees that database transactions are processed reliably even in the presence of crashes and concurrent access. **Atomicity** ensures all statements in a transaction succeed or none do (via undo logs). **Consistency** ensures application-defined invariants (foreign keys, constraints) hold. **Isolation** prevents concurrent transactions from corrupting each other. **Durability** ensures committed data survives power loss via a Write-Ahead Log (WAL) flushed to non-volatile disk.",
+      "heading": "Deconstructing ACID Guarantees and Isolation Anomalies",
+      "body": "ACID guarantees that database transactions complete reliably despite crashes, failures, and concurrency. Atomicity ensures all operations commit or all roll back via undo logs. Consistency enforces application constraints and schema invariants. Isolation prevents concurrent transactions from observing each other's partial work. Durability guarantees committed data survives power failure by flushing Write-Ahead Log (WAL) records to non-volatile disk.",
       "bullets": [
-        "Read Uncommitted: Allows 'Dirty Reads' (reading uncommitted data from another transaction).",
-        "Read Committed (Postgres Default): Prevents dirty reads, but allows 'Non-Repeatable Reads' and 'Lost Updates'.",
-        "Repeatable Read / Snapshot Isolation (MySQL InnoDB Default): Uses MVCC snapshots; prevents non-repeatable reads, though 'Write Skew' can still occur.",
-        "Serializable: Strongest isolation; transactions execute as if run one after another serially (via 2PL or SSI)."
+        "Read Uncommitted: Allows dirty reads (reading uncommitted changes from concurrent transactions). Rarely used in production.",
+        "Read Committed (Postgres Default): Prevents dirty reads, but allows non-repeatable reads where re-reading a row returns updated values.",
+        "Repeatable Read / Snapshot Isolation (MySQL InnoDB Default): Reads see a consistent snapshot from transaction start, preventing non-repeatable reads but vulnerable to write skew.",
+        "Serializable: Strongest isolation level; transactions execute as if completely sequential, typically implemented via strict two-phase locking (2PL) or Serializable Snapshot Isolation (SSI)."
       ],
       "codeSnippet": {
-        "title": "Preventing Lost Updates & Double Booking with ACID Row Locking",
-        "code": "-- Without proper Isolation, two concurrent requests read status='AVAILABLE'\n-- and both book the same seat! Use SELECT ... FOR UPDATE or Optimistic Concurrency:\n\nBEGIN TRANSACTION;\n\n-- Acquires an exclusive row-level lock (Pessimistic Locking)\nSELECT seat_id, status FROM concert_seats\nWHERE seat_id = 'A12' AND status = 'AVAILABLE'\nFOR UPDATE;\n\n-- If row returned, update status and insert booking atomically\nUPDATE concert_seats SET status = 'BOOKED', user_id = 'u_99' WHERE seat_id = 'A12';\nINSERT INTO bookings (booking_id, seat_id, user_id) VALUES ('b_501', 'A12', 'u_99');\n\nCOMMIT;"
+        "title": "Preventing Double-Booking via Pessimistic Row Locking",
+        "code": "-- Without row locking or optimistic checks, concurrent requests both read\n-- status='AVAILABLE' and overwrite each other's reservation.\nBEGIN TRANSACTION;\n\n-- Acquire an exclusive row-level lock\nSELECT seat_id, status FROM concert_seats\nWHERE seat_id = 'A12' AND status = 'AVAILABLE'\nFOR UPDATE;\n\n-- If available, update status and record booking atomically\nUPDATE concert_seats SET status = 'BOOKED', user_id = 'u_101' WHERE seat_id = 'A12';\nINSERT INTO bookings (booking_id, seat_id, user_id) VALUES ('b_901', 'A12', 'u_101');\n\nCOMMIT;"
       },
       "diagramImageUrl": "/diagrams/arch-acid-and-base.svg"
     },
     {
-      "heading": "The BASE Philosophy in Distributed Systems",
-      "body": "Coined as the diametric opposite of ACID on the spectrum, **BASE** stands for **Basically Available** (the system guarantees partial or degraded availability under failure), **Soft state** (the state of the system may change over time even without input due to background replication/TTL), and **Eventually consistent** (replicas converge asynchronously). Rather than holding distributed Two-Phase Commit (2PC) locks across services, which kills throughput and availability, BASE architectures use idempotent events and compensating transactions (Sagas).",
+      "heading": "The BASE Philosophy and Eventual Convergence",
+      "body": "Coined as the operational counterpart to ACID, BASE stands for Basically Available (system remains accessible under partition), Soft state (state may shift over time due to asynchronous replication), and Eventually consistent (replicas converge once updates cease). Rather than holding cross-service locks with Two-Phase Commit (which cripples throughput and availability), BASE architectures coordinate workflows using asynchronous events and compensating Sagas.",
       "bullets": [
-        "Why 2PC Struggles at Scale: A coordinator waiting on 5 microservices holds locks across all of them; if 1 node stalls, the entire pipeline freezes.",
-        "Saga Pattern (Choreography or Orchestration): Breaks a distributed transaction into local ACID transactions connected by events, with explicit compensating rollback actions.",
-        "Outbox Pattern: Bridges local ACID and distributed BASE by writing the DB state change and the outbound Kafka event in the same local SQL transaction."
+        "The Problem with Distributed 2PC: A coordinator holding locks across four services freezes entirely if a single node stalls or loses connectivity.",
+        "Saga Pattern: Coordinates a multi-service business workflow as a series of local ACID transactions connected by events, using compensating transactions to handle rollbacks.",
+        "Transactional Outbox: Bridges a local ACID write with an asynchronous event bus by committing the domain change and the outbound message to the same database transaction."
       ]
     }
   ],
   "tradeOffs": [
     {
-      "option": "ACID Transactions (RDBMS / NewSQL like Spanner)",
-      "pros": "Eliminates partial failure states, prevents race anomalies (dirty reads, lost updates), offloads complexity to the DB engine.",
-      "cons": "Lock contention under high write concurrency (hot rows), difficult to scale horizontally across independent microservices.",
-      "bestFor": "Core banking, ticket/inventory reservation, billing ledgers, and monolithic or modular-monolith data layers."
+      "option": "ACID Transactions (RDBMS / Spanner)",
+      "pros": "Guarantees data integrity; eliminates race anomalies; eliminates complex application-level rollback and reconciliation logic.",
+      "cons": "Hot-row lock contention reduces write throughput; horizontal scaling across distributed shards adds latency.",
+      "bestFor": "Financial ledgers, ticketing systems, inventory reservations, and billing workflows."
     },
     {
-      "option": "BASE + Saga Pattern (NoSQL + Event Streams)",
-      "pros": "Massive horizontal write scalability, services remain loosely coupled and independently deployable, no cross-service lock waiting.",
-      "cons": "Temporary intermediate states are visible to users, requires engineering idempotent consumers and compensating rollback logic.",
-      "bestFor": "Cross-service e-commerce checkout workflows (Order -> Payment -> Warehouse -> Notification) and high-scale ingestion."
+      "option": "BASE + Saga Workflows (Event-Driven Services)",
+      "pros": "High horizontal write throughput; services remain decoupled and deployable independently; avoids blocking locks.",
+      "cons": "Intermediate states are visible to users; requires careful implementation of idempotency and compensating rollbacks.",
+      "bestFor": "Distributed e-commerce checkout (Order -> Payment -> Inventory -> Shipment) and high-volume data pipelines."
     }
   ],
-  "interviewTip": "When designing a ticket-booking or payment system, explicitly name the concurrency anomaly you are preventing ('To prevent Lost Updates and Double Booking, I will use PostgreSQL ACID transactions with `SELECT FOR UPDATE` or optimistic version columns').",
+  "interviewTip": "When discussing ticket reservation or checkout flows, name the exact concurrency anomaly you are solving: 'To prevent lost updates and double-booking, we enforce row locking with SELECT ... FOR UPDATE or optimistic locking with a version column.'",
   "jsonUrl": "/api/subtopics/core-fundamentals/acid-and-base.json",
   "diagramImageUrl": "/diagrams/arch-acid-and-base.svg"
 }

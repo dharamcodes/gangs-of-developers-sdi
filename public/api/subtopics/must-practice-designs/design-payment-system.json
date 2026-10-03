@@ -5,45 +5,44 @@
   "topicNumber": 13,
   "subtopicNumber": "13.8",
   "title": "Payment System",
-  "subtitle": "Stripe / PayPal Architecture: Idempotency Keys, Double-Entry Ledger, PSP Orchestration & T+1 Settlement Reconciliation",
+  "subtitle": "Payment processing platform: idempotency keys, double-entry bookkeeping, PSP orchestration, and settlement reconciliation.",
   "readingTime": "28 min",
   "difficulty": "Staff+",
   "keyTakeaways": [
-    "Enforce end-to-end idempotency at every layer: clients pass a UUID `Idempotency-Key` locked atomically in Redis/DB (`INSERT . ON CONFLICT DO NOTHING`), and the Payment Executor passes a deterministic `payment_order_id` to external PSPs so network retries never double-charge a card.",
-    "Model every cent of movement using an immutable, append-only Double-Entry Ledger where every transaction writes at least two balanced rows (`SUM(debits) == SUM(credits)`), never using `UPDATE account SET balance = balance - X` as the sole record.",
-    "Never hold a database transaction open across an external HTTP call to a PSP (Visa/Mastercard/Stripe): persist state `EXECUTING` first, call the PSP outside the DB transaction, and transition to `CAPTURED` or `FAILED` via a state machine + Transactional Outbox."
+    "Enforce end-to-end idempotency at every layer: clients pass a unique Idempotency-Key locked atomically in the database (INSERT ... ON CONFLICT DO NOTHING), and the Payment Executor passes a deterministic payment_order_id to external PSPs so retries never charge a card twice.",
+    "Record all financial movements in an immutable, append-only Double-Entry Ledger where every transaction writes at least two balanced entries (SUM(debits) == SUM(credits)): never use UPDATE account SET balance = balance - X as the primary ledger.",
+    "Never hold a database transaction open across an external network call to a payment gateway (Stripe/Adyen): persist state as EXECUTING first, call the PSP outside the database transaction, and update state via a Transactional Outbox."
   ],
   "architectureDiagram": "+------------+     +---------------+     +------------------------+\n|  Merchant  | --> |  API Gateway  | --> | Payment Orchestrator   |\n|  Checkout  |     | (mTLS + Auth) |     | (Idempotency + State)  |\n+------------+     +---------------+     +---+----------------+---+\n                                             |                |\n                      (1) Persist Order +    |                | (2) Sync/Async Execute\n                          Outbox (ACID)      v                v\n                                   +---------------+    +-------------------+\n                                   | Sharded PG /  |    |   PSP Connector   |\n                                   | CockroachDB   |    | (Retry + Circuit) |\n                                   | (PayEvents +  |    +---------+---------+\n                                   |  PayOrders)   |              |\n                                   +-------+-------+              | HTTPS (ISO-8583 / REST)\n                                           |                      v\n                              (3) CDC /    |            +-------------------+\n                                  Outbox   |            | External PSPs /   |\n                                           v            | Card Networks     |\n                                   +---------------+    +---------+---------+\n                                   | Kafka Cluster |              |\n                                   +---+---+-------+              | (4) Webhook / T+1\n                                       |   |                      |     Settlement File\n                     +-----------------+   +--------------+       |\n                     v                                    v       v\n           +-------------------+                +-------------------+\n           | Double-Entry      |                | Reconciliation    |\n           | Ledger Service    |                | Engine (T+1 Diff) |\n           +-------------------+                +-------------------+",
   "sections": [
     {
       "heading": "1. Requirements Engineering & Scope Boundaries",
-      "body": "A Payment System (like Stripe, Adyen, or Uber/Amazon's internal payment platform) processes pay-ins from buyers and pay-outs to merchants across credit cards, bank transfers (ACH/SEPA), and digital wallets with zero financial discrepancy.",
+      "body": "A mission-critical Payment System accepts payments from customers, orchestrates transactions with third-party Payment Service Providers (PSPs), maintains an immutable financial ledger, and executes daily reconciliation.",
       "bullets": [
-        "Functional Requirements: (1) Pay-In flow: Authorize and capture funds from a buyer's payment instrument for a checkout session containing one or more merchant sub-orders; (2) Pay-Out flow: Disburse settled balances to merchant bank accounts; (3) Refund & Void support (full or partial); (4) Immutable Double-Entry Ledger recording every movement across buyer, platform escrow, PSP fee, and merchant accounts; (5) Automated T+1 Settlement Reconciliation against external PSP/bank settlement files.",
-        "Non-Functional Requirements: (1) Consistency: Strict serializable ACID consistency for payment state transitions and ledger entries: zero lost, duplicated, or phantom transactions; (2) Reliability & Durability: 99.999% availability on the payment acceptance path; (3) Latency: P99 < 500ms for internal orchestration (excluding external bank/3DS network latency which takes 1–3s); (4) Security & Compliance: PCI-DSS Level 1 isolation (raw PAN card numbers are tokenized in a dedicated Card Vault and never touch core payment services).",
-        "Out of Scope: Issuing physical credit cards, consumer BNPL credit underwriting models, and cryptocurrency blockchain settlement."
+        "Functional: Process one-time card and wallet payments; handle refunds and chargebacks; maintain an append-only double-entry financial ledger; run daily settlement reconciliation.",
+        "Functional: Multi-PSP routing (fallback to backup PSP if primary provider experiences downtime or degraded acceptance rates).",
+        "Non-Functional: Exactly-once payment semantics: a customer must never be charged twice for the same purchase under any failure condition.",
+        "Non-Functional: Strict regulatory compliance (PCI-DSS compliance: tokenize card data via hosted fields; never store raw PAN/CVV).",
+        "Out of Scope: Direct integration with central bank RTGS wire networks, foreign currency forex trading, and automated consumer credit scoring."
       ]
     },
     {
       "heading": "2. Traffic Modeling & Workload Assumptions",
-      "body": "Unlike social media feeds with millions of QPS, payment systems have moderate QPS where every single request carries high financial value and strict transactional overhead.",
+      "body": "Payment platforms prioritize absolute data integrity, auditability, and deterministic recovery over raw volumetric throughput.",
       "bullets": [
-        "Transaction Volume: 100 Million payment transactions per day (~$5 Billion daily GMV).",
-        "Average & Peak Write QPS: 100M / 86,400 sec ≈ 1,157 payment transactions/sec average. During Black Friday / Cyber Monday or flash sales (10x peak spike) -> ~12,000 payment transactions/sec.",
-        "Ledger Amplification: Each payment transaction generates 1 `PaymentEvent`, 1–2 `PaymentOrder` rows, and 4 immutable `LedgerEntry` rows (Buyer Debit, Platform Receivable Credit, Platform Payable Debit, Merchant Credit) -> ~60,000 DB row inserts/sec at peak.",
-        "Read Traffic: 500 Million status checks, merchant dashboard queries, and webhook deliveries per day (~5,800 reads/sec avg, ~30,000 reads/sec peak).",
-        "Average Record Size: `PaymentEvent` + `PaymentOrder` + `IdempotencyRecord` ≈ 2 KB; 4 `LedgerEntry` rows ≈ 1 KB total; Audit & Risk snapshot = 2 KB -> ~5 KB per transaction."
+        "Transaction Volume: 10 million transactions per day (~120 payments/second average, peaking at 1,000 payments/second during promotions).",
+        "Ledger Write Volume: Each payment creates 4 to 6 ledger entries (customer debit, merchant credit, platform fee credit, processing fee debit). 10M payments = 50M ledger rows/day.",
+        "Latency Budget: End-to-end payment API latency < 2.5 seconds (p99), dominated by external card network round trips (typically 800ms to 1,500ms).",
+        "Availability Target: 99.999% availability for the payment ingestion layer, with zero data loss under regional failures."
       ]
     },
     {
       "heading": "3. Back-of-the-Envelope Capacity Calculations",
-      "body": "Financial regulations require retaining transaction and ledger records for 7 to 10 years, making immutable storage and fast idempotency caching key capacity dimensions.",
+      "body": "Financial systems require modest storage capacity compared to media services, but require strict write durability and relational ACID guarantees.",
       "bullets": [
-        "Write QPS: 1,157 TPS average; 12,000 TPS peak (Black Friday). Database IOPS at peak ≈ 12,000 TPS × 6 rows = 72,000 write IOPS.",
-        "Read QPS: 5,800 QPS average; 30,000 QPS peak.",
-        "Redis Memory (Idempotency Locks & Hot Account Balances): (a) Idempotency keys cached in Redis with 48-hour TTL: 200M transactions × 256 bytes = 51.2 GB; (b) Active Merchant Wallet/Balance cache for 10M merchants × 256 bytes = 2.56 GB. With 2x replication + overhead, a 128 GB Redis cluster is more than sufficient.",
-        "5-Year Relational & Ledger Storage: 100M transactions/day × 5 KB = 500 GB/day -> 182.5 TB/year -> 912.5 TB raw over 5 years. With 3-way synchronous Raft replication (CockroachDB / Spanner / Aurora Multi-AZ) and B-Tree indexes (1.4x) -> 912.5 TB × 3 × 1.4 = 3.83 PB.",
-        "Bandwidth: Peak Ingress/Egress = (12,000 writes + 30,000 reads) × 4 KB = 168 MB/sec (1.34 Gbps)."
+        "Storage calculations: 50 million ledger rows/day * 200 bytes per row = 10 GB/day = 3.65 TB/year. A relational database cluster (PostgreSQL with streaming replicas) easily accommodates this volume.",
+        "Throughput sizing: 1,000 peak payments/sec = ~5,000 ledger writes/sec. This throughput is well within the capabilities of a tuned relational database primary using NVMe storage.",
+        "Audit archive: Encrypted cold storage (WORM S3 buckets) retained for 7 years to satisfy financial regulatory audit requirements."
       ],
       "codeSnippet": {
         "title": "Payment System Capacity & Ledger Storage Worksheet",
@@ -52,13 +51,12 @@
     },
     {
       "heading": "4. API Interface Contracts & Data Domain Models",
-      "body": "Core external REST/gRPC/WebSocket API contracts, request/response payloads, and underlying storage entities with primary keys (PK), foreign keys (FK), secondary/clustering indexes (IDX), and relationship cardinalities.",
+      "body": "Payment APIs require strong idempotency keys and stateful tracking across asynchronous processing stages.",
       "bullets": [
-        "POST /api/v1/payments: Requires Idempotency-Key header; executes state machine transition and records double-entry ledger rows.",
-        "POST /api/v1/payments/{paymentId}/refund: Creates compensating DEBIT/CREDIT ledger entries and triggers PSP refund.",
-        "POST /webhooks/v1/psp/settlement: Ingests asynchronous charge/settlement confirmation and triggers nightly reconciliation verification."
+        "Charge API: `POST /v1/payments/charge` takes `Header: Idempotency-Key: <UUID>` and body `{ orderId, amountCents, currency, paymentToken }`, returning `{ paymentId, status: \"PENDING\"|\"CAPTURED\"|\"FAILED\" }`.",
+        "Payment Orders Table: Stores `payment_id`, `idempotency_key`, `amount`, `status` (`INITIATED`, `EXECUTING`, `CAPTURED`, `FAILED`), and `psp_reference`.",
+        "Double-Entry Ledger Table: Stores `entry_id`, `transaction_id`, `account_id`, `direction` (`DEBIT` | `CREDIT`), `amount_cents`, and `timestamp`. Invariant: `SUM(debit) - SUM(credit) = 0` across every transaction."
       ],
-      "erDiagramUrl": "/diagrams/er-design-payment-system.svg",
       "codeSnippet": {
         "title": "API Contracts & Storage Entity Schemas",
         "code": "// 1. Charge Payment Intent (Idempotent)\nPOST /api/v1/payments\nHeaders:\n  Idempotency-Key: pay_ord_88412_v1\nRequest:\n{\n  \"merchant_id\": \"merch_9910\",\n  \"amount_cents\": 12999,\n  \"currency\": \"USD\",\n  \"payment_method_token\": \"pm_card_visa_4242\"\n}\nResponse (200 OK):\n{\n  \"payment_id\": \"pay_01HV9X8812\",\n  \"status\": \"CAPTURED\",\n  \"amount_cents\": 12999,\n  \"currency\": \"USD\",\n  \"psp_reference_id\": \"ch_3P9xK2LkdIwHu7ix\",\n  \"ledger_transaction_id\": \"ldg_tx_991823\"\n}\n\n// ---------------------------------------------------------------------------\n// Core Storage Entities & Schema Definitions\n// ---------------------------------------------------------------------------\nENTITY payment_intents (PostgreSQL / CockroachDB (ACID)) {\n  [PK ] payment_id             UUID\n  [IDX] idempotency_key        VARCHAR(128) UNIQUE\n        buyer_account_id       UUID\n        amount_cents           BIGINT\n        status                 ENUM('INIT','CAPTURED','FAILED')\n}\n\nENTITY psp_attempts (PostgreSQL / CockroachDB (ACID)) {\n  [PK ] attempt_id             UUID\n  [FK ] payment_id             UUID\n  [IDX] psp_reference_id       VARCHAR(128)\n        psp_name               ENUM('STRIPE','ADYEN')\n        raw_response_code      VARCHAR(32)\n}\n\nENTITY ledger_entries (Immutable Append-Only Double-Entry DB) {\n  [PK ] entry_id               UUID\n  [FK ] payment_id             UUID\n  [IDX] account_id             UUID\n        direction              ENUM('DEBIT','CREDIT')\n        amount_cents           BIGINT (> 0)\n}\n\n// Relationships: payment_intents --(1 : N (PSP execution attempts))--> psp_attempts --(1 : 2+ (zero-sum DEBIT/CREDIT))--> ledger_entries"
@@ -66,59 +64,58 @@
     },
     {
       "heading": "5. High-Level Architecture Blueprint & Component Topology",
-      "body": "The payment architecture isolates synchronous checkout acceptance from downstream wallet updates, double-entry ledger bookkeeping, and T+1 bank settlement reconciliation.",
+      "body": "The architecture decouples the synchronous API surface from external PSP network communications and post-processing ledger accounting.",
       "bullets": [
-        "Payment Orchestrator & Idempotency Layer: Validates the request's `Idempotency-Key` using an atomic database/Redis lock, persists the `PaymentEvent` and `PaymentOrder`, and coordinates the state machine.",
-        "Risk & Fraud Engine: Evaluates device fingerprint, velocity rules, and ML fraud scores synchronously in <40ms before contacting external card networks.",
-        "PSP Connector & Dynamic Router: Routes the charge to Stripe, Adyen, or Braintree based on currency, card BIN acceptance rates, and real-time PSP health metrics, passing `paymentOrderId` as the external idempotency key.",
-        "Wallet Service & Double-Entry Ledger Service: Triggered via Kafka (fed by a Debezium CDC / Transactional Outbox on `payment_orders`). Credits the seller's payable balance and writes balanced Debit/Credit rows to `ledger_entries`.",
-        "Reconciliation Engine: Nightly batch pipeline that ingests CSV/ISO-20022 settlement files from PSPs, joins them with internal `ledger_entries` by `payment_order_id`, and routes any mismatches to an exception queue."
+        "Payment Gateway API: Validates card tokens, verifies client idempotency keys, and records pending payment orders.",
+        "Payment Executor: Executes external HTTP calls to PSPs (Stripe, Adyen) using deterministic merchant transaction IDs.",
+        "Double-Entry Ledger Service: Appends balanced debit and credit entries to the immutable ledger database.",
+        "Transactional Outbox & Event Publisher: Ensures database changes and Kafka events are published atomically.",
+        "Reconciliation Engine: Nightly batch service comparing internal ledger entries against settlement reports downloaded from PSPs and bank partners."
       ],
       "diagramImageUrl": "/diagrams/design-payment-system.jpg",
       "asciiDiagram": "+-----------------------------------------------------------------------------------+\n|                        BUYER CLIENT / MERCHANT CHECKOUT                           |\n+-----------------------------------------+-----------------------------------------+\n                                          | POST /api/v1/payments\n                                          | Header: Idempotency-Key: <UUID>\n                                          v\n+-----------------------------------------------------------------------------------+\n|                      API GATEWAY (mTLS, WAF, Rate Limiting)                       |\n+-----------------------------------------+-----------------------------------------+\n                                          |\n                                          v\n+-----------------------------------------------------------------------------------+\n|                           PAYMENT ORCHESTRATOR SERVICE                            |\n|  1. Claim Idempotency Key (Redis/DB)   3. Transition INITIALIZED -> EXECUTING     |\n|  2. Call Fraud/Risk Svc (<40ms)        4. Invoke PSP Connector -> CAPTURED/FAILED |\n+-------+---------------------------------+---------------------------------+-------+\n        |                                 |                                 |\n        v (Sync Risk Check)               v (ACID State + Outbox)           v (External Call)\n+---------------+               +-------------------+               +---------------+\n| Fraud & Risk  |               | CockroachDB / PG  |               | PSP Connector |\n| Engine (ML)   |               | - payment_events  |               | (Smart Router)|\n+---------------+               | - payment_orders  |               +-------+-------+\n                                | - outbox_events   |                       |\n                                +---------+---------+                       v\n                                          |                         +---------------+\n                                          | CDC / Outbox Poller     | Stripe / Adyen|\n                                          v                         | Visa / MC     |\n                                +-------------------+               +-------+-------+\n                                |   Kafka Cluster   |                       |\n                                | Topic: pay-captured                       | T+1 Settlement\n                                +---+-----------+---+                       | File (SFTP/S3)\n                                    |           |                           |\n                  +-----------------+           +-------------+             |\n                  v                                           v             v\n        +-------------------+                       +-----------------------+\n        |  Wallet Service   |                       |  Double-Entry Ledger  |\n        | (Merchant Payable)|                       |  & T+1 Reconciliation |\n        +-------------------+                       +-----------------------+"
     },
     {
       "heading": "6. Deep-Dive Execution Flows & Core Logic",
-      "body": "We examine the two critical payment engineering pipelines: idempotent two-phase payment execution without holding database locks over network calls, and double-entry ledger reconciliation.",
+      "body": "Executing payments safely requires decoupling database transactions from external network calls.",
       "bullets": [
-        "Idempotent Two-Phase Payment Execution: To prevent connection pool exhaustion during payment gateway latency, payments execute in two distinct phases: Phase 1 inserts an idempotency record and creates the order in state `EXECUTING` in a short database transaction. The PSP is called outside any database transaction using the payment order ID as the idempotency key. Phase 2 transitions the order to `CAPTURED` and writes outbox events in a second short ACID commit.",
-        "Double-Entry Accounting & T+1 Reconciliation: Consuming the `PaymentCaptured` event from Kafka, the Ledger Service writes immutable debit/credit entries in a single ACID commit (`DEBIT CustomerCashAccount`, `CREDIT MerchantPayableAccount`). A nightly batch job reconciles database ledger entries against the payment gateway's settlement CSV files to detect and alert on any financial discrepancy."
+        "The external call anti-pattern: Never wrap an external PSP network call inside an open database transaction (`BEGIN; UPDATE ...; callStripe(); COMMIT;`). If Stripe takes 10 seconds to respond, database connection pools exhaust and cause a total system outage.",
+        "The 3-phase execution pattern: 1. Open DB transaction, insert payment order with status `EXECUTING`, commit immediately. 2. Make outbound HTTP call to PSP with timeout and retries. 3. Open second DB transaction, update status to `CAPTURED`, write ledger entries, commit.",
+        "Idempotency with external PSPs: Pass `payment_order_id` as the PSP's idempotency key. If network drops occur before receiving the PSP response, retrying with the same key guarantees the PSP returns the existing transaction status rather than charging the card again."
       ],
-      "flowDiagramUrl": "/diagrams/flow-design-payment-system.svg",
       "diagramImageUrl": "/diagrams/flow-design-payment-system.svg"
     },
     {
       "heading": "7. Production Hardening, Fault Tolerance & Resilience",
-      "body": "At Tier-1 financial institutions and global payment processors, production readiness centers on multi-PSP failover, hot-account sharding, and regulatory isolation.",
+      "body": "Financial platforms require automated reconciliation to detect and correct discrepancies between internal ledgers and third-party bank partners.",
       "bullets": [
-        "Hot Ledger Account Sharding (Sub-Accounts): The platform's central `ACCT_PSP_RECEIVABLE` and `ACCT_PLATFORM_FEE_REVENUE` accounts are updated on *every* transaction (12,000 TPS at peak). If updating a single `ledger_accounts` balance row acquires a row-level lock, PostgreSQL/CockroachDB will suffer severe lock contention (~500 TPS limit per row). Shard hot system accounts into `N = 64` sub-accounts (`ACCT_PSP_RECEIVABLE#00` . `#63`) hashed by `payment_order_id`, and sum across the 64 shards when reading the total balance.",
-        "Dynamic Multi-PSP Smart Routing & Circuit Breaking: Monitor rolling 60-second authorization success rates and P99 latencies per PSP (Stripe, Adyen, Worldpay) segmented by country and card network. If Stripe's European gateway experiences a brownout, a Resilience4j circuit breaker automatically reroutes traffic to Adyen using the universal Card Vault token.",
-        "PCI-DSS Vault Isolation (Zero PAN in Core Scope): The frontend collects raw 16-digit PAN card numbers inside an isolated iframe hosted directly by a PCI-hardened Card Vault Service, returning an opaque `tok_xxx` token. Core microservices never see or log raw card numbers, shrinking PCI audit scope by 90%.",
-        "Dangling `EXECUTING` Order Sweeper: If a Payment Orchestrator pod crashes in the middle of Step 2 (while waiting for the PSP HTTP response) and the PSP webhook is delayed, a background Sweeper job queries orders stuck in `EXECUTING` for `> 60 seconds` and polls the PSP's `GET /v1/charges?idempotency_key={paymentOrderId}` endpoint to converge the state."
+        "Reconciliation pipeline: At the end of each day (T+1), download bank settlement CSVs. Match every internal `CAPTURED` payment against the bank's cleared transaction reference. Flag missing, duplicate, or mismatched amounts for human investigation.",
+        "PSP health circuit breakers: Monitor PSP error rates and latency in real time. If Provider A error rates exceed 5%, automatically route new traffic to Provider B.",
+        "Cryptographic hash chains: Link ledger entries together using SHA-256 hash chains (`current_hash = SHA256(prev_hash + entry_data)`), ensuring any unauthorized tampering with historical financial records is immediately detected."
       ]
     }
   ],
   "tradeOffs": [
     {
-      "option": "Single Balance Column (`UPDATE accounts SET balance = balance + X`) vs. Double-Entry Ledger",
-      "pros": "Single column update is simple to implement and uses 4x less storage.",
-      "cons": "Impossible to audit how a balance was derived; if a bug corrupts the number, there is no immutable trail of where the money came from or went.",
-      "bestFor": "Non-financial loyalty points or gaming coins; NEVER acceptable for real-money payment systems."
+      "option": "Immutable Double-Entry Ledger",
+      "pros": "Complete auditability; mathematical guarantee of balance integrity; zero risk of lost updates.",
+      "cons": "Higher write volume (4-6 rows per payment); computing account balances requires summing historical entries or maintaining read projections.",
+      "bestFor": "Any platform handling real money, wallets, credit balances, or merchant payouts."
     },
     {
-      "option": "Synchronous Ledger Write on Checkout Path vs. Asynchronous Outbox + Kafka Ledger Write",
-      "pros": "Asynchronous Outbox keeps checkout latency fast and isolates the buyer from downstream reporting/wallet shard contention.",
-      "cons": "Merchant dashboard balance shows eventual consistency (typically 100–500ms lag after payment capture).",
-      "bestFor": "High-throughput payment platforms (Stripe, Uber, Amazon) where buyer checkout speed and 99.999% availability are paramount."
+      "option": "Single Balance Mutation (UPDATE account SET balance = balance - X)",
+      "pros": "Simple to query; tiny database footprint.",
+      "cons": "Impossible to audit; vulnerable to race conditions; no historical record of why a balance changed.",
+      "bestFor": "Non-financial counters (e.g., video view counts, game score points)."
     },
     {
-      "option": "Single PSP Integration vs. Multi-PSP Orchestration with Card Vault",
-      "pros": "Multi-PSP orchestration prevents single-vendor outages and improves global card authorization rates by 2–4% via local acquiring.",
-      "cons": "Requires building and certifying an internal PCI-DSS Level 1 Card Vault and normalizing heterogeneous PSP webhook formats.",
-      "bestFor": "Global enterprises processing >$1B/year in GMV."
+      "option": "Multi-PSP Smart Routing (Stripe + Adyen)",
+      "pros": "Resilience against payment gateway outages; optimizes interchange fees across international currencies.",
+      "cons": "Requires maintaining multiple vendor integrations and normalizing webhook and reconciliation formats.",
+      "bestFor": "Global e-commerce platforms processing millions of dollars in monthly transactions."
     }
   ],
-  "interviewTip": "Always highlight two non-negotiable rules early in a Payment System interview: (1) **Never use `float` or `double`**, use integer `long amountCents` + `currency` (or `BigDecimal`), and (2) **Never hold a database transaction open while calling an external PSP over HTTP**, use a two-step state transition (`INITIALIZED -> EXECUTING` committed before HTTP, then `EXECUTING -> CAPTURED` + Outbox committed after HTTP).",
+  "interviewTip": "Emphasize two core rules in payment system interviews: first, never hold a database transaction open while calling an external PSP over the network; second, always model money using an immutable double-entry ledger where debits equal credits, rather than updating a single balance column.",
   "diagramImageUrl": "/diagrams/design-payment-system.jpg",
   "jsonUrl": "/api/subtopics/must-practice-designs/design-payment-system.json",
   "flowDiagramUrl": "/diagrams/flow-design-payment-system.svg"

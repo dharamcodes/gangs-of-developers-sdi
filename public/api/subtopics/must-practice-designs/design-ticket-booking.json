@@ -5,46 +5,44 @@
   "topicNumber": 13,
   "subtopicNumber": "13.9",
   "title": "Ticket Booking",
-  "subtitle": "Ticketmaster / BookMyShow Architecture: Virtual Waiting Room, Temporary Seat Holds, OCC & Flash-Sale Stampede Defense",
+  "subtitle": "High-concurrency ticket reservations: virtual waiting rooms, two-phase temporary seat holds, and optimistic concurrency.",
   "readingTime": "26 min",
   "difficulty": "Staff+",
   "keyTakeaways": [
-    "Prevent double-booking using a Two-Phase Seat Reservation pattern: Phase 1 acquires an atomic 10-minute temporary hold (`AVAILABLE -> HELD`) using Redis Lua / DB Optimistic Concurrency Control (`version` check), and Phase 2 transitions `HELD -> BOOKED` upon payment completion.",
-    "Protect the core booking database during celebrity concert drops (e.g., Taylor Swift / Coldplay with 5M concurrent fans for 50,000 seats) using an Edge Virtual Waiting Room (Queue-it style token bucket) that admits users into the seat-map checkout at a controlled rate.",
-    "Never rely solely on a Redis TTL expiration event to release abandoned holds: store `hold_expires_at` directly in the database seat row so any query or CAS update treats an expired `HELD` seat (`hold_expires_at < NOW()`) as immediately bookable."
+    "Prevent double-booking using a two-phase seat reservation pattern: Phase 1 acquires an atomic 10-minute temporary hold (AVAILABLE -> HELD) using Redis Lua or DB optimistic concurrency, and Phase 2 transitions HELD -> BOOKED upon payment confirmation.",
+    "Protect the core booking database during major concert drops (millions of concurrent users competing for 50,000 seats) using an Edge Virtual Waiting Room (Queue-it token-bucket model) that admits users to checkout at a controlled, sustainable rate.",
+    "Never rely solely on Redis key expiration events to release abandoned holds: store hold_expires_at directly in the database seat row so any query or compare-and-swap update treats an expired hold as immediately available."
   ],
   "architectureDiagram": "+------------+     +-----------------------+     +-----------------------+\n| 5M Fans    | --> | Edge Waiting Room     | --> | API Gateway           |\n| (Browser)  |     | (Cloudflare/Redis Q)  |     | (Verify Queue Pass)   |\n+------------+     +-----------------------+     +-----------+-----------+\n                                                             |\n                             +-------------------------------+-------------------------------+\n                             | (Read Seat Map)                                               | (Hold & Book Seat)\n                             v                                                               v\n                   +-------------------+                                           +-------------------+\n                   | Seat Map Query Svc|                                           | Booking Service   |\n                   | (Bitfield Cache)  |                                           | (2-Phase Hold/Pay)|\n                   +---------+---------+                                           +----+---------+----+\n                             |                                                          |         |\n                             v                                        (1) Atomic Lua    |         | (2) ACID CAS\n                   +-------------------+                                  Hold Lock     |         |     Update\n                   | Redis Seat-Map    |<-----------------------------------------------+         v\n                   | Cache & Hold Lock |                                                +-------------------+\n                   +-------------------+                                                | PostgreSQL /      |\n                                                                                        | CockroachDB       |\n                                                                                        | (show_seats OCC)  |\n                                                                                        +---------+---------+\n                                                                                                  |\n                                                                                                  v\n                                                                                        +-------------------+\n                                                                                        | Payment Service & |\n                                                                                        | Hold Expiry Sweep |\n                                                                                        +-------------------+",
   "sections": [
     {
       "heading": "1. Requirements Engineering & Scope Boundaries",
-      "body": "A Ticket Booking platform (like Ticketmaster, BookMyShow, or StubHub) sells assigned seats for concerts, sports games, and movie screenings. The defining challenge is surviving extreme flash-sale traffic spikes while guaranteeing zero double-booked seats.",
+      "body": "A Ticket Booking System allows customers to browse event venues, select specific numbered seats, temporarily reserve them during checkout, and purchase tickets without the risk of double-booking.",
       "bullets": [
-        "Functional Requirements: (1) Users can browse events, venues, and real-time interactive seat maps (`AVAILABLE`, `HELD`, `BOOKED`); (2) Users can select up to 6 specific seats (or request 'Best Available' contiguous seats) and lock them for a 10-minute checkout window; (3) If payment succeeds within 10 minutes, the seats transition to `BOOKED` and an e-ticket QR code is issued; (4) If payment fails or the 10-minute timer expires, the seats automatically return to `AVAILABLE`; (5) Fair admission during high-demand drops via a Virtual Waiting Room.",
-        "Non-Functional Requirements: (1) Consistency: Strict strong consistency on seat reservations: **zero double booking** under any concurrency scenario; (2) Availability: 99.99% for event browsing and waiting room admission; (3) Latency: P99 < 100ms for loading the venue seat map, P99 < 200ms for acquiring a seat hold; (4) Surge Isolation: A flash sale on 1 hot concert must not degrade movie ticket bookings across the rest of the platform.",
-        "Out of Scope: Secondary peer-to-peer ticket resale marketplace, dynamic airline yield pricing algorithms, and venue turnstile hardware firmware."
+        "Functional: View interactive venue seat maps with live seat availability; reserve seats on temporary 10-minute hold; purchase held seats via payment gateways; release abandoned holds automatically.",
+        "Functional: Search events by artist, venue, and date.",
+        "Non-Functional: Strict zero double-booking guarantee under any concurrency condition.",
+        "Non-Functional: Extreme flash-sale resilience: withstand millions of fans hitting the seat selection page simultaneously during major stadium tours.",
+        "Out of Scope: Secondary ticket resale market auctions, physical wristband NFC scanning at gates, and dynamic ticket pricing algorithms."
       ]
     },
     {
       "heading": "2. Traffic Modeling & Workload Assumptions",
-      "body": "Normal daily traffic is modest, but flash sales create a 100x–500x hotspot on a single `show_id` within a 60-second window.",
+      "body": "Ticket booking systems experience extreme load spikes: normal days have minimal traffic, while stadium concert drops create catastrophic traffic surges.",
       "bullets": [
-        "Platform Baseline: 50 Million DAU browsing events; 3 Million tickets booked per day across 100,000 active shows (movies, concerts, sports).",
-        "Seat Inventory per Show: Movie theater = 300 seats; Arena concert = 20,000 seats; Stadium concert = 80,000 seats.",
-        "Flash Sale Hotspot Traffic: 5 Million concurrent users attempting to buy 80,000 seats for a single stadium concert at 10:00:00 AM.",
-        "Read Traffic: 500 Million seat-map views/day baseline (~5,800 QPS avg); during a flash sale, 5M users polling or connected via SSE = up to 500,000 seat-map reads/sec.",
-        "Write Traffic (Hold + Book): Baseline 3M bookings/day ≈ 35 bookings/sec; during a flash sale, the Virtual Waiting Room throttles active checkout admissions to 10,000 concurrent users -> ~5,000 seat-hold attempts/sec against the hot show.",
-        "Payload Sizes: Seat row in DB = 128 bytes; Compact Seat Map Status payload for an 80,000-seat stadium (2 bits per seat: `00`=Available, `01`=Held, `10`=Booked) = 20 KB compressed."
+        "Flash Sale Peak: 5 million fans arrive within 60 seconds for a 50,000-seat stadium show (~80,000 requests/second at peak).",
+        "Inventory Constraints: A single stadium contains exactly 50,000 seats. All 50,000 seats sell out within 3 to 5 minutes.",
+        "Payment Funnel: Average checkout takes 4 to 8 minutes (filling billing details, completing 3D Secure bank OTP).",
+        "Concurrency Hotspot: Multiple users clicking the exact same front-row seat simultaneously creates intense database row lock contention."
       ]
     },
     {
       "heading": "3. Back-of-the-Envelope Capacity Calculations",
-      "body": "Because the total number of active seats across all upcoming shows is surprisingly small, the entire global seat inventory easily fits in memory!",
+      "body": "Calculations demonstrate why raw database queries cannot survive an unmitigated concert ticket drop without a rate-limiting admission queue.",
       "bullets": [
-        "Baseline & Flash-Sale Read QPS: 5,800 QPS average; 500,000 QPS peak during stadium drops (served via Edge CDN + Redis Bitfield/Hash cache).",
-        "Baseline & Flash-Sale Write QPS: 70 writes/sec average (Hold + Confirm); 10,000 writes/sec peak (throttled by Virtual Waiting Room pass verification).",
-        "Redis Memory (Active Show Seat Maps + Waiting Room Queues): (a) 100,000 active shows × average 2,000 seats × 64 bytes per seat in Redis = 12.8 GB! Even 1,000 stadium shows (80,000 seats each) take only 5.1 GB; (b) Virtual Waiting Room queues for 10M queued users × 64 bytes = 640 MB. A 64 GB Redis cluster holds every active seat on Earth in RAM.",
-        "5-Year Relational Storage (Bookings, Tickets & Historical Shows): 100,000 shows/day × 2,000 seats × 128 bytes = 25.6 GB/day + 3M bookings/day × 1 KB = 3 GB/day -> ~28.6 GB/day -> 10.4 TB/year -> 52.2 TB over 5 years. With 3x replication and indexes ≈ 200 TB.",
-        "Bandwidth: Peak Egress during flash sale = 500,000 seat-map reads/sec × 20 KB (compact bitfield/section JSON) = 10 GB/sec (80 Gbps, 95% offloaded by 1-second micro-caching at CDN/Edge + WebSocket delta pushes)."
+        "Database bottleneck: A relational database handles 2,000 to 5,000 writes/second. If 100,000 users attempt to hold the same block of seats simultaneously, database connection pools exhaust and crash within seconds.",
+        "Queue admission sizing: If 50,000 seats are available and each user buys 2 tickets on average, only 25,000 successful transactions are possible. Admitting 200 users/second into the seat map drains the queue smoothly across 2 to 3 minutes without stressing the database.",
+        "Memory footprint: 50,000 seats * 64 bytes per seat state in Redis = ~3.2 MB of RAM per event, meaning an entire season of concerts fits in a modest Redis instance."
       ],
       "codeSnippet": {
         "title": "Ticket Booking Capacity & Flash-Sale Sizing Worksheet",
@@ -53,13 +51,13 @@
     },
     {
       "heading": "4. API Interface Contracts & Data Domain Models",
-      "body": "Core external REST/gRPC/WebSocket API contracts, request/response payloads, and underlying storage entities with primary keys (PK), foreign keys (FK), secondary/clustering indexes (IDX), and relationship cardinalities.",
+      "body": "APIs separate queue admission tokens from seat holds and final booking transactions.",
       "bullets": [
-        "GET /api/v1/shows/{showId}/seat-map: Returns compressed seat availability bitmask/hash from Redis cache.",
-        "POST /api/v1/shows/{showId}/holds: Atomically places a 7-minute temporary hold on selected seats using OCC version check.",
-        "POST /api/v1/bookings/{bookingId}/confirm: Finalizes seat status from HELD to BOOKED upon payment verification."
+        "Waiting Room Token: `POST /v1/queue/enter` returns `{ queueToken, estimatedWaitSeconds, position }`.",
+        "Hold Seats API: `POST /v1/events/{eventId}/seats/hold` takes `{ seatIds: [101, 102], queueToken }` and returns `{ holdId, expiresAt: 1727789400 }`.",
+        "Confirm Booking API: `POST /v1/bookings/confirm` takes `{ holdId, paymentToken }` and returns `{ bookingId, status: \"CONFIRMED\" }`.",
+        "Seats Table: `seats` (`seat_id`, `event_id`, `section`, `row`, `number`, `status: AVAILABLE|HELD|BOOKED`, `held_by_user_id`, `hold_expires_at`, `version`)."
       ],
-      "erDiagramUrl": "/diagrams/er-design-ticket-booking.svg",
       "codeSnippet": {
         "title": "API Contracts & Storage Entity Schemas",
         "code": "// 1. Place 7-Minute Temporary Seat Hold\nPOST /api/v1/shows/shw_9912/holds\nHeaders:\n  Idempotency-Key: hold_usr441_shw9912\n  X-Waiting-Room-Token: eyJhbGciOiJFZERTQSJ9.\nRequest:\n{\n  \"user_id\": \"usr_441\",\n  \"seat_ids\": [\"A-12\", \"A-13\"]\n}\nResponse (201 Created: or 409 Conflict if already held):\n{\n  \"booking_id\": \"bkg_77812\",\n  \"status\": \"HELD\",\n  \"seat_ids\": [\"A-12\", \"A-13\"],\n  \"hold_expires_at\": \"2026-09-30T16:37:00Z\",\n  \"checkout_Remaining_seconds\": 420\n}\n\n// ---------------------------------------------------------------------------\n// Core Storage Entities & Schema Definitions\n// ---------------------------------------------------------------------------\nENTITY events_shows (PostgreSQL + Read Replicas) {\n  [PK ] show_id                UUID\n  [IDX] venue_id               UUID\n        title                  VARCHAR(255)\n        start_time             TIMESTAMPTZ\n        total_seats            INT\n}\n\nENTITY show_seats (PostgreSQL (ACID + Optimistic Lock)) {\n  [PK ] show_id                UUID (Composite PK)\n  [PK ] seat_id                VARCHAR(16) (Composite PK)\n        status                 ENUM('AVAILABLE','HELD','BOOKED')\n  [IDX] hold_expires_at        TIMESTAMPTZ\n        version                INT (OCC Lock)\n}\n\nENTITY bookings (PostgreSQL (Transactional)) {\n  [PK ] booking_id             UUID\n  [FK ] show_id                UUID\n  [IDX] user_id                UUID\n        seat_ids               ARRAY<VARCHAR>\n        payment_status         ENUM('PENDING','PAID')\n}\n\n// Relationships: events_shows --(1 : N (contains seats))--> show_seats --(1 : N (reserves & books))--> bookings"
@@ -67,58 +65,58 @@
     },
     {
       "heading": "5. High-Level Architecture Blueprint & Component Topology",
-      "body": "The architecture uses a two-layer defense: an Edge Virtual Waiting Room to shape incoming flash-sale traffic, and a Redis + PostgreSQL/CockroachDB core partitioned by `show_id` to guarantee atomic multi-seat holds.",
+      "body": "The architecture uses an edge virtual waiting room to throttle traffic before it reaches the core seat reservation engine.",
       "bullets": [
-        "Edge Virtual Waiting Room (Cloudflare Workers + Redis ZSET): When a hot concert goes on sale, users join a virtual waiting room. At 10:00 AM, users are assigned a randomized queue position and popped in batches of 2,000/sec. Admitted users receive an HMAC-signed JWT `X-Queue-Pass-Token` valid for 15 minutes.",
-        "Seat Map Query Service & Compact Bitmap Cache: Serves the 80,000-seat stadium map from Redis and pushes real-time seat status diffs (`seatId: HELD`) over WebSockets/SSE to users currently viewing that stadium section.",
-        "Booking Service: Validates the `X-Queue-Pass-Token`, executes an atomic multi-seat hold in Redis via a Lua script (fast-fail gatekeeper), and commits the authoritative `AVAILABLE -> HELD` state transition in the relational database using OCC (`version` + lazy `hold_expires_at` check).",
-        "Hold Expiration Sweeper & Payment Webhook Listener: Confirms `HELD -> BOOKED` upon payment capture, or sweeps expired `HELD` rows (`hold_expires_at < NOW()`) back to `AVAILABLE` and updates the Redis bitmap."
+        "Virtual Waiting Room (Edge CDN / Queue-it): Holds excess fans in an off-origin queue, issuing signed HMAC admission cookies at a controlled rate (e.g., 200 users/second).",
+        "Seat Inventory Service (Redis): Tracks live seat availability (`AVAILABLE`, `HELD`, `BOOKED`) and executes atomic hold operations via Lua scripts.",
+        "Booking Relational DB (PostgreSQL): Authoritative source of record using Optimistic Concurrency Control (`version` column) for final booking state.",
+        "Payment Gateway Adapter: Communicates with payment processors outside database transactions.",
+        "Hold Expiration Janitor: Background worker releasing expired holds, complemented by lazy expiration checks during customer read queries."
       ],
       "diagramImageUrl": "/diagrams/design-ticket-booking.jpg",
       "asciiDiagram": "+-----------------------------------------------------------------------------------+\n|                      5,000,000 CONCURRENT FANS (Web / Mobile)                     |\n+-----------------------------------------+-----------------------------------------+\n                                          |\n                                          v\n+-----------------------------------------------------------------------------------+\n|                 EDGE VIRTUAL WAITING ROOM (Cloudflare + Redis ZSET)               |\n|  - Assigns randomized queue position at 10:00 AM                                  |\n|  - Admits 2,000 users/sec -> Issues signed JWT (X-Queue-Pass-Token, 15m TTL)      |\n+-----------------------------------------+-----------------------------------------+\n                                          | (Only admitted users pass)\n                                          v\n+-----------------------------------------------------------------------------------+\n|                      API GATEWAY (Verify X-Queue-Pass-Token)                      |\n+-------------------+-------------------------------------------+-------------------+\n                    | GET /shows/{id}/seatmap                   | POST /shows/{id}/holds\n                    v                                           v\n        +-----------------------+                   +-----------------------+\n        | Seat Map Query Svc    |                   |   Booking Service     |\n        | (Compact Bitmap + SSE)|                   | (Sort SeatIDs + OCC)  |\n        +-----------+-----------+                   +---+---------------+---+\n                    |                                   |               |\n                    v                                   v (1) Fast Gate | (2) Authoritative\n        +-----------------------------------------------+               |     ACID Commit\n        |          REDIS CLUSTER (Sharded by show_id)   |               v\n        |  - Seat Status Bitmap / Hash                  |   +-----------------------+\n        |  - Atomic Lua Multi-Seat Hold Lock (TTL 600s) |   | Sharded PostgreSQL /  |\n        +-----------------------------------------------+   | CockroachDB           |\n                                ^                           | - show_seats (OCC)    |\n                                |                           | - bookings            |\n                                | (4) Update Seat Status    +-----------+-----------+\n                                |     Bitmap & Broadcast                |\n                                +---------------------------------------+\n                                                                        | (3) Payment Webhook\n                                                                        v     or 10m Expiry\n                                                            +-----------------------+\n                                                            | Payment Svc &         |\n                                                            | Expiry Sweeper Worker |\n                                                            +-----------------------+"
     },
     {
       "heading": "6. Deep-Dive Execution Flows & Core Logic",
-      "body": "We trace the two core concurrency pipelines: atomic multi-seat hold with lazy expiration leases and booking confirmation with automated release on payment timeout.",
+      "body": "The two-phase reservation pattern guarantees that seats are held exclusively during checkout without locking database tables indefinitely.",
       "bullets": [
-        "Atomic Multi-Seat Hold with 10-Minute Expiring Lease (Redis Lua): When a user selects seats, a Redis Lua script checks and sets keys (`SET lock:seat:{id} userId NX EX 600`) atomically in memory. The winning request proceeds to PostgreSQL to record the hold with lazy expiration (`hold_expires_at = NOW() + INTERVAL '10 minutes'`), allowing expired seats to be claimed immediately without waiting for background cron cleanups.",
-        "Booking Confirmation & Auto-Release on Payment Expiry: Upon successful payment verification within the 10-minute window, the status is updated to `CONFIRMED` and cryptographically signed QR tickets are generated. If payment is not completed before the TTL expires, the Redis key expires naturally, returning the seat to the available pool with zero deadlocks."
+        "Phase 1: Temporary Hold (10-minute hold): The user selects seat #101. An atomic Redis Lua script checks if the seat is `AVAILABLE`. If yes, it transitions state to `HELD`, records the user ID, sets an expiration timestamp (now + 600s), and returns success. If another user attempts to hold the same seat 2ms later, the script returns an error.",
+        "Phase 2: Payment and Confirmation: The user completes credit card payment. The server executes a database update: `UPDATE seats SET status = \"BOOKED\" WHERE seat_id = 101 AND status = \"HELD\" AND hold_expires_at > NOW()`. If the hold has expired, the update affects 0 rows, triggering an automatic payment refund.",
+        "Lazy expiration on query: When any user queries a seat map, the query evaluates `IF (status == \"HELD\" AND hold_expires_at < NOW()) THEN status = \"AVAILABLE\"`. This eliminates race conditions where Redis key expiration events might be delayed."
       ],
-      "flowDiagramUrl": "/diagrams/flow-design-ticket-booking.svg",
       "diagramImageUrl": "/diagrams/flow-design-ticket-booking.svg"
     },
     {
       "heading": "7. Production Hardening, Fault Tolerance & Resilience",
-      "body": "To survive extreme celebrity ticket drops and bot armies, production ticketing platforms add edge bot mitigation, anti-scalping cryptographic tickets, and dynamic UI degradation.",
+      "body": "Hardening flash-sale platforms requires preventing bot scrapers, handling payment timeouts, and ensuring fair queue distribution.",
       "bullets": [
-        "Lazy Expiration + Background Sweeper Dual Defense: Relying *only* on a background cron job to flip expired `HELD` rows back to `AVAILABLE` introduces a window where seats appear unavailable after 10 minutes if the cron lags. Relying *only* on lazy expiration leaves the Redis seat-map cache stale until someone clicks that seat. Combine both: the SQL `WHERE` clause checks `hold_expires_at < NOW()` for instant correctness, while a lightweight Sweeper every 5 seconds refreshes the Redis seat-map bitmap for the UI.",
-        "Dynamic UI Degradation (Interactive Seat Map -> Section Auto-Assign): When concurrent traffic for a single `show_id` exceeds 50,000 users, disable individual seat clicking on the frontend (which causes 99% OCC collisions on the most popular front-row seats) and switch to 'Select Section & Quantity' mode backed by per-section partitioned queues and bitwise contiguous seat allocation.",
-        "Anti-Scalper Bot Defense & Verified Fan Tokens: Require pre-registered 'Verified Fan' cryptographic tokens before entering the Virtual Waiting Room, combined with proof-of-work challenges and device attestation at the CDN edge so headless scripts cannot exhaust the 10-minute seat hold pool.",
-        "Rotating TOTP Dynamic QR Codes for Venue Entry: Static PDF barcodes are easily screenshotted and resold to multiple buyers. Issue tickets as a seed secret inside the mobile app that renders a rotating 15-second TOTP barcode (`HMAC-SHA256(ticketSecret, currentEpoch / 15)`), eliminating screenshot fraud at the stadium gates."
+        "Cryptographically signed queue cookies: The Virtual Waiting Room signs admission tokens using HMAC-SHA256 with a 15-minute expiration. The API Gateway validates the signature before allowing any request to reach the hold service, preventing users from bypassing the queue.",
+        "Mitigating inventory hoarding: Limit each user to a maximum of 4 or 6 seats per transaction, and restrict each user to one active hold at a time to prevent scalpers from locking large blocks of seats.",
+        "Payment gateway callback timeouts: If payment confirmation takes longer than the 10-minute hold window, check the payment status with the gateway before releasing the seat. If the card was charged, honor the booking."
       ]
     }
   ],
   "tradeOffs": [
     {
-      "option": "Pessimistic Locking (`SELECT . FOR UPDATE`) vs. Optimistic Concurrency Control (`version` column)",
-      "pros": "Pessimistic locking serializes conflicting transactions inside the DB engine without throwing immediate retry errors.",
-      "cons": "Under a flash sale where 5,000 users target the same seat row, waiting on row locks ties up all database connections and causes cascading thread-pool exhaustion.",
-      "bestFor": "Low-contention back-office updates; for high-contention ticket drops, Redis fast-fail gatekeeping + DB OCC (`version` check) is far more resilient."
+      "option": "Virtual Waiting Room Admission Throttle",
+      "pros": "Protects backend databases from crashing under 5M-user flash surges; provides a fair, transparent user experience.",
+      "cons": "Adds architectural complexity and requires CDN edge coordination or external vendor integration (Queue-it).",
+      "bestFor": "Major concert ticket drops, high-demand sporting events, and viral limited-edition product drops."
     },
     {
-      "option": "Interactive Seat Map Selection vs. Server-Assigned 'Best Available' Section Allocation",
-      "pros": "Interactive Seat Map gives users exact control over aisle/view preferences.",
-      "cons": "Causes extreme collision rates during flash sales because thousands of users click the exact same visually prominent seats simultaneously.",
-      "bestFor": "Use Interactive Seat Map for movies and regular concerts; dynamically switch to 'Best Available' Section Allocation during stadium flash sales."
+      "option": "Direct Unmitigated Concurrency (No Waiting Room)",
+      "pros": "Simpler architecture; no waiting screens for users during normal low-traffic events.",
+      "cons": "Databases experience massive lock contention and connection pool exhaustion under sudden traffic spikes.",
+      "bestFor": "Local community theaters, regular cinema screenings, and low-concurrency reservation systems."
     },
     {
-      "option": "Redis-Only Seat Hold vs. Redis Gatekeeper + Durable DB `hold_expires_at`",
-      "pros": "Redis-only holds are ultra-fast and expire automatically via Redis TTL.",
-      "cons": "If a Redis master crashes before replicating to its replica, two users can hold the same seat and both proceed to payment.",
-      "bestFor": "Always pair the Redis Lua gatekeeper with an authoritative ACID database update (`status = 'HELD'`, `hold_expires_at`) before initiating payment."
+      "option": "Redis Lua Hold with Lazy Database Expiration",
+      "pros": "Sub-millisecond seat selection response times; resilient against Redis expiration event delivery delays.",
+      "cons": "Requires maintaining state synchronization between Redis cache and relational database records.",
+      "bestFor": "High-throughput reserved-seating systems with interactive graphical seat maps."
     }
   ],
-  "interviewTip": "Be sure to mention **Lazy Expiration** (`WHERE status = 'AVAILABLE' OR (status = 'HELD' AND hold_expires_at < NOW())`) and **sorting `seatIds` ascending** before locking multiple seats. Those two details immediately signal to the interviewer that you have built real concurrent reservation systems and know how to prevent both cron-lag unavailability and multi-row deadlocks.",
+  "interviewTip": "When designing a ticket booking platform, focus on two key areas: first, propose an Edge Virtual Waiting Room to throttle 5 million concurrent fans down to 200 users/second; second, explain the two-phase hold pattern (temporary 10-minute hold followed by final payment confirmation) with lazy expiration to prevent double-booking.",
   "diagramImageUrl": "/diagrams/design-ticket-booking.jpg",
   "jsonUrl": "/api/subtopics/must-practice-designs/design-ticket-booking.json",
   "flowDiagramUrl": "/diagrams/flow-design-ticket-booking.svg"

@@ -5,53 +5,53 @@
   "topicNumber": 2,
   "subtopicNumber": "2.1",
   "title": "HTTP/HTTPS",
-  "subtitle": "Stateless request-response semantics, method idempotency, status code taxonomy, caching headers, and TLS-secured transport.",
-  "readingTime": "6 min read",
+  "subtitle": "Stateless request-response semantics, method idempotency, status code precision, caching headers, and TLS edge termination.",
+  "readingTime": "7 min read",
   "difficulty": "Foundational",
   "keyTakeaways": [
-    "HTTP is an application-layer stateless protocol where every request contains all metadata (headers, method, URI, auth) required for the server to process it.",
-    "HTTP methods carry formal semantics: `GET`, `PUT`, and `DELETE` are idempotent by specification, whereas `POST` is non-idempotent and `PATCH` is typically non-idempotent.",
-    "HTTPS wraps HTTP inside a TLS encrypted tunnel, guaranteeing Confidentiality (encryption), Integrity (MAC/AEAD prevents tampering), and Authenticity (X.509 certificates)."
+    "HTTP methods carry explicit idempotency contracts: GET, PUT, and DELETE must be safely repeatable, whereas POST is non-idempotent and can mutate state on retries.",
+    "Status code precision matters in production: 502 indicates an upstream server crashed or returned invalid data, whereas 504 means the upstream gateway timed out waiting for a response.",
+    "Terminating TLS at edge load balancers or CDNs offloads cryptographic handshake compute from application containers while preserving end-to-end security via private VPC networking."
   ],
-  "architectureDiagram": "[ Client Browser / App ]\n          |\n          |  1. TCP + TLS Handshake (HTTPS Port 443)\n          |  2. HTTP Request:\n          |     GET /v1/articles/42 HTTP/2\n          |     Host: api.example.com\n          |     If-None-Match: \"etag-99a8b\"\n          |     Accept-Encoding: br, gzip\n          v\n[ CDN / Reverse Proxy ]\n          |\n          |  3. HTTP Response:\n          |     HTTP/2 304 Not Modified (or 200 OK)\n          |     Cache-Control: public, max-age=3600, stale-while-revalidate=60\n          |     ETag: \"etag-99a8b\"\n          v\n[ Client Reuses Local Cache ]",
+  "architectureDiagram": "TLS TERMINATION AT THE EDGE LOAD BALANCER\n[ Client ] -- HTTPS (TLS 1.3 / Port 443) --> [ Edge LB / Cloudflare ]\n                                                   |\n                                         TLS Terminated at Edge\n                                         (X-Forwarded-For injected)\n                                                   |\n                                                   v\n                        [ App Pod 1 ]    [ App Pod 2 ]    [ App Pod 3 ]\n                        (Internal VPC HTTP/2 or mTLS over Port 8080)",
   "sections": [
     {
-      "heading": "HTTP Semantics, Methods, and Status Code Precision",
-      "body": "Hypertext Transfer Protocol (HTTP) is the foundational request-response protocol of the web. Because HTTP is stateless, any horizontal backend replica can service any request without remembering prior packets. Adhering strictly to HTTP method semantics and status codes enables intermediaries, CDNs, reverse proxies, browser caches, and API gateways, to automatically cache, retry, or circuit-break traffic without inspecting application business logic.",
+      "heading": "HTTP Semantics, Idempotency, and Status Code Precision",
+      "body": "HTTP is a stateless client-server protocol where every request carries its own context. In distributed systems, understanding method idempotency is essential for safe retry policies: an idempotent operation produces the same server state regardless of whether it executes once or ten times. If a network blip causes a client to timeout on a POST request, naively retrying it risks charging a credit card twice unless guarded by an idempotency key.",
       "bullets": [
-        "Safe & Idempotent Methods: `GET`, `HEAD`, `OPTIONS` (read-only, safe for automatic proxy retries and prefetching).",
-        "Idempotent Mutating Methods: `PUT` (full resource replacement) and `DELETE` (repeating `DELETE /items/5` yields the same system state).",
-        "Status Code Discipline: `200 OK`, `201 Created`, `202 Accepted` (async), `304 Not Modified`, `400 Bad Request`, `401 Unauthorized` (unauthenticated), `403 Forbidden` (unauthorized), `409 Conflict`, `429 Too Many Requests`, `502/503/504` (gateway/upstream failures)."
+        "Idempotency Guarantees: GET, HEAD, PUT, and DELETE are idempotent by specification; POST and PATCH are non-idempotent.",
+        "Authentication vs Authorization: HTTP 401 Unauthorized means the client provided no credentials or invalid credentials; HTTP 403 Forbidden means the client is authenticated but lacks required permissions.",
+        "Gateway Errors: HTTP 502 Bad Gateway means the reverse proxy received an invalid response or connection reset from the upstream service; HTTP 504 Gateway Timeout means the upstream service failed to respond before the proxy's timeout expired."
       ],
       "codeSnippet": {
-        "title": "Conditional HTTP Caching with ETags & Cache-Control",
-        "code": "export async function handleGetProduct(req: Request): Promise<Response> {\n  const product = await db.getProduct(\"prod_88\");\n  const currentEtag = `\"${product.versionHash}\"`;\n\n  // If client already has this exact version cached, save bandwidth!\n  if (req.headers.get(\"If-None-Match\") === currentEtag) {\n    return new Response(null, {\n      status: 304, // Not Modified (0-byte body)\n      headers: { ETag: currentEtag, \"Cache-Control\": \"public, max-age=60\" },\n    });\n  }\n\n  return new Response(JSON.stringify(product), {\n    status: 200,\n    headers: {\n      \"Content-Type\": \"application/json\",\n      ETag: currentEtag,\n      \"Cache-Control\": \"public, max-age=60, stale-while-revalidate=300\",\n    },\n  });\n}"
+        "title": "Safe Retry Logic Respecting HTTP Method Idempotency",
+        "code": "export async function fetchWithSafeRetry(\n  url: string,\n  options: RequestInit,\n  maxRetries = 3\n): Promise<Response> {\n  const method = (options.method || \"GET\").toUpperCase();\n  const isIdempotent = [\"GET\", \"HEAD\", \"PUT\", \"DELETE\"].includes(method);\n\n  for (let attempt = 1; attempt <= maxRetries; attempt++) {\n    try {\n      const res = await fetch(url, options);\n      // Only retry on transient upstream gateway errors\n      if ([502, 503, 504].includes(res.status) && isIdempotent) {\n        if (attempt === maxRetries) return res;\n        await new Promise((r) => setTimeout(r, Math.pow(2, attempt) * 100));\n        continue;\n      }\n      return res;\n    } catch (err) {\n      // Never blindly retry failed POST requests without idempotency keys\n      if (!isIdempotent) throw err;\n      if (attempt === maxRetries) throw err;\n      await new Promise((r) => setTimeout(r, Math.pow(2, attempt) * 100));\n    }\n  }\n  throw new Error(\"Retry loop exhausted\");\n}"
       }
     },
     {
-      "heading": "HTTPS and Secure Edge Termination",
-      "body": "Plaintext HTTP is vulnerable to passive eavesdropping and active Man-in-the-Middle (MitM) header/body injection across ISP routers and Wi-Fi access points. HTTPS layers HTTP atop TLS (Transport Layer Security). In modern cloud architectures, HTTPS TLS termination usually happens at the CDN edge or Layer-7 Load Balancer (offloading asymmetric crypto from app servers), or uses mTLS (Mutual TLS) all the way between internal service-mesh pods for zero-trust security.",
+      "heading": "HTTPS and TLS Edge Termination",
+      "body": "HTTPS wraps plaintext HTTP in Transport Layer Security (TLS), providing confidentiality, data integrity, and server authentication. In high-traffic architectures, terminating TLS at the edge load balancer or CDN prevents application pods from burning CPU cycles on cryptographic handshakes, while injecting headers like `X-Forwarded-For` and `X-Forwarded-Proto` so backend services know the real client IP and protocol.",
       "bullets": [
-        "HSTS (`Strict-Transport-Security`): Instructs browsers to never attempt plaintext port 80 connections, preventing SSL-stripping attacks.",
-        "HTTP Compression (`Accept-Encoding: br, zstd, gzip`): Compresses JSON/HTML payloads by 70-85% over the wire.",
-        "CORS (Cross-Origin Resource Sharing): Browser-enforced preflight (`OPTIONS`) security mechanism restricting cross-domain XHR/Fetch calls."
+        "Edge Termination: Cryptographic handshakes end at the edge proxy (Cloudflare, AWS ALB, NGINX); traffic travels unencrypted over private isolated VPC subnets.",
+        "Full End-to-End Encryption: Strict compliance regimes (PCI-DSS, HIPAA) mandate re-encrypting traffic between the load balancer and internal pods, typically via lightweight mutual TLS (mTLS).",
+        "HTTP Strict Transport Security (HSTS): Instructs browsers via response headers to automatically convert all insecure HTTP requests to HTTPS before hitting the wire."
       ]
     }
   ],
   "tradeOffs": [
     {
-      "option": "End-to-End HTTPS / mTLS (Client -> LB -> Pod)",
-      "pros": "Zero-trust encryption even inside the VPC, cryptographic service identity verification via client certs, SOC2/PCI compliance.",
-      "cons": "Extra CPU overhead for TLS encryption/decryption on every internal hop, certificate rotation complexity (requires Istio/Linkerd/cert-manager).",
-      "bestFor": "Fintech, healthcare (HIPAA), multi-tenant cloud infrastructure, and zero-trust microservice meshes."
+      "option": "Edge TLS Termination",
+      "pros": "Drastically reduces CPU overhead on application fleets; centralizes certificate renewals and cipher suite management.",
+      "cons": "Traffic inside the internal VPC runs in plaintext unless governed by VPC network access control lists.",
+      "bestFor": "Standard web and mobile API backends running inside isolated cloud VPCs."
     },
     {
-      "option": "TLS Termination at Edge Load Balancer (HTTPS -> LB -> Plain HTTP)",
-      "pros": "Offloads TLS handshake CPU and cert management to a single gateway/ALB tier, simplifies internal debugging and packet capture.",
-      "cons": "Traffic inside the private VPC subnet travels unencrypted; vulnerable if an attacker breaches the internal network perimeter.",
-      "bestFor": "Standard single-VPC startups and low-sensitivity internal backends inside isolated private subnets."
+      "option": "End-to-End mTLS (Zero-Trust Mesh)",
+      "pros": "Guarantees cryptographic privacy across every hop; authenticates service identity between microservices.",
+      "cons": "Adds handshake latency and CPU overhead on pod-to-pod communication; requires automated certificate rotation infrastructure (SPIFFE/Vault).",
+      "bestFor": "Banking cores, medical record platforms, multi-tenant container platforms, and PCI-compliant systems."
     }
   ],
-  "interviewTip": "Don't overlook HTTP `ETag` and `Cache-Control: stale-while-revalidate` headers in interviews, mentioning them shows how you eliminate 80% of backend bandwidth before requests ever leave the CDN or browser.",
+  "interviewTip": "When explaining an API failure scenario in an interview, distinguish clearly between a 502 and a 504. Stating that a 504 means the upstream microservice timed out while a 502 indicates it crashed or reset the TCP socket immediately shows real debugging experience.",
   "jsonUrl": "/api/subtopics/networking/http-https.json"
 }

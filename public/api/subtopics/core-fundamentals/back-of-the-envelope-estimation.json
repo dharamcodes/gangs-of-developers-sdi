@@ -5,53 +5,53 @@
   "topicNumber": 1,
   "subtopicNumber": "1.9",
   "title": "Back-of-the-Envelope Estimation",
-  "subtitle": "Rapid capacity planning using powers of two, latency numbers every programmer should know, QPS conversions, and storage math.",
+  "subtitle": "Practical capacity planning using powers of ten, latency orders of magnitude, QPS conversions, and storage sizing.",
   "readingTime": "8 min read",
   "difficulty": "Foundational",
   "keyTakeaways": [
-    "There are ~86,400 seconds in a day, always round to `100,000 (10^5)` seconds/day for mental math, and multiply average QPS by `2x–3x` for peak QPS.",
-    "Memorize latency orders of magnitude: L1/RAM is nanoseconds, SSD is ~100 microseconds, Intra-DC network is ~0.5 milliseconds, Cross-Continent is ~150 milliseconds.",
-    "The goal of estimation is not arithmetic perfection; it is proving whether your data fits in a single node's RAM (64GB) or requires sharding across 50 nodes."
+    "There are 86,400 seconds in a day; round to `100,000 (10^5)` for quick mental calculations, and multiply average QPS by `2x–3x` to budget for peak traffic.",
+    "Memorize order-of-magnitude latency baselines: L1/RAM is nanoseconds, SSD random reads are ~100 microseconds, intra-datacenter network hops are ~0.5 milliseconds, and cross-continent hops are ~100 milliseconds.",
+    "The goal of estimation is to make architectural decisions: proving whether your dataset fits in RAM on a single box (64 GB) or requires sharding across dozens of storage nodes."
   ],
   "architectureDiagram": "LATENCY HIERARCHY (Orders of Magnitude)\n[ CPU / L1-L2 Cache ]  ~ 1 - 5 ns         (Instant)\n[ Main Memory (RAM) ]  ~ 100 ns           (0.1 us)\n[ NVMe SSD Random Read]~ 100 us           (0.1 ms)\n[ Same-AZ Network RTT ]~ 500 us           (0.5 ms)\n[ Cross-US Network RTT]~ 70,000 us        (70 ms)\n[ Global Packet RTT   ]~ 150,000 us       (150 ms)\n\nDAILY VOLUME -> QPS SHORTCUT\n100M requests/day  ÷  100,000 sec/day  =  1,000 Avg QPS  (Peak ~ 2,500 QPS)",
   "sections": [
     {
-      "heading": "Golden Constants and Shortcuts for Mental Math",
-      "body": "During a system design interview, spending 8 minutes doing long division wastes precious architecture time. Instead, convert every number into scientific notation (`10^N`) and use standardized approximations. Every estimation should answer three architectural questions: (1) What is our read/write QPS? (2) How much storage do we accumulate over 5 years? (3) How much cache memory and network bandwidth do we need?",
+      "heading": "Mental Math Shortcuts for High-Speed Estimation",
+      "body": "Spending ten minutes doing exact long division during an architectural review or interview wastes valuable time. Instead, express numbers in powers of ten (`10^N`) and standardize on clean approximations. Every sizing exercise should answer three core architectural questions: What is the peak read and write QPS? How much storage accumulates over five years? How much cache memory and network bandwidth will we consume?",
       "bullets": [
-        "Time Shortcuts: `1 day ≈ 10^5 seconds` (86,400) | `1 month ≈ 2.5 × 10^6 seconds` | `1 year ≈ 3 × 10^7 seconds`.",
-        "Volume Powers of 10: `10^3 = 1 KB` | `10^6 = 1 MB` | `10^9 = 1 GB` | `10^12 = 1 TB` | `10^15 = 1 PB`.",
-        "Single Node Rule-of-Thumb: 1 Redis node = ~100k QPS | 1 SQL Primary = ~10k write QPS / 30k read QPS | 1 App Server = ~5k-10k QPS."
+        "Time Conversions: `1 day ≈ 10^5 seconds` (exact: 86,400) | `1 month ≈ 2.5 × 10^6 seconds` | `1 year ≈ 3 × 10^7 seconds`.",
+        "Capacity Multipliers: `10^3 = 1 KB` | `10^6 = 1 MB` | `10^9 = 1 GB` | `10^12 = 1 TB` | `10^15 = 1 PB`.",
+        "Hardware Throughput Baselines: 1 Redis node ≈ 100k QPS | 1 Relational Primary ≈ 10k write QPS / 30k read QPS | 1 Stateless Node ≈ 5k-10k QPS."
       ],
       "codeSnippet": {
-        "title": "Worked Example: Capacity Estimation for a URL Shortener (100M DAU)",
-        "code": "/*\n * 1. TRAFFIC (QPS)\n * - Write: 100M new URLs/month -> 10^8 / (2.5 * 10^6 sec) = 40 Writes/sec (Peak ~100 WPS)\n * - Read (100:1 ratio): 40 * 100 = 4,000 Reads/sec (Peak ~10,000 RPS)\n * -> Conclusion: 1 SQL Primary easily handles 100 WPS! No write sharding needed initially.\n *\n * 2. STORAGE (5 Years)\n * - Total rows: 100M/mo * 12 mo * 5 yrs = 6 Billion URLs (6 * 10^9)\n * - Row size: 8B id + 7B slug + 500B long_url + metadata ≈ 500 Bytes\n * - Total Storage: (6 * 10^9) * 500 Bytes = 3 * 10^12 Bytes = 3 TB over 5 years\n * -> Conclusion: Fits on a single multi-TB SSD instance with read replicas!\n *\n * 3. CACHE MEMORY (80/20 Pareto Rule: Cache 20% of daily active URLs)\n * - Daily reads: 4,000 RPS * 10^5 sec = 400M requests/day (~80M unique URLs)\n * - 20% hot set: 16M URLs * 500 Bytes ≈ 8 GB RAM\n * -> Conclusion: Fits comfortably inside a single 16GB Redis node (with 1 replica)!\n */"
+        "title": "Worked Example: URL Shortener Capacity Calculation",
+        "code": "/*\n * 1. TRAFFIC ENVELOPE (QPS)\n * - Write Volume: 100M new URLs/month -> 10^8 / (2.5 * 10^6 sec) = 40 Writes/sec (Peak ~100 WPS)\n * - Read Volume (100:1 ratio): 40 * 100 = 4,000 Reads/sec (Peak ~10,000 RPS)\n * -> Architecture Decision: A single Postgres or MySQL primary easily handles 100 WPS.\n *    No write sharding needed at launch!\n *\n * 2. 5-YEAR PERSISTENT STORAGE\n * - Total records: 100M/month * 12 months * 5 years = 6 Billion records (6 * 10^9)\n * - Record size: 8B id + 7B slug + 500B long_url + metadata ≈ 500 Bytes\n * - Total Raw Storage: 6 * 10^9 * 500 Bytes = 3 TB over 5 years\n * -> Architecture Decision: 3 TB comfortably fits on a single NVMe SSD volume with replicas.\n *\n * 3. CACHE SIZING (80/20 Rule: Cache top 20% of daily active links)\n * - Daily read requests: 4,000 RPS * 10^5 sec = 400M requests/day (~80M unique URLs)\n * - 20% hot working set: 16M URLs * 500 Bytes ≈ 8 GB RAM\n * -> Architecture Decision: Easily fits inside a single 16 GB Redis instance with a standby replica.\n */"
       }
     },
     {
-      "heading": "Tying Numbers Directly to Design Decisions",
-      "body": "Interviewers hate 'disconnected math', calculating 3.2 TB of storage and then never mentioning it again. Every single number you compute must immediately justify an architectural component choice.",
+      "heading": "Connecting Calculated Numbers Directly to Architectural Decisions",
+      "body": "Calculating numbers without connecting them to infrastructure choices is wasted effort. Every calculated metric must directly justify a specific component selection or debunk an over-engineered assumption.",
       "bullets": [
-        "If Hot Working Set = 40 GB -> 'This fits inside a single 64GB Redis cluster shard; we don't need complex cache sharding.'",
-        "If Write QPS = 80,000/sec -> 'A single Postgres leader caps out around 15k writes/sec, so we MUST shard by `user_id` across at least 8 shards or use Cassandra.'",
-        "If Media Ingress = 5 GB/sec -> 'Our API servers shouldn't proxy 40 Gbps of raw video bytes; clients must upload directly to S3 via Presigned URLs.'"
+        "Hot working set equals 16 GB: 'Because this fits comfortably in RAM on a single standard node, we do not need complex distributed cache partitioning.'",
+        "Peak write volume equals 60,000 QPS: 'A single relational database primary saturates around 10k-15k writes/sec, so we must partition writes across shards or adopt an append-only distributed store like Cassandra.'",
+        "Media ingress equals 10 GB/sec: 'Application servers must not proxy raw multi-gigabyte video streams; clients must upload directly to object storage via presigned S3 URLs.'"
       ]
     }
   ],
   "tradeOffs": [
     {
-      "option": "Upfront Full Capacity Estimation (Before Drawing)",
-      "pros": "Establishes global scale constraints early, prevents designing a toy architecture for a planetary problem.",
-      "cons": "Can eat up 5-7 minutes of interview time on arithmetic before any boxes are drawn.",
-      "bestFor": "Storage-heavy or bandwidth-heavy prompts (YouTube, Dropbox, Twitter Feed, Web Crawler, Metrics System)."
+      "option": "Upfront Capacity Estimation",
+      "pros": "Identifies scale boundaries early; prevents designing toy solutions for massive scale or over-architecting small workloads.",
+      "cons": "Consumes 5-7 minutes of upfront discussion before system topology diagrams are drafted.",
+      "bestFor": "Storage-intensive or bandwidth-heavy systems (video streaming, cloud drives, social media feeds, logging backbones)."
     },
     {
-      "option": "Just-in-Time (JIT) Scoped Estimation (During Deep Dive)",
-      "pros": "Saves time upfront, calculates numbers only where needed to justify sharding or caching a specific bottleneck.",
-      "cons": "Risk of realizing halfway through the design that your chosen database cannot handle the write QPS.",
-      "bestFor": "Workflow-heavy or state-machine prompts (Uber Ride Matching, Payment System, Ticketmaster, Rate Limiter)."
+      "option": "Just-in-Time Scoped Estimation",
+      "pros": "Speeds up initial architecture layout; calculates metrics only when deciding whether a specific bottleneck needs sharding or caching.",
+      "cons": "Risk of realizing late in the design that a chosen database cannot support the required write throughput.",
+      "bestFor": "Workflow-heavy state machines (ride dispatch, payment processing pipelines, rate limiting)."
     }
   ],
-  "interviewTip": "Always state your rounding assumptions out loud ('I'll approximate 86,400 seconds/day as 100,000 to keep the math clean') and end your estimation with a 1-sentence architectural verdict.",
+  "interviewTip": "State your rounding assumptions out loud ('I'll round 86,400 to 100,000 to keep mental math rapid') and always wrap up your calculations with a concrete infrastructure takeaway.",
   "jsonUrl": "/api/subtopics/core-fundamentals/back-of-the-envelope-estimation.json"
 }

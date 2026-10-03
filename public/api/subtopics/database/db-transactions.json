@@ -7,51 +7,50 @@
   "title": "Transactions",
   "subtitle": "Guaranteeing Atomicity, Consistency, Isolation, and Durability via Write-Ahead Logging (WAL) and MVCC.",
   "readingTime": "8 min read",
-  "difficulty": "Foundational",
+  "difficulty": "Intermediate",
   "keyTakeaways": [
-    "Atomicity and Durability are implemented at the storage layer using Write-Ahead Logging (WAL) with redo and undo records.",
-    "Multi-Version Concurrency Control (MVCC) keeps multiple immutable versions of rows so readers never block writers and writers never block readers.",
-    "Long-running transactions hold open snapshots, preventing vacuuming/garbage collection and risking connection exhaustion."
+    "Database transactions bundle multiple operations into a single logical unit of work that either completely succeeds or leaves no trace.",
+    "Durability is achieved using Write-Ahead Logging (WAL): modifications are written sequentially to an append-only log on disk before modifying in-memory table pages.",
+    "Multi-Version Concurrency Control (MVCC) ensures readers never block writers and writers never block readers by maintaining multiple version snapshots of each row."
   ],
-  "architectureDiagram": "Client                   Buffer Pool (RAM)             Disk Storage\n  |                             |                           |\n  |--- 1. BEGIN; UPDATE ... --->|                           |\n  |                             |--- 2. Append Undo/Redo -->| [WAL Log File]\n  |                             |    (Sequential Write)     |\n  |                             |--- 3. Dirty Page in RAM   |\n  |--- 4. COMMIT -------------->|                           |\n  |                             |--- 5. fsync(WAL) -------->| (Durable!)\n  |<-- 6. ACK Commit Success ---|                           |\n  |                             |... 7. Async Checkpoint -->| [Data Pages]",
+  "architectureDiagram": "WRITE-AHEAD LOGGING (WAL) & MVCC ROW SNAPSHOTS\n[ Transaction Writes: Update Balance ]\n                   |\n                   v (Step 1: Synchronous Append)\n[ Write-Ahead Log (WAL) on Disk ] -> fsync() confirms durability!\n                   |\n                   v (Step 2: Lazy Memory Write)\n[ In-Memory Buffer Pool Pages ] (Marked \"DIRTY\", flushed to data files later)\n\nMVCC ROW VERSIONING:\nRow ID: 101 | Value: $100 | xmin: 450 | xmax: 510 (Old version, visible to Tx < 510)\nRow ID: 101 | Value: $200 | xmin: 510 | xmax: 0   (New version, visible to Tx >= 510)",
   "sections": [
     {
-      "heading": "How ACID Works Under the Hood (WAL & ARIES)",
-      "body": "Databases do not flush modified 8KB data pages to disk on every `COMMIT` because random disk I/O is slow. Instead, they use the Write-Ahead Log (WAL) protocol: before any data page is modified, an append-only log record containing both Undo (old value) and Redo (new value) information is written sequentially to the WAL and flushed via `fsync`. Once the commit record hits the WAL on disk, the transaction is durable, even if power fails before dirty memory pages are checkpointed.",
+      "heading": "How ACID Operates Under the Hood: WAL and ARIES",
+      "body": "A database transaction is an abstraction that masks the messy physical realities of disk failures, operating system crashes, and concurrent memory access. To guarantee Durability and Atomicity without stalling on slow random disk writes, modern relational database engines implement Write-Ahead Logging (WAL) based on the ARIES recovery algorithm.",
       "bullets": [
-        "Atomicity (Undo Log): If a transaction aborts or crashes mid-flight, the engine replays undo records backward to restore prior state.",
-        "Durability (Redo Log): Upon crash recovery, the engine replays committed WAL records forward from the last checkpoint.",
-        "Consistency: Application-defined invariants (foreign keys, `CHECK (balance >= 0)`) validated before commit."
+        "Write-Ahead Invariant: A database must never write a dirty data page from RAM to the permanent table files until the corresponding WAL log record is flushed to disk via `fsync()`.",
+        "Crash Recovery: On an unexpected crash and reboot, the engine scans the WAL. It executes a Redo phase to re-apply committed changes that were in memory, followed by an Undo phase to roll back uncommitted, partial transactions.",
+        "Group Commit: High-throughput databases batch WAL `fsync()` calls across multiple concurrent transactions, amortizing disk rotational or NVMe latency."
       ],
       "codeSnippet": {
-        "title": "Atomic Ledger Transfer with Safe Transaction Boundaries",
-        "code": "-- Keep transactions short: never make external HTTP calls inside BEGIN..COMMIT!\nBEGIN TRANSACTION;\n\n-- Deduct from sender only if balance is sufficient\nUPDATE accounts\nSET balance_cents = balance_cents - 5000, updated_at = NOW()\nWHERE account_id = 'acc_sender' AND balance_cents >= 5000;\n\n-- Verify 1 row affected in application; if 0, ROLLBACK\nUPDATE accounts\nSET balance_cents = balance_cents + 5000, updated_at = NOW()\nWHERE account_id = 'acc_receiver';\n\nINSERT INTO ledger_entries (tx_id, debit_acc, credit_acc, amount_cents)\nVALUES ('tx_1099', 'acc_sender', 'acc_receiver', 5000);\n\nCOMMIT;"
+        "title": "Atomic Financial Ledger Transfer Transaction",
+        "code": "-- Explicit ACID transaction block guaranteeing all-or-nothing execution\nBEGIN TRANSACTION;\n\n-- Deduct funds with balance constraint check\nUPDATE accounts \nSET balance = balance - 250.00 \nWHERE id = 'acc_alice' AND balance >= 250.00;\n\n-- Credit target account\nUPDATE accounts \nSET balance = balance + 250.00 \nWHERE id = 'acc_bob';\n\n-- Record immutable audit ledger entry\nINSERT INTO ledger_entries (from_account, to_account, amount, created_at) \nVALUES ('acc_alice', 'acc_bob', 250.00, NOW());\n\nCOMMIT; -- Flushes WAL record to non-volatile disk"
       }
     },
     {
       "heading": "Multi-Version Concurrency Control (MVCC)",
-      "body": "Instead of overwriting a row in place and locking out concurrent readers, MVCC stamps each tuple version with the creating transaction ID (`xmin` in Postgres) and deleting/updating transaction ID (`xmax`). When a transaction starts, it receives a snapshot of active transactions and reads the latest tuple version visible to its snapshot.",
+      "body": "Older database engines achieved isolation by locking rows or entire tables: readers placed shared locks that blocked writers, and writers placed exclusive locks that blocked readers. This destroyed concurrency. Modern engines (PostgreSQL, MySQL InnoDB, Oracle) solve this using MVCC. Instead of mutating rows in place, an update writes a new version of the row stamped with creation (`xmin`) and expiration (`xmax`) transaction IDs.",
       "bullets": [
-        "Zero Read Locks: Readers see a consistent historical snapshot without acquiring shared locks that stall writers.",
-        "Dead Tuples & Vacuuming: Old row versions must be cleaned up asynchronously (`AUTOVACUUM` in Postgres or purge threads in InnoDB).",
-        "Transaction Anti-Pattern: Calling a slow third-party API (like Stripe) inside an open database transaction holds locks and MVCC snapshots for seconds, collapsing database throughput."
+        "Non-Blocking Reads: A long-running analytics query reads snapshot versions created prior to its transaction start, completely unblocked by concurrent updates.",
+        "The Cost of MVCC (Table Bloat): Old row versions remain in table storage until removed. In PostgreSQL, the `VACUUM` process reclaims dead row space. Poorly tuned autovacuum causes catastrophic disk space bloat and performance degradation."
       ]
     }
   ],
   "tradeOffs": [
     {
-      "option": "Synchronous WAL Flush (fsync on every commit)",
-      "pros": "Zero committed data loss on OS crash or power failure (true ACID durability).",
-      "cons": "Commit latency is bounded by disk IOPS / NVMe flush speed.",
-      "bestFor": "Financial transactions, orders, user authentication, and core state."
+      "option": "Full ACID Transactions (Strict Wal fsync)",
+      "pros": "Guarantees zero data corruption and complete crash recovery; eliminates duplicate or partial state transitions.",
+      "cons": "Write throughput is bounded by disk `fsync` IOPS; distributed ACID across independent database nodes adds latency.",
+      "bestFor": "Financial transactions, billing ledgers, inventory reservation, and user account credentials."
     },
     {
-      "option": "Asynchronous / Group Commit (`synchronous_commit = off`)",
-      "pros": "Significantly higher write throughput by batching WAL flushes every few milliseconds.",
-      "cons": "Up to a few milliseconds of committed transactions can be lost on sudden host failure.",
-      "bestFor": "High-frequency analytics counters, audit logs, and non-critical telemetry."
+      "option": "Relaxed Durability (Asynchronous Commit)",
+      "pros": "Dramatically higher write throughput (10x+); decouples transaction commit acknowledgment from physical disk flush.",
+      "cons": "A server crash or power outage can lose the last 100-500ms of committed transactions.",
+      "bestFor": "Real-time gaming state, logging pipelines, session caches, and user activity counters."
     }
   ],
-  "interviewTip": "Always emphasize that external network calls (RPCs, payment gateways, message broker publishes) must never happen inside an open DB transaction block. Use an idempotency key or Transactional Outbox instead.",
+  "interviewTip": "Explain why readers don't block writers in modern databases: 'Postgres and MySQL implement Multi-Version Concurrency Control (MVCC). Each update writes a new version of the row with transaction timestamps, allowing readers to read a consistent snapshot without holding shared read locks.'",
   "jsonUrl": "/api/subtopics/database/db-transactions.json"
 }

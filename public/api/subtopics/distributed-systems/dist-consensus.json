@@ -3,55 +3,55 @@
   "topicId": "distributed-systems",
   "topicTitle": "Distributed Systems",
   "topicNumber": 6,
-  "subtopicNumber": "6.7",
+  "subtopicNumber": "6.1",
   "title": "Consensus: Raft/Paxos basics",
-  "subtitle": "How Replicated State Machines achieve linearizable fault-tolerant agreement using Raft Terms, Log Replication, and Quorum Safety.",
-  "readingTime": "10 min read",
-  "difficulty": "Staff+",
+  "subtitle": "How Replicated State Machines achieve linearizable agreement via terms, leader leases, log replication, and quorum safety.",
+  "readingTime": "9 min read",
+  "difficulty": "Advanced",
   "keyTakeaways": [
-    "Consensus algorithms (Raft, Multi-Paxos, ZAB) allow a cluster of `2f + 1` nodes to act as a single coherent Replicated State Machine, tolerating up to `f` node failures.",
-    "Raft decomposes consensus into three sub-problems: Leader Election (`RequestVote`), Log Replication (`AppendEntries`), and Safety (only nodes with all committed entries can win election).",
-    "Adding more nodes to a consensus group increases fault tolerance (5 nodes survive 2 failures vs 3 nodes surviving 1), but *decreases* write throughput because every write must replicate to more nodes."
+    "Distributed consensus allows a cluster of nodes to agree on a sequence of state transitions even when a minority of nodes crash or experience network partitions.",
+    "Raft decomposes consensus into explicit sub-problems: Leader Election, Log Replication, and Safety Invariants, making it significantly easier to implement than Paxos.",
+    "Serving linearizable reads does not require committing a new entry to disk on every read; consensus systems use ReadIndex or leader leases to verify leadership in memory."
   ],
-  "architectureDiagram": "                     RAFT REPLICATED STATE MACHINE (N = 3, Quorum = 2)\n  Client --- 1. Command ('SET x=5') ---> [Leader (Term 4)]\n                                           |  (2. Append to Local Log: idx=8, term=4)\n                    +----------------------+----------------------+\n                    | AppendEntries RPC                           | AppendEntries RPC\n                    v                                             v\n          [Follower A (Term 4)]                         [Follower B (Network Slow)]\n          (3. Appends idx=8 & ACKs!)                    (Still in flight...)\n                    |\n  Client <-- 4. Majority (2/3) Reached! Leader Commits idx=8 & Replies to Client",
+  "architectureDiagram": "RAFT REPLICATED STATE MACHINE ARCHITECTURE\n[ Client Write ] ---> [ Raft Leader (Term 4) ]\n                            |\n       +--------------------+--------------------+\n       | AppendEntries RPC                       | AppendEntries RPC\n       v                                         v\n[ Follower 1 (Term 4) ]                   [ Follower 2 (Term 4) ]\n(Writes to local disk WAL)                (Writes to local disk WAL)\n       |\n       +---> Majority Quorum (2 of 3) Reached! -> Leader Commits Entry -> Returns 200 OK",
   "sections": [
     {
-      "heading": "How Raft Works: Terms, Elections, and Log Replication",
-      "body": "Raft divides time into monotonically increasing logical **Terms** (acting as a logical clock). At any time, each node is in one of three states: **Leader**, **Follower**, or **Candidate**. Under normal operation, the Leader sends periodic `AppendEntries` heartbeats to Followers. If a Follower hears nothing within its randomized election timeout (`150ms–300ms`), it increments `currentTerm`, transitions to Candidate, votes for itself, and requests votes from peers via `RequestVote` RPCs.",
+      "heading": "How Raft Operates: Terms, Elections, and Log Replication",
+      "body": "Building a reliable distributed system on unreliable networks requires consensus. Raft models this as a Replicated State Machine: if all servers apply the exact same sequence of log commands in order to a deterministic state machine, they will arrive at the identical state. Raft divides time into arbitrary terms identified by monotonic integers.",
       "bullets": [
-        "Randomized Election Timeouts: By picking a random timeout between 150ms and 300ms, almost always one node times out first and wins a majority before any peer wakes up, preventing split votes.",
-        "Two-Phase Log Commit (`AppendEntries`): When the Leader receives a write, it appends the entry to its local WAL (uncommitted) and sends `AppendEntries` to all Followers in parallel. Once a majority (`floor(N/2) + 1`) persist the entry, the Leader advances `commitIndex`, applies the command to its State Machine, and notifies Followers on the next heartbeat.",
-        "Election Safety Restriction: A voter denies its vote to a Candidate if the Candidate's log is less up-to-date than the voter's own log (comparing `lastLogTerm` first, then `lastLogIndex`). Since any committed entry resides on a majority of nodes, and any election winner must also gather a majority of votes, the two majorities must intersect!"
+        "Leader Election: If a follower hears no heartbeat within a randomized election timeout (150-300ms), it increments its term, transitions to candidate, votes for itself, and requests votes from peers. It becomes leader upon receiving votes from a majority of nodes (`floor(N/2) + 1`).",
+        "Log Replication: The leader accepts writes from clients, appends them to its local log, and broadcasts `AppendEntries` RPCs to followers. Once a majority acknowledges writing the entry to disk, the leader marks the entry committed and applies it to its state machine.",
+        "Leader Completeness Safety: A candidate can only win an election if its log is at least as up-to-date as any other node in the majority. This guarantees committed entries are never overwritten or lost during elections."
       ],
       "codeSnippet": {
-        "title": "Raft RequestVote Log Up-To-Date Safety Check",
-        "code": "interface RequestVoteArgs {\n  term: number;\n  candidateId: string;\n  lastLogIndex: number;\n  lastLogTerm: number;\n}\n\nfunction canGrantVote(voter: RaftNodeState, req: RequestVoteArgs): boolean {\n  if (req.term < voter.currentTerm) return false;\n  const votedOk = voter.votedFor === null || voter.votedFor === req.candidateId;\n\n  // Raft Safety Property: Candidate's log must be at least as up-to-date as voter's log\n  const myLastTerm = voter.log[voter.log.length - 1].term;\n  const myLastIdx = voter.log.length - 1;\n  const logIsUpToDate =\n    req.lastLogTerm > myLastTerm ||\n    (req.lastLogTerm === myLastTerm && req.lastLogIndex >= myLastIdx);\n\n  return votedOk && logIsUpToDate;\n}"
+        "title": "Raft Election Timeout and Randomized Jitter in Go",
+        "code": "// Raft randomized election timer preventing split-vote deadlocks\nfunc (rf *Raft) resetElectionTimer() {\n  // 150ms to 300ms randomized interval\n  timeout := time.Duration(150 + rand.Intn(150)) * time.Millisecond\n  rf.electionTimer.Reset(timeout)\n}"
       }
     },
     {
-      "heading": "Linearizable Reads in Consensus Systems (ReadIndex & LeaseRead)",
-      "body": "A subtle trap in Raft: if a client sends a Read request to the Leader, can the Leader immediately return its local in-memory state? No! If the Leader was silently partitioned from the rest of the cluster 2 seconds ago, the other nodes may have already elected a new Leader in a higher Term and mutated the key. Serving from the partitioned old Leader would return a stale read.",
+      "heading": "Linearizable Reads Without Write Latency: ReadIndex and Leases",
+      "body": "A common misconception is that consensus engines must write a log entry to disk for every read request to prevent reading stale state. Because an old leader might have been partitioned off while a new leader was elected in a different network segment, reading directly from local memory risks serving stale data (split-brain read).",
       "bullets": [
-        "ReadIndex Optimization: The Leader records its current `commitIndex`, sends a lightweight heartbeat round to a majority of peers to confirm it is still the active Leader, waits until its state machine has applied at least `ReadIndex`, and serves the read without writing to the Raft log.",
-        "Leader Leases (Clock-Bounded): Using bounded clock drift (like Google Spanner's TrueTime or CockroachDB's Raft leases), the Leader serves local reads with 0 network hops while its lease is guaranteed not to have expired on peers.",
-        "Why Odd Cluster Sizes (3 or 5)? A 4-node cluster requires a majority of 3 nodes, meaning it can only tolerate 1 node failure (the exact same fault tolerance as a 3-node cluster), while requiring more nodes to acknowledge writes!"
+        "Log-Backed Read (Slow): Append a dummy NO-OP entry to the Raft log and wait for majority disk consensus before reading. Guarantees linearizability, but adds full disk `fsync` latency.",
+        "ReadIndex (Fast): The leader records its current commit index (`readIndex`) and sends a lightweight heartbeat round to followers. Once a majority confirms it is still leader, the leader waits until its state machine reaches that index and serves the read from memory without touching disk.",
+        "Leader Leases (Sub-Millisecond): The leader uses synchronized physical clocks or monotonic time intervals to assume leadership for a bounded lease window. Reads within that window execute in memory with zero network round trips."
       ]
     }
   ],
   "tradeOffs": [
     {
-      "option": "3-Node Raft / Paxos Group (Quorum = 2)",
-      "pros": "Lowest write latency and network fan-out; tolerates 1 node failure.",
-      "cons": "During planned maintenance on 1 node, a single unexpected crash on the remaining 2 halts the group.",
-      "bestFor": "Single-region high-speed consensus groups (etcd, Kafka KRaft, TiKV shards)."
+      "option": "Consensus-Backed Stores (etcd, Consul, ZooKeeper)",
+      "pros": "Strict linearizable consistency; prevents split-brain and double-booking; safe distributed locking and coordination.",
+      "cons": "Write throughput constrained by consensus round trips and leader capacity; requires an odd number of nodes (3 or 5).",
+      "bestFor": "Distributed lock managers, cluster metadata, Kubernetes control planes, and dynamic feature configurations."
     },
     {
-      "option": "5-Node Raft / Paxos Group (Quorum = 3)",
-      "pros": "Tolerates 2 simultaneous node failures; remains fault-tolerant even during rolling upgrades.",
-      "cons": "Higher network replication overhead and quorum commit latency.",
-      "bestFor": "Mission-critical control planes, global metadata stores, and multi-region spanner deployments."
+      "option": "Gossip-Based AP Stores (Cassandra, DynamoDB)",
+      "pros": "Massive write throughput; local writes succeed during network partitions; no single-leader bottleneck.",
+      "cons": "Reads can return stale or divergent data; requires application conflict resolution logic.",
+      "bestFor": "High-volume user event logging, shopping carts, and real-time chat message history."
     }
   ],
-  "interviewTip": "Never say 'We'll add more nodes to our ZooKeeper/etcd cluster to scale write throughput.' Consensus groups replicate *every* write to all nodes; to scale writes horizontally, partition the keyspace into multiple independent Raft groups ('Multi-Raft', used by CockroachDB and TiKV).",
+  "interviewTip": "When discussing etcd or Raft in interviews, explain how linearizable reads work: 'To serve linearizable reads without paying disk fsync latency on every query, etcd implements ReadIndex. The leader exchanges lightweight in-memory heartbeats with a quorum to confirm it hasn't been deposed, then serves the read from memory once its state machine catches up.'",
   "jsonUrl": "/api/subtopics/distributed-systems/dist-consensus.json"
 }

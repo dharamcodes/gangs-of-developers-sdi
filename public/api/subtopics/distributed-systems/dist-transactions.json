@@ -3,54 +3,54 @@
   "topicId": "distributed-systems",
   "topicTitle": "Distributed Systems",
   "topicNumber": 6,
-  "subtopicNumber": "6.9",
+  "subtopicNumber": "6.12",
   "title": "Distributed Transactions",
-  "subtitle": "Atomic commitment across shards and services: Two-Phase Commit (2PC), coordinator blocking bottlenecks, and Google Percolator / Spanner.",
-  "readingTime": "9 min read",
+  "subtitle": "Atomic commitment across shards and services: Two-Phase Commit (2PC), coordinator blocking, and Google Spanner.",
+  "readingTime": "8 min read",
   "difficulty": "Advanced",
   "keyTakeaways": [
-    "Two-Phase Commit (2PC) achieves atomic all-or-nothing commits across multiple database shards using a Prepare (Voting) phase and a Commit phase.",
-    "2PC is a **blocking protocol**: if a participant votes `YES` in Phase 1 and the Coordinator crashes before broadcasting Phase 2, the participant cannot unilaterally abort or commit, holding locks indefinitely.",
-    "Modern Distributed SQL databases (Google Spanner, CockroachDB) combine 2PC across shards with Raft/Paxos consensus groups inside each shard soneither the coordinator nor participants are single points of failure."
+    "Two-Phase Commit (2PC) coordinates atomic transaction commitment across multiple independent nodes via a Prepare phase and a Commit phase.",
+    "The fatal flaw of traditional 2PC is that it is a blocking protocol: if the coordinator crashes during the uncertainty window, participants hold open locks indefinitely.",
+    "Modern distributed databases (Spanner, CockroachDB) make 2PC fault-tolerant by hosting both the coordinator and participants on high-availability Raft/Paxos consensus groups."
   ],
-  "architectureDiagram": "                     TWO-PHASE COMMIT (2PC) PROTOCOL\n  Coordinator                         Shard A (Wallet)          Shard B (Orders)\n       |--- 1a. PREPARE (Tx 99) ----------->|                         |\n       |--- 1b. PREPARE (Tx 99) ------------|------------------------>|\n       |                               (Locks Row &              (Locks Row &\n       |                                fsyncs Undo/Redo)         fsyncs Undo/Redo)\n       |<-- 2a. VOTE_YES -------------------|                         |\n       |<-- 2b. VOTE_YES -------------------|-------------------------|\n  [Writes COMMIT to Coordinator WAL]        |                         |\n       |--- 3a. GLOBAL_COMMIT ------------->| (Releases Lock)         |\n       |--- 3b. GLOBAL_COMMIT --------------|------------------------>| (Releases Lock)",
+  "architectureDiagram": "TWO-PHASE COMMIT (2PC) EXECUTION & UNCERTAINTY WINDOW\n[ 2PC Coordinator ]\n        |\n  PHASE 1: PREPARE\n        |--- Can you commit? ---> [ Node A ] (Acquires locks, writes WAL, votes YES)\n        |--- Can you commit? ---> [ Node B ] (Acquires locks, writes WAL, votes YES)\n        |\n  [ COORDINATOR CRASHES HERE! ] -> UNCERTAINTY WINDOW!\n  Node A and Node B cannot commit, cannot abort, and must hold locks indefinitely!\n        |\n  PHASE 2: COMMIT (If Coordinator stays healthy)\n        |--- Global COMMIT! ----> [ Node A ] (Applies change, releases locks)\n        |--- Global COMMIT! ----> [ Node B ] (Applies change, releases locks)",
   "sections": [
     {
-      "heading": "Anatomy of Two-Phase Commit (2PC) & The Uncertainty Window",
-      "body": "When a single transaction must atomically update data living on two separate physical shards (or two separate databases via XA), a Transaction Coordinator orchestrates Two-Phase Commit (2PC). In **Phase 1 (Prepare)**, the coordinator asks all participants if they *can* commit. Voting `YES` is a binding promise: the participant must acquire all locks, validate constraints, and flush its redo/undo log records to disk before replying `YES`. In **Phase 2 (Commit/Abort)**, if all participants voted `YES`, the coordinator writes a commit decision to its own WAL and tells all participants to commit; if any voted `NO` or timed out, it tells all to roll back.",
+      "heading": "Anatomy of Two-Phase Commit and the Uncertainty Window",
+      "body": "When an ACID transaction spans data stored across multiple physically partitioned database shards, single-node locking is insufficient. Two-Phase Commit (2PC) ensures that either all shards commit the change or all roll back.",
       "bullets": [
-        "Why Participants Cannot Back Out After Voting YES: Once a participant replies `YES`, it enters an 'in-doubt' state. If the Coordinator crashes right after collecting votes, the participant doesn't know whether the other shard already received `GLOBAL_COMMIT`. It must hold its row locks and wait until the Coordinator recovers!",
-        "Latency Multiplication: 2PC requires multiple synchronous network round-trips and multiple sequential disk `fsync` barriers across all participating nodes, amplifying lock hold duration by 5–10x.",
-        "Three-Phase Commit (3PC): Attempts to remove blocking by adding a `Pre-Commit` phase and timeouts, but fails in asynchronous networks with partitions (FLP Impossibility)."
+        "Phase 1 (Prepare): The coordinator sends a `Prepare` message to all participant shards. Each shard executes the query locally, acquires row locks, flushes undo/redo records to disk, and replies `VOTE_COMMIT` or `VOTE_ABORT`.",
+        "Phase 2 (Commit): If all participants vote YES, the coordinator writes a `COMMIT` record to its log and sends `GLOBAL_COMMIT` to all shards. If any participant votes NO, the coordinator sends `GLOBAL_ABORT`.",
+        "The Blocking Vulnerability: If all participants vote YES and the coordinator crashes before sending Phase 2, participants are stuck in the Uncertainty Window. They cannot unilaterally abort (the coordinator might have sent commit to others) and cannot unilaterally commit. They must hold database row locks open indefinitely until the coordinator recovers."
       ],
       "codeSnippet": {
-        "title": "Coordinator Recovery Logic for In-Doubt 2PC Transactions",
-        "code": "// When a 2PC Coordinator restarts after a crash, it scans its durable WAL:\nasync function recoverCoordinatorTransactions(walRecords: CoordinatorLogEntry[]) {\n  for (const tx of walRecords) {\n    if (tx.state === 'COMMITTED') {\n      // Phase 2 decision was logged before crash: retry COMMIT until all participants ACK\n      await broadcastWithRetry(tx.participants, 'GLOBAL_COMMIT', tx.txId);\n    } else if (tx.state === 'PREPARING') {\n      // Crash happened before all votes were collected/logged: safe to ABORT everywhere\n      await broadcastWithRetry(tx.participants, 'GLOBAL_ABORT', tx.txId);\n    }\n  }\n}"
+        "title": "Two-Phase Commit Coordinator State Machine Logic",
+        "code": "export class TwoPhaseCommitCoordinator {\n  async executeTransaction(participants: ParticipantNode[]): Promise<boolean> {\n    // Phase 1: Prepare\n    const votes = await Promise.all(\n      participants.map(p => p.prepare())\n    );\n\n    const allYes = votes.every(v => v === 'VOTE_COMMIT');\n\n    // Write decision durably to coordinator log BEFORE sending Phase 2\n    await this.logDecision(allYes ? 'GLOBAL_COMMIT' : 'GLOBAL_ABORT');\n\n    // Phase 2: Commit / Abort\n    const decision = allYes ? 'GLOBAL_COMMIT' : 'GLOBAL_ABORT';\n    await Promise.all(\n      participants.map(p => p.commitOrAbort(decision))\n    );\n\n    return allYes;\n  }\n}"
       }
     },
     {
-      "heading": "How Spanner & CockroachDB Make 2PC Fault-Tolerant",
-      "body": "If 2PC is slow and fragile when a single Coordinator machine crashes, how do Google Spanner and CockroachDB run distributed ACID transactions at massive scale? Instead of running 2PC across fragile single machines, they run **2PC across Raft/Paxos Consensus Groups**.",
+      "heading": "How Spanner and CockroachDB Modernize 2PC",
+      "body": "Modern NewSQL databases prove that distributed transactions can work at scale by eliminating 2PC single points of failure.",
       "bullets": [
-        "High-Availability Coordinator: Both the Coordinator and every Participant shard are replicated across 3–5 nodes via Raft/Paxos. If one physical machine crashes during Phase 1, the Raft group elects a new leader in milliseconds and completes the 2PC without blocking!",
-        "Google Percolator / Parallel Commits: CockroachDB pipelines the Coordinator commit record and Participant intent staging in parallel, cutting distributed commit latency to a single consensus round-trip."
+        "Consensus-Backed Participants: Instead of running 2PC across fragile single servers, each participant in Google Spanner and CockroachDB is an independent Raft or Paxos consensus group. If a physical server dies, its Raft group elects a new leader immediately, eliminating blocking locks.",
+        "TrueTime and Hardware Clocks: Google Spanner uses GPS receivers and atomic clocks in each datacenter (TrueTime API) to bound clock uncertainty (`[earliest, latest]`), enabling lock-free distributed read transactions across continents."
       ]
     }
   ],
   "tradeOffs": [
     {
-      "option": "Two-Phase Commit (2PC / XA / Distributed SQL)",
-      "pros": "Provides strict ACID atomicity and serializability across multiple shards; no compensating logic needed.",
-      "cons": "Holds locks across network round-trips; couples availability of all participating shards.",
-      "bestFor": "Cross-shard financial transfers within the same Distributed SQL database (Spanner/CockroachDB)."
+      "option": "Classic Two-Phase Commit (2PC)",
+      "pros": "Provides strict distributed ACID guarantees across heterogeneous systems.",
+      "cons": "Blocking protocol; coordinator crash freezes locks; latency equals the slowest network hop across all participants.",
+      "bestFor": "Enterprise integration brokers (XA transactions) with tightly bounded low-volume operations."
     },
     {
-      "option": "Asynchronous Saga Pattern (Compensating Transactions)",
-      "pros": "No distributed locks held across network calls; decouples availability of independent microservices.",
-      "cons": "Lacks isolation (intermediate state is visible); requires writing idempotent compensating actions.",
-      "bestFor": "Cross-microservice workflows spanning heterogeneous databases or external third-party APIs."
+      "option": "Modern NewSQL (Spanner / CockroachDB)",
+      "pros": "Full linearizable distributed ACID transactions; non-blocking failover via internal Raft consensus groups.",
+      "cons": "Higher write latency than localized single-node databases due to multi-AZ consensus round trips.",
+      "bestFor": "Global banking cores, multi-region account ledgers, and inventory allocation systems."
     }
   ],
-  "interviewTip": "In a microservice architecture where Order Service, Payment Service, and Inventory Service each own private databases, advise *against* XA / 2PC across services (because holding DB locks over HTTP/RPC kills availability) and propose the Saga Pattern instead.",
+  "interviewTip": "Never propose traditional Two-Phase Commit (2PC) across microservices in an interview. State clearly: 'Traditional 2PC across microservices creates blocking locks that reduce availability. For multi-service workflows, we should use the Saga pattern with compensating transactions. If strict ACID is mandatory across shards, we should use a NewSQL database like CockroachDB where participants are backed by Raft groups.'",
   "jsonUrl": "/api/subtopics/distributed-systems/dist-transactions.json"
 }

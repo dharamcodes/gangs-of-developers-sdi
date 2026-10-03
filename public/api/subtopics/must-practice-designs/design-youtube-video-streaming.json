@@ -5,48 +5,45 @@
   "topicNumber": 13,
   "subtopicNumber": "13.15",
   "title": "YouTube / Video Streaming",
-  "subtitle": "Designing a planet-scale video upload, DAG-based GOP chunk transcoding, and Adaptive Bitrate (ABR) HLS/DASH CDN delivery platform",
+  "subtitle": "Video streaming platform: resumable chunked uploads, DAG transcoding, ABR packaging, and edge CDN delivery.",
   "readingTime": "20 min",
   "difficulty": "Staff+",
   "keyTakeaways": [
-    "Never upload or transcode a raw multi-gigabyte video as a single monolith: use S3 Multipart Presigned URLs for resumable chunked uploads and split the video at Group-of-Pictures (GOP / keyframe) boundaries so hundreds of worker containers transcode 4-second segments in parallel.",
-    "Deliver smooth playback over fluctuating mobile networks via Adaptive Bitrate (ABR) streaming (HLS `.m3u8` / MPEG-DASH `.mpd`): the client player measures real-time throughput and buffer health to dynamically switch between `360p`, `720p`, `1080p`, and `4K` fMP4 segments at every 4-second boundary.",
-    "Follow the 80/20 Pareto rule across multi-tier CDN storage: serve the top 5% viral videos directly from ISP Edge NVMe RAM/SSD caches (OpenConnect / Edge PoPs), the next 20% from Regional Origin Shields, and long-tail archival videos from S3 with Per-Title Convex-Hull encoding."
+    "Never process raw multi-gigabyte video uploads as a single monolithic file: use S3 presigned multipart uploads and split video files at Group-of-Pictures (GOP) keyframe boundaries so worker clusters can transcode 4-second chunks in parallel.",
+    "Deliver smooth playback over fluctuating cellular networks using Adaptive Bitrate (ABR) streaming (HLS / DASH): client players measure buffer health and network throughput to switch dynamically between 360p, 720p, 1080p, and 4K at chunk boundaries.",
+    "Apply multi-tier CDN storage: cache the top 5% viral videos on edge NVMe SSDs near users, keep the next 20% in regional origin shields, and store long-tail archival videos in cold cloud object storage."
   ],
   "architectureDiagram": "+-------------------+   1. Init Upload & Get Presigned URLs   +------------------------+\n| Creator Client    | --------------------------------------> | Upload & Metadata API  |\n| (Web / Mobile)    |                                         | (Sharded Vitess/MySQL) |\n+---------+---------+                                         +------------------------+\n          | 2. Direct Resumable Multipart PUT (4-8MB chunks)\n          v\n+-----------------------------------+      S3 Event       +----------------------------+\n| S3 Raw Ingest Bucket (Edge Accel) | ------------------> | Transcoding DAG Orchestr.  |\n+-----------------------------------+                     | (Splits on GOP Keyframes)  |\n                                                          +--------------+-------------+\n                                                                         |\n                          +----------------------------------------------+\n                          | Parallel Segment Tasks (Kafka / Temporal)\n                          v\n+--------------------------------------------------------------------------------------+\n|                DISTRIBUTED GPU/ASIC TRANSCODING WORKER FLEET                         |\n|  * Scene-Cut & GOP Demuxer -> Parallel 4-sec Segment Encoders                        |\n|  * Codecs: H.264 (Compat), VP9, AV1 (Top Viral) | Ladder: 240p, 480p, 720p, 1080p, 4K|\n|  * Thumbnail Sprite Generator + Audio Tracks + Whisper AI Captions + Content Mod     |\n+-----------------------------------------+--------------------------------------------+\n                                          | Writes `.m4s` segments + `.m3u8` / `.mpd`\n                                          v\n+--------------------------------------------------------------------------------------+\n|                S3 ORIGIN STORAGE + REGIONAL ORIGIN SHIELD CACHES                     |\n+-----------------------------------------+--------------------------------------------+\n                                          |\n                                          v\n+--------------------------------------------------------------------------------------+\n|             GLOBAL EDGE CDN POPs (ISP OpenConnect / Anycast NVMe Edge)               |\n|  * Serves HLS/DASH Manifests & 4-Second `.m4s` fMP4 Segments (`Cache-Control: max`)  |\n+-----------------------------------------+--------------------------------------------+\n                                          | HTTPS / QUIC (HTTP/3) ABR Segment Fetch\n                                          v\n+--------------------------------------------------------------------------------------+\n|                   VIEWER PLAYER (Adaptive Bitrate Buffer Controller)                 |\n+--------------------------------------------------------------------------------------+",
   "sections": [
     {
       "heading": "1. Requirements Engineering & Scope Boundaries",
-      "body": "We are designing a global video sharing and on-demand streaming platform like YouTube capable of ingesting 500+ hours of uploaded video every minute and streaming billions of hours of low-latency adaptive video daily.",
+      "body": "A global Video Streaming Platform allows creators to upload high-definition video files, transcodes them into multiple resolutions, and streams them reliably to millions of concurrent viewers worldwide.",
       "bullets": [
-        "Functional: Resumable Large File Uploads: Creators upload raw video files up to 128 GB over potentially unstable connections with pause/resume support.",
-        "Functional: Parallel Multi-Resolution & Multi-Codec Transcoding: Convert raw uploads into multiple resolutions (`240p`, `360p`, `480p`, `720p`, `1080p`, `1440p`, `4K`) and codecs (`H.264/AVC`, `VP9`, `AV1`), generate thumbnail preview sprites, extract audio tracks, and produce HLS/DASH manifests.",
-        "Functional: Adaptive Bitrate (ABR) Playback: Viewers stream video with sub-second time-to-first-frame, dynamically switching video quality mid-stream based on client bandwidth and buffer occupancy without rebuffering.",
-        "Functional: Video Metadata & Engagement Counters: View video titles, descriptions, channels, and high-concurrency view/like counts.",
-        "Non-Functional: High Availability & Low Startup Latency: 99.99% playback availability; Time-to-First-Frame (TTFF) < 800ms globally; rebuffer ratio < 0.2%.",
-        "Non-Functional: Durability & Eventual Consistency: 99.999999999% (11 nines) durability on uploaded creator source files; eventual consistency is acceptable for view counts, likes, and newly published video search indexing.",
-        "Out of Scope: Ultra-low-latency WebRTC live streaming chat, recommendation ML collaborative filtering ranking models, and ContentID copyright lawsuit arbitration workflows."
+        "Functional: Resumable chunked video upload; asynchronous transcoding into multiple resolutions (360p, 720p, 1080p, 4K); Adaptive Bitrate (ABR) streaming playback.",
+        "Functional: Video metadata management (title, description, tags, view count) and thumbnail extraction.",
+        "Non-Functional: Sub-2 second video startup latency; minimal buffering during playback over fluctuating mobile connections.",
+        "Non-Functional: High durability for uploaded master videos (99.999999999% via cloud object storage).",
+        "Out of Scope: Live streaming real-time WebRTC ingest, automated copyrighted content fingerprint matching, and real-time ad insertion auctions."
       ]
     },
     {
       "heading": "2. Traffic Modeling & Workload Assumptions",
-      "body": "We size the platform for YouTube-scale global traffic where egress bandwidth and storage dominate engineering costs.",
+      "body": "Video platforms have massive storage and egress bandwidth demands driven by asymmetric upload vs view ratios.",
       "bullets": [
-        "Daily Active Users (DAU): 1 Billion DAU watching an average of 5 videos per day (average watched duration = 6 minutes per video).",
-        "Video Upload Rate: 500 hours of new video uploaded every minute = 720,000 hours of new video per day (~8.64 Million 5-minute videos uploaded/day).",
-        "Read:Write Ratio: ~580:1 video streams to uploads (5 Billion daily video views vs. 8.64 Million daily uploads).",
-        "Peak Traffic Multiplier: 2.5x global prime-time peak (8:00 PM–11:00 PM across major regional timezones).",
-        "Media Payload Sizes: Source upload bitrate ~15 Mbps (112 MB per minute). Transcoded ABR ladder total across 6 resolutions (H.264 + VP9/AV1) = ~25 Mbps combined (~187.5 MB per minute of video across all renditions). Average streamed bitrate per viewer (weighted around 720p/1080p VP9/AV1) = 3.5 Mbps."
+        "Upload Volume: 500 hours of video uploaded every minute (~30,000 hours/hour, or ~720,000 hours/day).",
+        "Viewer Volume: 1 billion daily active views averaging 10 minutes of watch time = 10 billion minutes of video streamed/day.",
+        "Storage Ingestion: Average raw upload bitrate = 20 Mbps (~9 GB/hour). Daily master storage ingest = 720,000 * 9 GB = ~6.48 PB/day.",
+        "Transcoded Storage: Transcoding into 4 resolutions (360p, 720p, 1080p, 4K) adds ~4x storage overhead, requiring ~25 PB of new storage daily.",
+        "Egress Bandwidth: 10 billion minutes/day at average 3 Mbps streaming bitrate = ~3.75 Tbps of continuous outbound CDN bandwidth."
       ]
     },
     {
       "heading": "3. Back-of-the-Envelope Capacity Calculations",
-      "body": "Video streaming is the ultimate bandwidth and storage problem: a single 4-second 1080p segment is ~2 MB, so offloading 95%+ of traffic to ISP Edge CDNs is mandatory.",
+      "body": "Bandwidth and storage calculations demonstrate why video platforms rely completely on distributed edge CDNs and chunk-level transcoding pipelines.",
       "bullets": [
-        "Upload & Playback QPS: 8.64M uploads/day / 86,400s = 100 Video Uploads/sec average (250 Peak). 5B video views/day / 86,400s = ~57,870 Playback Start QPS average (144,675 Peak). With 6-minute (360s) average watch time and 4-second HLS/DASH segments (90 segments/view), clients fetch 5B * 90 / 86,400s = **5.2 Million CDN segment requests/sec** average (**13 Million segment req/sec peak**).",
-        "Redis Metadata & View Counter Memory (RAM): 100 Million active/hot videos cached in Redis * 1 KB metadata + view/like Sharded Counter state = ~100 GB RAM across a regional Redis cluster.",
-        "5-Year Storage (Transcoded Video Corpus on S3/Colossus): 720,000 hours uploaded/day * 60 mins/hr = 43.2 Million minutes of new video/day. At ~187.5 MB/minute across the full multi-resolution ABR ladder = **8.1 PB/day** of new transcoded video! Over 5 years (1,825 days) = **~14.78 Exabytes (EB)** (using Reed-Solomon 10+4 erasure coding `1.4x` overhead instead of 3x replication saves ~23 EB of raw disks!).",
-        "Ingress & Egress Bandwidth: Upload Ingress = 500 hours/min = 30,000 seconds of video uploaded per real second * 15 Mbps (~1.875 MB/s) = **56.25 GB/s (450 Gbps)**. Playback Egress = 5 Billion views/day * 360s / 86,400s = ~20.83 Million concurrent active streams * 3.5 Mbps (0.4375 MB/s) = **9.11 TB/s (72.9 Tbps) average** -> **182 Tbps at 2.5x peak** served from global CDN Edge PoPs!"
+        "Egress bandwidth scale: 10 billion minutes / 86,400 seconds = ~115,000 concurrent streaming hours per second. At 3 Mbps average bitrate = ~345 Gbps baseline, peaking at 1.5 to 2 Tbps during peak evening hours.",
+        "CDN offload requirement: No origin data center can afford 2 Tbps of direct egress. The edge CDN must achieve a 95%+ Cache Hit Ratio (CHR) to keep origin traffic under 100 Gbps.",
+        "Transcoding compute sizing: Transcoding 720,000 hours of video daily within 24 hours requires a distributed fleet capable of processing 30,000 hours of video per hour in parallel."
       ],
       "codeSnippet": {
         "title": "YouTube Video Streaming Capacity & Storage Estimation Sheet",
@@ -55,13 +52,12 @@
     },
     {
       "heading": "4. API Interface Contracts & Data Domain Models",
-      "body": "Core external REST/gRPC/WebSocket API contracts, request/response payloads, and underlying storage entities with primary keys (PK), foreign keys (FK), secondary/clustering indexes (IDX), and relationship cardinalities.",
+      "body": "Video APIs must support multipart resumable upload sessions, manifest retrieval, and metadata queries.",
       "bullets": [
-        "POST /api/v1/videos/uploads/init: Creates video metadata row in UPLOADING state and returns S3 Multipart Upload ID + Pre-Signed part URLs.",
-        "GET /api/v1/videos/{videoId}/playback: Returns HMAC-signed HLS (master.m3u8) and DASH (manifest.mpd) URLs routed to nearest ISP Edge PoP.",
-        "POST /api/v1/videos/{videoId}/heartbeat: Streams viewer watch-time progress and QoE rebuffering telemetry."
+        "Upload Initiation: `POST /v1/videos/upload-session` returns `{ uploadId, presignedChunkUrls: [...] }`.",
+        "Playback API: `GET /v1/videos/{videoId}/master.m3u8` returns the HLS master playlist referencing sub-playlists for 360p, 720p, 1080p, and 4K.",
+        "Metadata Schema (PostgreSQL/CockroachDB): Stores `video_id`, `uploader_id`, `title`, `duration`, `status` (`UPLOADING`, `TRANSCODING`, `READY`), and manifest URLs."
       ],
-      "erDiagramUrl": "/diagrams/er-design-youtube-video-streaming.svg",
       "codeSnippet": {
         "title": "API Contracts & Storage Entity Schemas",
         "code": "// 1. Initialize Resumable Multipart Video Upload\nPOST /api/v1/videos/uploads/init\nRequest:\n{\n  \"creator_id\": \"usr_7712\",\n  \"title\": \"System Design Deep Dive: Distributed Consensus\",\n  \"file_size_bytes\": 1073741824,\n  \"part_size_bytes\": 67108864\n}\nResponse (201 Created):\n{\n  \"video_id\": \"v_9xK2pQ1a\",\n  \"s3_upload_id\": \"upl_01HV9Z9912\",\n  \"presigned_part_urls\": [\n    { \"part_number\": 1, \"put_url\": \"https://s3.amazonaws.com/god-raw-video/v_9xK2pQ1a?partNumber=1&.\" }\n  ]\n}\n\n// 2. Fetch Adaptive Bitrate Playback Manifest\nGET /api/v1/videos/v_9xK2pQ1a/playback\nResponse (200 OK):\n{\n  \"video_id\": \"v_9xK2pQ1a\",\n  \"status\": \"READY\",\n  \"hls_master_playlist_url\": \"https://edge-bom01.cdn.god.ly/v/v_9xK2pQ1a/master.m3u8?token=.\",\n  \"dash_manifest_url\": \"https://edge-bom01.cdn.god.ly/v/v_9xK2pQ1a/manifest.mpd?token=.\",\n  \"available_renditions\": [\"360p_h264\", \"720p_h264\", \"1080p_vp9\", \"2160p_av1\"]\n}\n\n// ---------------------------------------------------------------------------\n// Core Storage Entities & Schema Definitions\n// ---------------------------------------------------------------------------\nENTITY videos_metadata (Sharded MySQL (Vitess)) {\n  [PK ] video_id               VARCHAR(16)\n  [IDX] creator_id             UUID\n        title                  VARCHAR(255)\n        status                 ENUM('UPLOADING','TRANSCODING','READY')\n        duration_seconds       INT\n}\n\nENTITY transcode_renditions (Sharded MySQL (Vitess)) {\n  [PK ] rendition_id           UUID\n  [FK ] video_id               VARCHAR(16)\n        profile                ENUM('360p','720p','1080p','4K')\n        codec                  ENUM('H264','VP9','AV1')\n        playlist_s3_uri        VARCHAR(512)\n}\n\nENTITY gop_video_segments (S3 Origin + ISP Edge CDN Cache) {\n  [PK ] rendition_id           UUID (Composite PK)\n  [PK ] segment_seq_no         INT (0.N, 4s GOP)\n        fmp4_cdn_path          VARCHAR (/v/{id}/1080p/seg_N.m4s)\n        size_bytes             INT\n}\n\n// Relationships: videos_metadata --(1 : N (encoded profiles))--> transcode_renditions --(1 : N (4-second fMP4 chunks))--> gop_video_segments"
@@ -69,59 +65,58 @@
     },
     {
       "heading": "5. High-Level Architecture Blueprint & Component Topology",
-      "body": "The architecture separates into three decoupled pipelines: (1) **Resumable Direct-to-Object-Store Upload**, (2) **DAG-Orchestrated Parallel GOP Transcoding**, and (3) **Hierarchical Multi-Tier Edge CDN ABR Delivery**.",
+      "body": "The video architecture separates the ingestion and transcoding pipeline from the streaming CDN delivery path.",
       "bullets": [
-        "Resumable Multipart Upload Gateway: Splits a 4 GB creator upload into 500 x 8 MB parts uploaded directly to S3 Transfer Acceleration endpoints. If the creator's Wi-Fi drops at 92%, the client queries completed part `ETag`s and resumes only the remaining 8%.",
-        "GOP Demuxer & DAG Transcoding Orchestrator: A 1-hour 4K video would take hours to transcode sequentially on one CPU. Instead, a fast Demuxer scans the video container headers (`moov` atom) and splits the video at **GOP (Group of Pictures / IDR Keyframe)** boundaries into 4-second chunks. It fans out `900 chunks x 6 resolutions` across thousands of spot GPU/ASIC workers in parallel, finishing a 1-hour video in under 60 seconds!",
-        "Two-Speed Encoding Strategy: Immediately encode `360p` and `720p` H.264 first so the video becomes playable (`status = READY`) within seconds of upload; asynchronously encode compute-heavy `1080p`/`4K` VP9 and AV1 renditions in the background.",
-        "Three-Tier CDN Hierarchy (ISP Edge -> Regional Shield -> S3 Origin): Immutable 4-second `.m4s` video segments are cached with `Cache-Control: public, max-age=31536000, immutable` at ISP PoPs, absorbing 96%+ of global egress."
+        "Upload Service: Generates S3 presigned multipart URLs so client mobile devices upload chunks directly to S3 buckets, bypassing application servers.",
+        "Transcoding Orchestrator (DAG Pipeline): Triggers on S3 upload completion, splits raw video into 4-second GOP chunks, and schedules parallel FFmpeg tasks.",
+        "Transcoding Worker Fleet: Spot/Preemptible GPU instances running containerized FFmpeg workers that output fragmented MP4 (fMP4) chunks.",
+        "Storage Tier: Cloud object storage (S3) holding master videos, video segments, and `.m3u8` playlist files.",
+        "Global CDN Tier: Edge POPs that cache 4-second video segments close to viewers worldwide."
       ],
       "diagramImageUrl": "/diagrams/design-youtube-video-streaming.svg",
       "asciiDiagram": "+------------------------------------------------------------------------------------+\n|                        1. UPLOAD & PARALLEL TRANSCODING PLANE                      |\n+------------------------------------------------------------------------------------+\n[Creator App] --(1. POST /uploads)--> [Upload Svc] --(Returns Presigned Part URLs)\n      |\n      +--(2. Direct Parallel PUT 8MB Parts)--> [S3 Raw Bucket]\n                                                      |\n                                        (3. S3 ObjectCreated Event)\n                                                      v\n                                    +-----------------------------------+\n                                    |    GOP DEMUXER & SCENE DETECTOR   |\n                                    |  Splits video on 4s IDR Keyframes |\n                                    |  into independent GOP Chunks      |\n                                    +-----------------+-----------------+\n                                                      |\n                  +-----------------------------------+-----------------------------------+\n                  |                                   |                                   |\n                  v                                   v                                   v\n      +-----------------------+           +-----------------------+           +-----------------------+\n      |   VIDEO WORKER POOL   |           |   AUDIO & CAPTIONS    |           |  THUMBNAIL & SAFETY   |\n      | * Chunk 1.N x Ladder |           | * AAC / Opus Tracks   |           | * WebP Sprite Sheets  |\n      | * Fast Lane: 360p/720p|           | * Whisper ASR VTT Sub |           | * CSAM / NSFW Vision  |\n      | * Quality: 1080p/4K   |           +-----------+-----------+           +-----------+-----------+\n      +-----------+-----------+                       |                                   |\n                  |                                   |                                   |\n                  +-----------------------------------+-----------------------------------+\n                                                      |\n                                                      v\n                                    +-----------------------------------+\n                                    |   MANIFEST PACKAGER (HLS / DASH)  |\n                                    |  Writes `.m4s` fMP4 segments &    |\n                                    |  `master.m3u8` / `manifest.mpd`   |\n                                    +-----------------+-----------------+\n                                                      |\n                                                      v\n+------------------------------------------------------------------------------------+\n|                     2. HIERARCHICAL CDN & ABR PLAYBACK PLANE                       |\n+------------------------------------------------------------------------------------+\n+-----------------------------------+     Cache Miss (<1%)    +----------------------+\n| REGIONAL ORIGIN SHIELD CACHE      | ----------------------> | S3 TRANSCODED ORIGIN |\n+-----------------+-----------------+                         +----------------------+\n                  ^\n                  | Cache Miss (~4%)\n+-----------------+------------------------------------------------------------------+\n|                   ISP EDGE CDN POPs (95%+ Cache Hit Ratio on NVMe)                 |\n|  * Serves `/v/{videoId}/1080p_vp9/seg_0042.m4s` over HTTP/3 (QUIC)                 |\n+-----------------+------------------------------------------------------------------+\n                  ^\n                  | Adaptive Bitrate Loop (Switches 480p <-> 1080p <-> 4K per 4s seg)\n+-----------------+------------------------------------------------------------------+\n|                 VIEWER CLIENT PLAYER (Buffer + Throughput Estimator)               |\n+------------------------------------------------------------------------------------+"
     },
     {
       "heading": "6. Deep-Dive Execution Flows & Core Logic",
-      "body": "We examine the two defining video pipelines: GOP-aligned parallel transcoding DAG execution on ingest and Adaptive Bitrate (ABR) HLS playback on stream delivery.",
+      "body": "Transcoding multi-gigabyte videos sequentially takes hours. Splitting videos into independent keyframe chunks enables near-real-time parallel processing.",
       "bullets": [
-        "GOP-Aligned Parallel Transcoding DAG (Demuxer -> Transcoder Fleet): When an upload completes, the demuxer splits the raw video into 4-second Group-of-Pictures (GOP) segments aligned strictly at IDR keyframes. Segment encoding tasks are enqueued to Kafka, allowing a distributed fleet of GPU workers to transcode segments across multiple resolution profiles (`1080p`, `720p`, `480p`, `360p`) simultaneously in parallel.",
-        "Adaptive Bitrate (ABR) HLS Master Manifest (.m3u8) & CDN Streaming: When a user clicks play, the service validates access and returns a signed master `.m3u8` manifest containing variant streams (`1080p`, `720p`, `480p`, `360p`). The client video player dynamically samples download speed per 4-second segment and switches rendition bitrates seamlessly without buffering during network drops."
+        "GOP (Group of Pictures) chunking: A video consists of keyframes (I-frames) followed by delta frames (P/B-frames). Split the master file strictly at I-frame boundaries into 4-second segments so each chunk can be decoded and encoded independently.",
+        "Parallel DAG transcoding: A 60-minute video yields 900 chunks. Distribute the 900 chunks across 100 worker containers. All chunks transcode in parallel within 2 to 3 minutes, followed by a stitcher step that writes the master HLS manifest.",
+        "Adaptive Bitrate (ABR) switching: The client video player monitors download speed and buffer fullness. If buffer health drops below 4 seconds, the player switches to downloading the 720p chunk instead of 1080p, preventing playback stalls."
       ],
-      "flowDiagramUrl": "/diagrams/flow-design-youtube-video-streaming.svg",
       "diagramImageUrl": "/diagrams/flow-design-youtube-video-streaming.svg"
     },
     {
       "heading": "7. Production Hardening, Fault Tolerance & Resilience",
-      "body": "At exabyte scale, optimizing encoding efficiency, hardware acceleration, and CDN cache hit ratios saves hundreds of millions of dollars per year.",
+      "body": "Optimizing CDN cache efficiency and handling spot instance interruptions are central to video platform economics.",
       "bullets": [
-        "Per-Title / Per-Scene Convex-Hull Encoding: A simple 2D cartoon or slide lecture looks crystal-clear at `1080p` using only `1.2 Mbps`, whereas a high-motion sports broadcast needs `6.5 Mbps`. Run a fast complexity probe pass on each GOP chunk to select the optimal `(resolution, CRF/bitrate)` points on the VMAF quality convex hull, cutting global bandwidth by 25–35%.",
-        "Custom Silicon Transcoding (Google Argos VCU / Hardware ASICs): Software CPU encoding of AV1 is 20x slower than H.264. Offload video transcoding to custom Video Coding Unit (VCU) ASICs, reserving expensive AV1/VP9 dual-pass encoding for videos that cross 1,000+ views/hour.",
-        "Popularity-Based Storage Tiering (Just-in-Time Transcoding for Cold Tail): Over 70% of uploaded videos receive fewer than 10 views per month. Delete bulky intermediate renditions (`1440p`, `480p`) for cold videos older than 90 days, keeping only the original archival master and `720p` H.264, and re-transcode on the fly if an old video suddenly goes viral.",
-        "Write-Behind Sharded View Counters + HyperLogLog Anti-Bot Filtering: A viral music video can receive 500,000 views/sec. Increment sharded counters in local Redis / Kafka streams (`view_count:{videoId}:{shard_0.63}`) and flush aggregated deltas to Vitess/MySQL every 30 seconds.",
-        "CMCD (Common Media Client Data) & Multi-CDN Traffic Steering: Players attach buffer health and throughput headers (`CMCD-Buffer`, `CMCD-Request`) on every `.m4s` fetch, while a real-time DNS/Manifest traffic router shifts viewers away from congested CDN PoPs across Cloudflare, Akamai, Fastly, and ISP OpenConnect boxes."
+        "Spot instance termination handling: Transcoding workers run on cheap cloud Spot/Preemptible instances. Because chunks are small (4 seconds), if a spot instance is reclaimed, the orchestrator simply reschedules that single chunk on another worker.",
+        "Pre-warming video manifests: When a video from a popular creator goes live, push the master playlist and first three 4-second chunks to regional CDN edge caches before notifying subscribers, eliminating the initial stampede on origin storage.",
+        "Tiered storage lifecycle: After 30 days, move master raw upload files to cold archival storage (Glacier), keeping only optimized ABR chunks on standard object storage."
       ]
     }
   ],
   "tradeOffs": [
     {
-      "option": "HLS / MPEG-DASH over HTTP/3 (QUIC) with 4-Second fMP4 Segments",
-      "pros": "Works seamlessly with every global HTTP CDN cache, traverses corporate/mobile NAT firewalls effortlessly, and enables fine-grained ABR quality switching every 4 seconds.",
-      "cons": "Inherent 2–6 second latency floor compared to frame-by-frame WebRTC (irrelevant for on-demand VOD, mitigated via LL-HLS partial segments for live streams).",
-      "bestFor": "Global Video-on-Demand (VOD) platforms like YouTube, Netflix, and Disney+."
+      "option": "GOP-Chunked Distributed Transcoding",
+      "pros": "Massive parallelization; a 2-hour 4K video transcodes in minutes; spot instance reclaims only drop a 4-second task.",
+      "cons": "Requires complex DAG orchestration and precise I-frame boundary splitting logic.",
+      "bestFor": "Large-scale video platforms (YouTube, Netflix, Vimeo) processing thousands of hours daily."
     },
     {
-      "option": "AV1 / VP9 Codecs vs. H.264 (AVC)",
-      "pros": "AV1 and VP9 reduce bitrate by 30–50% at identical perceptual quality (VMAF) compared to H.264, saving massive CDN egress costs.",
-      "cons": "Encoding AV1 requires 10x–15x more compute cycles than H.264, and older legacy TVs/IoT devices only have hardware decoders for H.264.",
-      "bestFor": "Tiered encoding: always encode H.264 for universal compatibility and fast-lane publishing; encode VP9/AV1 asynchronously for popular videos."
+      "option": "Monolithic Single-Worker Transcoding",
+      "pros": "Simple architecture; run FFmpeg directly on a single large compute instance.",
+      "cons": "Takes hours for long videos; if the instance crashes at 98%, the entire transcoding job must restart from scratch.",
+      "bestFor": "Small internal video tools or low-traffic platforms with short (< 2 minute) video clips."
     },
     {
-      "option": "Pre-Transcoding All Resolutions vs. Just-in-Time (On-the-Fly) Transcoding",
-      "pros": "Pre-transcoding guarantees zero compute latency at playback time and static CDN caching; Just-in-Time saves 70%+ storage on un-watched long-tail uploads.",
-      "cons": "Just-in-Time transcoding can overwhelm GPU pools if an uncached video suddenly goes viral.",
-      "bestFor": "Hybrid strategy: pre-transcode 360p/720p on upload, pre-transcode full 4K AV1 ladder for active channels, and evict intermediate renditions on cold archival videos."
+      "option": "Direct S3 Presigned Uploads vs Gateway Proxying",
+      "pros": "Client uploads go directly to object storage; zero upload bandwidth or memory overhead on application servers.",
+      "cons": "Requires client-side multipart chunk management and S3 webhook integration for upload completion.",
+      "bestFor": "Any production platform handling user-generated video or large file uploads."
     }
   ],
-  "interviewTip": "In a YouTube interview, stand out by explaining **GOP-aligned parallel chunk transcoding** (splitting a raw video at IDR keyframes so 500 workers encode 4-second segments concurrently in under a minute) and **Two-Speed Encoding** (publishing 360p/720p H.264 immediately so the creator's video is playable in seconds, while queuing expensive 4K AV1 encoding asynchronously based on view velocity).",
+  "interviewTip": "Never propose uploading or transcoding a 10 GB video file as a single monolithic unit. Explain how S3 presigned multipart uploads handle the upload, and how splitting the video at GOP (Group of Pictures) boundaries allows hundreds of worker containers to transcode chunks in parallel.",
   "diagramImageUrl": "/diagrams/design-youtube-video-streaming.svg",
   "jsonUrl": "/api/subtopics/must-practice-designs/design-youtube-video-streaming.json",
   "flowDiagramUrl": "/diagrams/flow-design-youtube-video-streaming.svg"

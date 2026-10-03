@@ -3,57 +3,55 @@
   "topicId": "networking",
   "topicTitle": "Networking",
   "topicNumber": 2,
-  "subtopicNumber": "2.3",
+  "subtopicNumber": "2.2",
   "title": "HTTP/1.1 vs HTTP/2 vs HTTP/3",
-  "subtitle": "How web transport evolved from text-based serial connections to binary TCP multiplexing and finally QUIC over UDP.",
+  "subtitle": "How transport protocols evolved from serialized TCP sockets to binary multiplexing and finally QUIC over UDP.",
   "readingTime": "8 min read",
   "difficulty": "Intermediate",
   "keyTakeaways": [
-    "HTTP/1.1 suffers from Application-Layer Head-of-Line (HoL) blocking, forcing browsers to open up to 6 parallel TCP connections per domain.",
-    "HTTP/2 introduces binary framing, HPACK header compression, and stream multiplexing over a single TCP connection, but remains vulnerable to TCP-Layer HoL blocking on packet loss.",
-    "HTTP/3 replaces TCP with QUIC over UDP, multiplexing independent streams in user space so a lost packet only stalls the single affected stream, while enabling 0-RTT/1-RTT combined TLS handshakes."
+    "HTTP/1.1 suffered from application-level head-of-line blocking because requests on a single TCP connection had to be answered sequentially.",
+    "HTTP/2 solved application head-of-line blocking via binary stream multiplexing over a single TCP socket, but introduced transport-level blocking when single packets drop.",
+    "HTTP/3 eliminates transport head-of-line blocking entirely by replacing TCP with QUIC over UDP, giving each stream independent loss recovery and zero-RTT reconnection."
   ],
-  "architectureDiagram": "HTTP/1.1 (6 TCP Conns)       HTTP/2 (1 TCP Conn)          HTTP/3 (QUIC over UDP)\n+------+ +------+ +------+   +------------------------+   +------------------------+\n|Req 1 | |Req 2 | |Req 3 |   | Stream 1 | Stream 2    |   | Stream 1 | Stream 2    |\n| (JS) | |(CSS) | |(Img) |   | (Framed) | (Framed)    |   | (QUIC)   | (QUIC)      |\n+------+ +------+ +------+   +------------------------+   +------------------------+\n| TCP  | | TCP  | | TCP  |   |   Single TCP Stream    |   |      UDP Datagrams     |\n+------+ +------+ +------+   +------------------------+   +------------------------+\nApp-layer HoL blocking!      Lost TCP pkt stalls ALL!     Lost pkt stalls ONLY S1!",
+  "architectureDiagram": "HTTP/1.1: [ Req 1 ] -> [ Resp 1 ] -> [ Req 2 ] -> [ Resp 2 ] (Serialized)\n\nHTTP/2:   [ Stream 1: Chunk A ][ Stream 2: Chunk A ][ Stream 1: Chunk B ] (TCP Stream)\n          (Dropping one TCP packet halts all active streams)\n\nHTTP/3:   [ Stream 1 (UDP) ]    [ Stream 2 (UDP) ]    [ Stream 3 (UDP) ]\n          (Dropping a packet on Stream 1 does not affect Stream 2)",
   "sections": [
     {
-      "heading": "From HTTP/1.1 Text Queues to HTTP/2 Binary Multiplexing",
-      "body": "In HTTP/1.1, requests on a persistent connection must be processed strictly in order: if Request #1 takes 200ms on the server, Request #2 behind it cannot receive its response first (Application-Layer Head-of-Line blocking). Browsers worked around this by opening 6 parallel TCP connections per origin and using hacks like CSS sprites and domain sharding. **HTTP/2** solved this at the application layer by breaking every request and response into small binary frames tagged with a `Stream ID`, allowing hundreds of concurrent requests to interleave over a **single TCP connection**, alongside HPACK header compression.",
+      "heading": "From HTTP/1.1 Queuing to HTTP/2 Multiplexing",
+      "body": "HTTP/1.1 formats messages as human-readable text and requires a response to complete before the next request can be sent on that socket. Browsers worked around this head-of-line blocking by opening up to six concurrent TCP connections per domain. HTTP/2 fundamentally changed this by replacing plaintext with binary framing: headers and data are broken into frames stamped with stream IDs, allowing hundreds of concurrent requests and responses to interleave over a single TCP connection.",
       "bullets": [
-        "Binary Framing Layer: Parses compact binary frames instead of error-prone newline-delimited ASCII text.",
-        "HPACK Header Compression: Eliminates redundant transmission of bloated `Cookie` and `User-Agent` headers across requests.",
-        "The Catch in HTTP/2: Because all HTTP/2 streams share one underlying TCP socket, if a single TCP packet drops on a lossy cellular network (2% packet loss), the OS kernel blocks ALL HTTP/2 streams until that packet is retransmitted!"
+        "Binary Framing: Replaces ASCII parsing with compact binary frames, cutting parsing overhead and syntax ambiguity.",
+        "Stream Multiplexing: Eliminates the need for multiple TCP sockets, connection keep-alive pools, and domain sharding hacks.",
+        "HPACK Header Compression: Uses a shared dynamic table to compress redundant HTTP headers across subsequent requests on the same connection."
       ],
       "codeSnippet": {
-        "title": "Comparing Handshake Round-Trips Across HTTP Generations",
-        "code": "/*\n * Connection Setup Latency before First Byte of Application Request Sent:\n *\n * 1. HTTP/1.1 & HTTP/2 over TLS 1.2:\n *    - TCP 3-Way Handshake:        1 RTT\n *    - TLS 1.2 Handshake:          2 RTTs\n *    - Total Setup Cost:           3 RTTs before HTTP request!\n *\n * 2. HTTP/2 over TLS 1.3:\n *    - TCP 3-Way Handshake:        1 RTT\n *    - TLS 1.3 Handshake:          1 RTT\n *    - Total Setup Cost:           2 RTTs\n *\n * 3. HTTP/3 (QUIC over UDP with built-in TLS 1.3):\n *    - Transport + TLS Combined:   1 RTT (New connection)\n *    - Session Resumption:         0 RTT (Send HTTP request in very first packet!)\n */"
-      },
-      "diagramImageUrl": "/diagrams/arch-http-1-1-vs-http-2-vs-http-3.svg"
+        "title": "Stream Multiplexing Mechanics Across Generations",
+        "code": "/*\n * HTTP/1.1:\n * Socket 1: [ GET /index.html ] -> [ 200 OK ] -> [ GET /style.css ] -> [ 200 OK ]\n * (If /index.html takes 500ms, /style.css waits behind it!)\n *\n * HTTP/2:\n * Single TCP Socket:\n * [ Frame: Stream 1 (HTML chunk 1) ]\n * [ Frame: Stream 3 (CSS chunk 1)  ]\n * [ Frame: Stream 1 (HTML chunk 2) ]\n * [ Frame: Stream 5 (Image chunk 1)]\n * (Interleaved concurrently!)\n *\n * The Catch in HTTP/2:\n * If packet containing [Stream 3: CSS chunk 1] drops on the network,\n * the OS TCP stack pauses ALL streams until that packet is retransmitted.\n */"
+      }
     },
     {
-      "heading": "HTTP/3 and QUIC: Solving TCP Head-of-Line Blocking",
-      "body": "To eliminate TCP-level Head-of-Line blocking without waiting 15 years for every OS kernel and middlebox router on Earth to upgrade TCP, Google designed **QUIC** (standardized as the transport layer for **HTTP/3**). QUIC runs on top of UDP in user space. It implements stream awareness directly inside the transport protocol: if a UDP packet carrying bytes for Stream #4 is lost, Streams #1, #2, and #3 continue delivering data to the application immediately.",
+      "heading": "HTTP/3 and QUIC: Eliminating TCP Head-of-Line Blocking",
+      "body": "While HTTP/2 solved application head-of-line blocking, it exposed TCP's transport-level head-of-line blocking. Because TCP enforces strict byte-stream ordering, if a single packet drops on a lossy cellular connection, the operating system kernel holds all subsequent bytes in memory until the missing packet is retransmitted—stalling every multiplexed HTTP/2 stream simultaneously. HTTP/3 solves this by operating over UDP using QUIC. In QUIC, each stream manages its own sequence numbers and flow control; dropping a packet on Stream 1 has zero impact on Streams 2 or 3.",
       "bullets": [
-        "Combined Transport + Crypto Handshake: QUIC embeds TLS 1.3 directly into its handshake, requiring only 1 RTT for new connections and 0-RTT for resumed connections.",
-        "Connection Migration (Connection ID): When a user walks out of their house and switches from Wi-Fi IP to 5G Cellular IP, TCP connections break. QUIC identifies connections by a 64-bit `Connection ID`, surviving IP/port changes seamlessly!",
-        "QPACK Compression: Upgraded header compression tailored for out-of-order QUIC stream delivery."
+        "Independent Packet Streams: Packet loss on one resource never halts unrelated assets.",
+        "Integrated 1-RTT Handshake: QUIC combines the transport handshake and TLS 1.3 cryptographic negotiation into a single round trip (0-RTT on reconnects).",
+        "Connection Migration: Connections are tracked by a 64-bit Connection ID rather than the 4-tuple of IP/Port, allowing mobile devices to switch seamlessly between Wi-Fi and 5G without dropping active downloads."
       ]
     }
   ],
   "tradeOffs": [
     {
       "option": "HTTP/2 over TCP",
-      "pros": "Universal support across all load balancers, corporate firewalls, and runtimes; low CPU overhead due to kernel TCP offload (TSO); required transport for gRPC.",
-      "cons": "Suffers from TCP-layer Head-of-Line blocking on lossy networks (>1-2% packet loss); breaks when client IP changes (Wi-Fi to 5G).",
-      "bestFor": "Internal data-center microservice communication (gRPC), stable broadband connections, and standard cloud backends."
+      "pros": "Mature tooling, universal corporate firewall support; excellent throughput over stable, low-loss datacenter networks.",
+      "cons": "Suffers severe throughput degradation on lossy mobile networks due to TCP head-of-line blocking and slow-start retransmits.",
+      "bestFor": "Internal microservice RPC meshes (gRPC), server-to-server communications, and enterprise LANs."
     },
     {
       "option": "HTTP/3 over QUIC (UDP)",
-      "pros": "Zero cross-stream HoL blocking on lossy mobile networks, 1-RTT/0-RTT handshakes, seamless Wi-Fi-to-Cellular connection migration.",
-      "cons": "Higher CPU usage in user-space UDP encryption/packet pacing, some enterprise networks block UDP port 443 (requires fallback to HTTP/2).",
-      "bestFor": "Mobile apps on spotty cellular connections, global CDN edge delivery (Cloudflare/Fastly), and latency-critical web apps."
+      "pros": "Immune to transport head-of-line blocking; instantaneous connection migration on mobile networks; fastest connection setup.",
+      "cons": "Higher CPU utilization on edge servers for UDP packet processing; some corporate firewalls block outbound UDP traffic on port 443.",
+      "bestFor": "Public-facing mobile apps, streaming media, edge CDN delivery, and interactive web client traffic."
     }
   ],
-  "interviewTip": "If your system design involves mobile clients on flaky networks (e.g., Uber driver app, WhatsApp, Instagram), explicitly recommend HTTP/3 (QUIC) at the CDN edge for connection migration (switching from Wi-Fi to 5G without dropping in-flight uploads) and 0-RTT resumption.",
-  "jsonUrl": "/api/subtopics/networking/http-1-1-vs-http-2-vs-http-3.json",
-  "diagramImageUrl": "/diagrams/arch-http-1-1-vs-http-2-vs-http-3.svg"
+  "interviewTip": "When asked why HTTP/3 moved to UDP, don't just say 'because UDP is faster.' Explain that TCP guarantees in-order byte delivery, so a dropped packet halts all multiplexed streams in the kernel. HTTP/3 moves reliability into user-space streams over UDP so packet loss on one stream doesn't stall others.",
+  "jsonUrl": "/api/subtopics/networking/http-1-1-vs-http-2-vs-http-3.json"
 }

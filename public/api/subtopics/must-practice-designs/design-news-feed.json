@@ -5,48 +5,44 @@
   "topicNumber": 13,
   "subtopicNumber": "13.6",
   "title": "News Feed",
-  "subtitle": "Hybrid Fanout-on-Write / Fanout-on-Read Timeline Engine, Celebrity Hot-Key Mitigation & ML Ranking Pipeline",
+  "subtitle": "Social feed architecture: hybrid fan-out, celebrity hot-key handling, and cursor pagination.",
   "readingTime": "24 min",
   "difficulty": "Staff+",
   "keyTakeaways": [
-    "Use a Hybrid Fanout strategy: push (fanout-on-write) post IDs into Redis ZSET timelines for regular users (< 50,000 followers), and pull (fanout-on-read) dynamically at query time for high-follower 'celebrity' accounts.",
-    "Store only lightweight references (`(postId, authorId, createdAt)` = 24 bytes) in the user's timeline cache, hydrating full post & user metadata in bulk via a pipelined L1/L2 cache layer.",
-    "Use cursor-based pagination (`max_timestamp` / Snowflake ID) instead of `OFFSET/LIMIT` so scrolling remains deterministic and duplicate-free even as new posts arrive at the top of the feed."
+    "Use a hybrid fan-out model: push (fanout-on-write) post IDs into timelines for normal users (< 25,000 followers), and pull (fanout-on-read) dynamically at query time for high-follower celebrity accounts.",
+    "Store only lightweight references (postId, authorId, createdAt) in user timeline caches, hydrating post text and author metadata in bulk using multi-get queries against a cached object store.",
+    "Always use cursor-based pagination (based on post timestamp or Snowflake ID) instead of SQL OFFSET/LIMIT so scrolling remains stable and duplicate-free as new posts arrive."
   ],
   "architectureDiagram": "+------------+     +---------------+     +--------------------+\n| Mobile/Web | --> |  API Gateway  | --> |  Post / Feed Svc   |\n+------------+     +---------------+     +---------+----------+\n                                                   |\n                    +------------------------------+------------------------------+\n                    | (Write Path)                                                | (Read Path)\n                    v                                                             v\n          +-------------------+                                         +-------------------+\n          |   Kafka: posts    |                                         | Timeline Aggreg.  |\n          +---------+---------+                                         +---------+---------+\n                    |                                                             |\n        +-----------+-----------+                                   +-------------+-------------+\n        | (<50K Followers)      | (>50K Celebrity)                  | (Precomputed)             | (Celebrity Pull)\n        v                       v                                   v                           v\n+---------------+       +---------------+                   +---------------+           +---------------+\n| Fanout Worker |       | Author Index  |                   | User Timeline |           | Author Index  |\n| (Push to ZSET)|       | (Outbox ZSET) |                   |  Redis ZSET   |           |  Redis ZSET   |\n+-------+-------+       +---------------+                   +-------+-------+           +-------+-------+\n        |                                                           |                           |\n        +---------------------------------------------------+-------+---------------------------+\n                                                            |\n                                                            v\n                                                  +-------------------+\n                                                  | Post & User Cache |\n                                                  |  (Hydration L2)   |\n                                                  +-------------------+",
   "sections": [
     {
       "heading": "1. Requirements Engineering & Scope Boundaries",
-      "body": "A News Feed system (like X/Twitter, Instagram, or LinkedIn) aggregates posts from followed users, topics, and communities into a personalized, low-latency stream. The central engineering tension is handling extreme fanout asymmetry when accounts with tens of millions of followers publish content.",
+      "body": "A News Feed system aggregates, ranks, and serves a personalized stream of content posted by friends and followed entities with sub-second response times.",
       "bullets": [
-        "Functional Requirements: (1) Users can publish posts containing text, media URLs, and hashtags; (2) Users can follow/unfollow other users; (3) Users can fetch their home timeline ordered chronologically or by relevance score with cursor pagination; (4) Real-time engagement counters (likes, replies, reposts) appear on timeline cards.",
-        "Non-Functional Requirements: (1) Availability: 99.99% AP system (eventual consistency of 1–5 seconds for new posts appearing in followers' feeds is acceptable); (2) Latency: P99 < 200ms for timeline generation and hydration, P99 < 150ms for publishing a post; (3) Celebrity Fanout SLA: A post from a user with 50M followers must be visible to active readers within 2 seconds without exhausting cluster write IOPS.",
-        "Out of Scope: Direct messaging, ad auction bidding mechanics, raw video transcoding pipelines (handled by an external Media Service), and full-text search indexing."
+        "Functional: Users can publish posts (text, image URLs); users can follow/unfollow other users; users can view a chronological or ranked feed of posts from people they follow.",
+        "Functional: Fast pagination support as users scroll down their feed.",
+        "Non-Functional: Sub-200ms feed generation latency (p99); eventual consistency for post delivery (within 5 seconds across followers).",
+        "Non-Functional: High availability on read operations (feed browsing must remain operational even during database write degradations).",
+        "Out of Scope: Full-text post search, ad delivery auction engines, and live video streaming feeds."
       ]
     },
     {
       "heading": "2. Traffic Modeling & Workload Assumptions",
-      "body": "News feeds are heavily read-skewed in terms of user requests, yet write-amplified internally due to follower fanout.",
+      "body": "News feed platforms exhibit severe read skew and extreme follower variance between ordinary users and celebrity accounts.",
       "bullets": [
-        "Traffic & User Base: 1 Billion MAU, 300 Million DAU.",
-        "Write Traffic: Each DAU publishes an average of 2 posts/day -> 600 Million new posts/day.",
-        "Read Traffic: Each DAU opens or refreshes their home feed 20 times/day (fetching 20 posts per page) -> 6 Billion timeline read requests/day.",
-        "Read-to-Write Ratio: 10:1 at the API edge (6B reads vs 600M writes), though each write triggers an average fanout to 200 followers.",
-        "Peak Multiplier: 3x average traffic during breaking global events (World Cup, elections).",
-        "Average Payload Sizes: Post metadata + text = 1 KB; Timeline cache entry (`post_id` + `author_id` + `timestamp_score`) = 24 bytes; Media stored externally on Object Storage/CDN."
+        "User Base: 300 million daily active users (DAU). Each user checks their feed 5 times per day = 1.5 billion feed views/day (~17,500 reads/second average, peaking at 40,000 RPS).",
+        "Write Volume: 50 million new posts created per day (~600 writes/second average, peaking at 2,500 writes/second).",
+        "Follower Distribution: Median user has 200 followers; celebrity accounts have 10 to 50 million followers.",
+        "Timeline Cache Sizing: Store the latest 800 post IDs per active user. 800 post IDs * 24 bytes (post_id, author_id, timestamp) = ~19.2 KB per user. For 300 million DAU, timeline cache requires ~5.7 TB of RAM across a Redis cluster."
       ]
     },
     {
       "heading": "3. Back-of-the-Envelope Capacity Calculations",
-      "body": "We separate edge API QPS from internal fanout write QPS, and size the Redis cluster to retain the latest 800 post references for every active user.",
+      "body": "Analyzing fan-out write amplification proves why pure fanout-on-write collapses when celebrities post.",
       "bullets": [
-        "Write QPS (Edge): 600M posts / 86,400 sec ≈ 6,944 writes/sec average; Peak Write QPS (3x) ≈ 21,000 posts/sec.",
-        "Internal Fanout Write QPS: With 200 average followers per user, naive fanout = 6,944 × 200 ≈ 1.39M Redis ZADD ops/sec average (4.17M ops/sec peak). Hybrid fanout cuts celebrity writes, keeping internal fanout under 1.5M ops/sec at peak.",
-        "Read QPS: 6B timeline requests / 86,400 sec ≈ 69,444 reads/sec average; Peak Read QPS (3x) ≈ 210,000 reads/sec.",
-        "Redis Timeline Cache Memory: Keep top 800 post entries per user for 300M DAU + 200M warm users (500M users total). Each entry = 24 bytes + ~16 bytes Redis ZSET skiplist overhead = 40 bytes. Per user = 800 × 40 B = 32 KB. Total Timeline RAM = 500M × 32 KB = 16 TB (32 TB with 1 replica per shard).",
-        "Post Metadata Cache Memory: Cache hot posts from the last 3 days (3 × 600M = 1.8B posts × 20% hot ratio = 360M posts) × 1 KB = 360 GB RAM.",
-        "5-Year Persistent Storage: 600M posts/day × 1 KB = 600 GB/day -> 219 TB/year -> 1.095 PB over 5 years. With 3x Cassandra/ScyllaDB replication + 30% B-Tree/LSM index overhead ≈ 4.27 PB.",
-        "Bandwidth: Ingress = 21,000 peak writes/sec × 1 KB = 21 MB/sec (168 Mbps); Egress = 210,000 peak reads/sec × (20 posts × 1 KB) = 4.2 GB/sec (33.6 Gbps)."
+        "Pure fanout-on-write write amplification: If a celebrity with 30 million followers posts, writing to 30 million user timelines generates 30 million cache writes for a single post. At 100 celebrity posts per day, this creates billions of background writes, saturating message queues and Redis clusters.",
+        "Cache memory budget: 300 million DAU * 800 items * 24 bytes = 5.76 TB. Divided across 64 Redis nodes (96 GB RAM each), each node comfortably holds ~90 GB of timeline data.",
+        "Post content storage: 50 million posts/day * 1 KB average text/metadata = 50 GB/day = 18.2 TB/year in persistent storage (PostgreSQL/Cassandra)."
       ],
       "codeSnippet": {
         "title": "News Feed Capacity & Memory Worksheet",
@@ -55,13 +51,12 @@
     },
     {
       "heading": "4. API Interface Contracts & Data Domain Models",
-      "body": "Core external REST/gRPC/WebSocket API contracts, request/response payloads, and underlying storage entities with primary keys (PK), foreign keys (FK), secondary/clustering indexes (IDX), and relationship cardinalities.",
+      "body": "Feed APIs must be paginated via cursors to avoid duplicate or skipped posts when new items arrive while a user is scrolling.",
       "bullets": [
-        "POST /api/v1/posts: Persists post and triggers async fanout-on-write (for normal users) or appends to celebrity outbox (for >=10k followers).",
-        "GET /api/v1/feed?cursor={max_post_id}&limit=20: Merges precomputed Redis ZSET timeline with followed celebrities' latest posts.",
-        "POST /api/v1/users/{targetId}/follow: Creates bidirectional graph edges in Follower/Following tables."
+        "Read API: `GET /v1/feed?cursor=1727788800123&limit=20` returns `{ items: [...], nextCursor: \"1727788795000\" }`.",
+        "Write API: `POST /v1/posts` takes `{ content, mediaUrls[] }` and returns `{ postId, createdAt }`.",
+        "Timeline data model: Stored in Redis Sorted Sets (`ZSET`), where the key is `timeline:{userId}`, the score is the post creation timestamp, and the value is `postId`."
       ],
-      "erDiagramUrl": "/diagrams/er-design-news-feed.svg",
       "codeSnippet": {
         "title": "API Contracts & Storage Entity Schemas",
         "code": "// 1. Publish Post\nPOST /api/v1/posts\nRequest:\n{\n  \"content\": \"Launching our new distributed caching layer today!\",\n  \"media_ids\": [\"med_8812\"]\n}\nResponse (201 Created):\n{\n  \"post_id\": \"718293910293847102\",\n  \"author_id\": \"440192\",\n  \"fanout_mode\": \"PUSH_ASYNC\",\n  \"created_at\": \"2026-09-30T16:25:00Z\"\n}\n\n// 2. Fetch Cursor-Paginated Home Timeline\nGET /api/v1/feed?cursor=718293910293847102&limit=20\nResponse (200 OK):\n{\n  \"items\": [\n    {\n      \"post_id\": \"718293910293847055\",\n      \"author\": { \"user_id\": \"9910\", \"handle\": \"@system_arch\" },\n      \"content\": \"Hybrid push-pull avoids celebrity write amplification.\",\n      \"like_count\": 412\n    }\n  ],\n  \"next_cursor\": \"718293800112233445\"\n}\n\n// ---------------------------------------------------------------------------\n// Core Storage Entities & Schema Definitions\n// ---------------------------------------------------------------------------\nENTITY users (PostgreSQL + Redis Cache) {\n  [PK ] user_id                BIGINT\n  [IDX] handle                 VARCHAR(64)\n        follower_count         INT\n  [IDX] is_celebrity           BOOLEAN (>= 10k)\n        created_at             TIMESTAMPTZ\n}\n\nENTITY follows_graph (Cassandra / Social Graph DB) {\n  [PK ] follower_id            BIGINT (Partition)\n  [PK ] followee_id            BIGINT (Clustering)\n        is_celeb_edge          BOOLEAN\n        created_at             TIMESTAMPTZ\n}\n\nENTITY posts (Cassandra + Redis Post Cache) {\n  [PK ] post_id                BIGINT (Snowflake)\n  [FK ] author_id              BIGINT\n        content                VARCHAR(2000)\n        media_urls             ARRAY<TEXT>\n  [IDX] created_at             TIMESTAMPTZ\n}\n\n// Relationships: users --(1 : N (social graph edges))--> follows_graph --(1 : N (publishes posts))--> posts"
@@ -69,60 +64,57 @@
     },
     {
       "heading": "5. High-Level Architecture Blueprint & Component Topology",
-      "body": "The architecture decouples the synchronous write path from asynchronous follower fanout using Kafka, while the read path combines precomputed user inbox timelines with on-the-fly celebrity outbox merges.",
+      "body": "The architecture cleanly separates post publishing, background timeline fan-out workers, and the feed assembly read pipeline.",
       "bullets": [
-        "API Gateway & Auth Layer: Terminates TLS, validates JWT tokens, enforces per-user rate limits, and routes traffic to Post Service or Feed Service.",
-        "Post Service & Cassandra/ScyllaDB Cluster: Generates Snowflake IDs, writes posts to the durable wide-column store (`posts_by_id` and `posts_by_author`), updates the author's Redis outbox (`outbox:{authorId}`), and publishes a `PostCreatedEvent` to Kafka.",
-        "Social Graph Service: Stores `followers` and `following` lists in sharded ScyllaDB tables cached in Redis, tagging celebrity edges so the Feed Service can quickly identify which celebrities a reader follows.",
-        "Fanout Worker Pool: Consumes `PostCreatedEvent` from Kafka. If the author has `< 50,000` followers, workers fetch follower IDs in pages and issue pipelined Redis `ZADD inbox:{followerId}` + `ZREMRANGEBYRANK` (capping at 800 entries).",
-        "Feed Service & Hydration Cache: On read, fetches the user's `inbox:{userId}` ZSET, queries the `outbox:{celebId}` ZSETs for followed celebrities, merges and sorts candidate post IDs, optionally runs a lightweight ML ranker, and bulk-hydrates post/user objects via `MGET` against the Post & User Cache."
+        "Post Service: Persists post metadata to Cassandra/Postgres, pushes creation events to Kafka, and notifies the Fan-out Service.",
+        "Fan-Out Worker Cluster: Consumes post events, queries the Follower Service, and injects post IDs into Redis timelines for regular users.",
+        "Feed Assembly Service: Handles feed queries. Fetches the user's timeline from Redis, queries celebrity posts via fanout-on-read, merges and ranks candidates, and hydrates full post objects from cache.",
+        "Metadata Hydration Layer: Uses multi-get calls against Memcached/Redis to hydrate author profiles and post text in a single network round trip."
       ],
       "diagramImageUrl": "/diagrams/design-news-feed.jpg",
       "asciiDiagram": "+-----------------------------------------------------------------------------------+\n|                              CLIENT TIER (Web / iOS / Android)                    |\n+-----------------------------------------+-----------------------------------------+\n                                          | HTTPS / HTTP3\n                                          v\n+-----------------------------------------------------------------------------------+\n|                      API GATEWAY (Auth, Rate Limiter, TLS)                        |\n+-------------------+-------------------------------------------+-------------------+\n                    | POST /api/v1/posts                        | GET /api/v1/feed\n                    v                                           v\n        +-----------------------+                   +-----------------------+\n        |     Post Service      |                   |     Feed Service      |\n        |  (Snowflake ID Gen)   |                   | (Hybrid Merge & Rank) |\n        +---+---------------+---+                   +---+-------+-------+---+\n            |               |                           |       |       |\n  (1) Write |     (2) Event |                 (1) Fetch |       |       | (3) Bulk MGET\n      Post  |               v                     Inbox |       |       |     Hydration\n            |     +-------------------+                 |       |       v\n            |     |   Kafka Cluster   |                 |       |   +---------------+\n            |     | Topic: post-events|                 |       |   | Post & User   |\n            |     +---------+---------+                 |       |   | Cache (Redis) |\n            |               |                           |       |   +-------+-------+\n            |               v                           |       |           | Cache Miss\n            |     +-------------------+                 |       |           v\n            |     |  Fanout Workers   |                 |       |   +---------------+\n            |     | (Check Follower #)|                 |       |   |  ScyllaDB     |\n            |     +---+-----------+---+                 |       |   | (Posts/Users) |\n            |         |           |                     |       |   +---------------+\n            |  < 50K  |           | >= 50K (Celeb)      |       |\n            |  Push   |           | No Fanout           |       | (2) Pull Celeb\n            |         v           v                     |       |     Outboxes\n            |   +-----------------------+               |       |\n            |   | User Inbox Timelines  |<--------------+       |\n            |   |  Redis ZSET (Cap 800) |                       |\n            |   +-----------------------+                       |\n            |                                                   |\n            +------------------>+-------------------------------+\n                                |\n                                v\n                      +-----------------------+\n                      | Celebrity Outboxes    |\n                      | Redis ZSET (Last 200) |\n                      +-----------------------+"
     },
     {
       "heading": "6. Deep-Dive Execution Flows & Core Logic",
-      "body": "We examine the two operational pipelines: fan-out-on-write timeline publishing for standard users and hybrid K-way read merge for celebrity accounts.",
+      "body": "The hybrid fan-out model combines the strengths of push and pull strategies while neutralizing their respective failure modes.",
       "bullets": [
-        "Post Creation & Fan-Out-on-Write for Normal Users (< 5,000 Followers): When a standard user posts, the Post Service persists the content and enqueues an asynchronous fan-out task. Workers query the follower graph and inject the post ID directly into each follower's Redis timeline (`ZADD timeline:{followerId} timestamp postId`), ensuring subsequent timeline retrievals take $O(1)$ time.",
-        "Hybrid Read Path: Merging Follower Timeline with Celebrity Fan-Out: When a user requests their feed, the Feed Service fetches the top 200 post IDs from their Redis timeline, issues parallel read queries for followed celebrity outboxes (who skip fan-out-on-write to avoid system saturation), performs a K-way merge sorted by timestamp, and passes candidate post IDs through an ML ranker before hydrating full post entities."
+        "Fan-out on write (Push) for regular users: When a user with 200 followers posts, the fan-out worker inserts the `postId` into all 200 followers' Redis Sorted Sets within 100ms. When those followers open their feed, reading is an instant O(1) Redis call.",
+        "Fan-out on read (Pull) for celebrities: When an account with >25,000 followers posts, the fan-out worker does NOT write to follower timelines. Instead, the post is saved only to the celebrity's author timeline.",
+        "Feed merge at read time: When a user requests their feed, the Feed Service fetches their Redis push timeline and pulls the latest posts from all followed celebrities, merging the streams using a k-way heap sort before applying ranking scores."
       ],
-      "flowDiagramUrl": "/diagrams/flow-design-news-feed.svg",
       "diagramImageUrl": "/diagrams/flow-design-news-feed.svg"
     },
     {
       "heading": "7. Production Hardening, Fault Tolerance & Resilience",
-      "body": "Taking a News Feed from a working prototype to a planetary-scale social network requires defending against viral hot keys, optimizing cache memory, and integrating ML ranking without violating the 200ms P99 budget.",
+      "body": "Scaling feed systems requires handling inactive users, cache evictions, and database partitions cleanly.",
       "bullets": [
-        "Viral Post Hot-Key Mitigation (L1 Local Caffeine Cache): When a celebrity posts a viral update, millions of readers simultaneously request hydration for the exact same `postId`. A single Redis shard holding that `post:{postId}` key can saturate its 100K ops/sec single-core limit. Each Feed Service instance maintains a 2-second TTL in-memory L1 `Caffeine` cache for top viral posts and celebrity `outbox:{celebId}` slices, absorbing 99% of hot-key reads inside JVM memory.",
-        "Cold User Eviction & Lazy Timeline Reconstruction: Pushing fanout writes to 700M inactive users wastes ~22 TB of Redis RAM. Only fan out to users active within the last 14–30 days. If a dormant user logs back in (cache miss on `inbox:{userId}`), trigger a fallback Fanout-on-Read query across their followed accounts to warm their inbox lazily.",
-        "Two-Stage ML Ranking Pipeline: For 'For You' algorithmic feeds, split ranking into Stage 1 (Retrieval/Candidate Generation collecting ~1,000 candidates from Graph Inbox, Topic Embeddings, and Trending pools in <30ms) and Stage 2 (Heavy Neural Ranker scoring those 1,000 candidates on GPU/ONNX inference servers in <60ms) before hydrating the top 20.",
-        "Read-Your-Own-Writes Consistency: Because Kafka fanout and celebrity cache propagation take 100ms–2s, the Feed Service always merges the caller's own `outbox:{callerUserId}` into their home timeline so a newly published post appears instantaneously at the top of the author's screen.",
-        "Graceful Degradation & Circuit Breaking: If the ML Ranking Service or Engagement Counter Service times out (>80ms), the Feed Service falls back to reverse-chronological Snowflake order with cached/approximate counter values rather than failing the timeline request."
+        "Inactive user pruning: Only maintain pre-computed push timelines for users who have logged in within the past 14 days. When an inactive user logs in, trigger an asynchronous rebuild of their timeline from database records.",
+        "Cursor stability vs OFFSET: Never use SQL `OFFSET 20 LIMIT 20`. If 5 new posts are published while the user is reading page 1, scrolling to page 2 with OFFSET will repeat 5 posts the user just saw. Cursors (`WHERE created_at < cursor LIMIT 20`) guarantee stable pagination.",
+        "Circuit breaking celebrity services: If the follower graph or celebrity feed puller experiences elevated latency, serve the user's pre-computed push timeline immediately with a degraded banner rather than timing out the entire feed."
       ]
     }
   ],
   "tradeOffs": [
     {
-      "option": "Pure Fanout-on-Write (Push Model)",
-      "pros": "O(1) timeline read latency from precomputed Redis ZSET; read path is completely decoupled from the number of accounts a user follows.",
-      "cons": "Massive write amplification for celebrity accounts (1 post -> 50M Redis writes), causing severe fanout lag and wasted RAM for inactive followers.",
-      "bestFor": "Social networks with hard caps on connections (e.g., early Facebook 5,000-friend limit) or small private group feeds."
+      "option": "Hybrid Fan-Out (Push for regular, Pull for celebrities)",
+      "pros": "Sub-100ms read latency for 95% of users; prevents celebrity write amplification storms from crushing Redis.",
+      "cons": "More complex read path; requires k-way merge sorting at query time for followed celebrity accounts.",
+      "bestFor": "Large-scale social networks (Twitter/X, Instagram, LinkedIn) with skewed follower distributions."
     },
     {
-      "option": "Pure Fanout-on-Read (Pull Model)",
-      "pros": "Zero write amplification on post creation; publishing a post is a single O(1) database write regardless of follower count.",
-      "cons": "Slow and expensive read path: every timeline load must query hundreds of followed authors' outboxes and perform a massive K-way merge.",
-      "bestFor": "Write-heavy telemetry streams or niche forums where users follow very few entities and read infrequently."
+      "option": "Pure Fan-Out on Write (Push Everything)",
+      "pros": "Ultra-fast read path: generating a feed is a single Redis ZREVRANGEBYSCORE call.",
+      "cons": "Catastrophic write amplification when high-follower accounts post; consumes massive queue bandwidth and memory.",
+      "bestFor": "Enterprise collaboration tools (Slack, Teams) where group sizes are bounded (e.g., < 1,000 members)."
     },
     {
-      "option": "Hybrid Fanout (Push Regular + Pull Celebrities)",
-      "pros": "Combines sub-50ms timeline reads with bounded write amplification; eliminates celebrity hot-write storms.",
-      "cons": "Higher implementation complexity on the read path (merging precomputed inbox ZSET with dynamic celebrity outbox ZSETs and deduplicating).",
-      "bestFor": "Large-scale asymmetric social graphs like X/Twitter, Instagram, Threads, and TikTok."
+      "option": "Pure Fan-Out on Read (Pull Everything)",
+      "pros": "Zero write amplification; post publishing is instantaneous; storage footprint is minimal.",
+      "cons": "Slow read path: every feed view requires querying hundreds of followed users and sorting results in real time.",
+      "bestFor": "Low-traffic platforms or systems where users follow very few accounts."
     }
   ],
-  "interviewTip": "Do not jump straight to 'Hybrid Fanout' as a buzzword, quantify *why* Pure Push fails first: show the interviewer that a celebrity with 50M followers publishing one post triggers 50M Redis writes, which at 1M ops/sec takes 50 seconds of queue lag. Then introduce the 50,000-follower threshold and explain how the reader merges their precomputed Inbox ZSET with followed Celebrity Outbox ZSETs at read time.",
+  "interviewTip": "When an interviewer asks how your feed handles a celebrity with 50 million followers, explain why pure push fails (write amplification) and propose the hybrid model: push for regular users, pull on read for celebrities, and merge results at query time.",
   "diagramImageUrl": "/diagrams/design-news-feed.jpg",
   "jsonUrl": "/api/subtopics/must-practice-designs/design-news-feed.json",
   "flowDiagramUrl": "/diagrams/flow-design-news-feed.svg"

@@ -5,53 +5,53 @@
   "topicNumber": 4,
   "subtopicNumber": "4.1",
   "title": "SQL vs NoSQL",
-  "subtitle": "Choosing between relational ACID engines and distributed non-relational data stores based on access patterns and scale.",
+  "subtitle": "Choosing between relational ACID engines and distributed non-relational stores based on access patterns and scale.",
   "readingTime": "8 min read",
   "difficulty": "Foundational",
   "keyTakeaways": [
-    "Relational (SQL) databases enforce schemas on write, support expressive joins, and provide strong ACID transactions out of the box.",
-    "NoSQL databases (Key-Value, Document, Wide-Column, Graph) optimize for specific access patterns, horizontal partitionability, and flexible schemas.",
-    "Modern architectures employ polyglot persistence, using PostgreSQL for core ledger/transactional state and DynamoDB/Cassandra for high-throughput telemetry or session state."
+    "SQL databases enforce strict schemas, foreign keys, and multi-row ACID transactions, making them ideal for complex relational domain models.",
+    "NoSQL stores trade arbitrary relational joins for horizontal partitionability and predictable sub-10ms latency at massive write scale.",
+    "The most common architectural mistake is adopting NoSQL for scalability when the domain model is inherently relational, forcing developers to build fragile client-side joins."
   ],
-  "architectureDiagram": "+--------------------------------------------------------------------+\n|                    POLYGLOT PERSISTENCE LAYER                      |\n+--------------------------------------------------------------------+\n         |                                         |\n         v (Relational / ACID)                     v (High-Scale / Key-Access)\n+-------------------------------+         +-------------------------------+\n|   PostgreSQL / MySQL (SQL)    |         |  DynamoDB / Cassandra (NoSQL) |\n|-------------------------------|         |-------------------------------|\n| - Normalized Tables (3NF)     |         | - Partition Key + Sort Key    |\n| - B+ Tree Storage Engine      |         | - LSM-Tree / Hash Storage     |\n| - Multi-Table Joins & Foreign |         | - Denormalized Single-Table   |\n|   Key Constraints             |         |   Aggregates                  |\n+-------------------------------+         +-------------------------------+",
+  "architectureDiagram": "SQL RELATIONAL MODEL VS NOSQL PARTITIONED MODEL\nSQL (Normalized Relational Model with Joins):\n[ Users Table ] <--- JOIN on user_id ---> [ Orders Table ] <--- JOIN on order_id ---> [ LineItems ]\n(Guarantees referential integrity; difficult to partition across independent physical nodes)\n\nNOSQL (Denormalized Partitioned Document / Wide-Column Model):\nPartition Key: \"user_102\"\nValue: { order_id: \"ord_99\", line_items: [ { sku: \"A1\", qty: 2 } ] }\n(Everything fetched in a single O(1) primary key seek; scales horizontally across 100 nodes)",
   "sections": [
     {
-      "heading": "Storage Engines & Data Modeling Philosophy",
-      "body": "In SQL databases, data is normalized into third normal form (3NF) to eliminate redundancy and maintain referential integrity. You model the domain entities first and write arbitrary ad-hoc queries later. In NoSQL systems like DynamoDB or Apache Cassandra, you must know your exact query access patterns upfront and model data around partition keys and sort keys, often duplicating data across items to serve reads in a single network hop without joins.",
+      "heading": "Storage Engines and Data Modeling Philosophies",
+      "body": "The division between SQL and NoSQL is primarily about access patterns and storage layout. Relational databases (PostgreSQL, MySQL) store data in normalized tables to eliminate redundancy and maintain referential integrity. Queries assemble disparate records at runtime using relational JOINs. NoSQL systems (MongoDB, DynamoDB, Cassandra) optimize for access paths known in advance, grouping all data required by a single view into a single document or partition key to eliminate cross-node network joins.",
       "bullets": [
-        "Document Stores (MongoDB): Store JSON/BSON documents; ideal when an entity and its nested children are fetched together.",
-        "Wide-Column Stores (Cassandra, Bigtable):LSM-tree backed; optimized for massive write throughput and time-series range scans.",
-        "Key-Value Stores (DynamoDB, Redis): O(1) hash lookup by primary key with predictable single-digit millisecond latency."
+        "Document Stores (MongoDB): Stores hierarchical JSON documents; flexible schemas; ideal for product catalogs and CMS content.",
+        "Wide-Column Stores (Cassandra, ScyllaDB): Uses partitioned row keys with sorted clustering columns; optimized for high-volume append-only writes (chat logs, time-series metrics).",
+        "Key-Value Stores (Redis, DynamoDB): O(1) lookups by primary key; minimal query flexibility, but delivers single-digit millisecond latency at arbitrary scale."
       ],
       "codeSnippet": {
-        "title": "SQL Normalized Join vs NoSQL Single-Table Design",
-        "code": "-- SQL: Normalized schema queried via JOIN\nSELECT o.id, o.total_cents, u.email\nFROM orders o\nJOIN users u ON o.user_id = u.id\nWHERE u.id = 'usr_991' ORDER BY o.created_at DESC LIMIT 10;\n\n// NoSQL (DynamoDB Single-Table Design): Pre-joined item collection\n// Partition Key (PK): 'USER#usr_991'\n// Sort Key (SK):      'ORDER#2026-09-30#ord_501'\nconst response = await dynamoClient.query({\n  TableName: 'CommerceApp',\n  KeyConditionExpression: 'PK = :pk AND begins_with(SK, :skPrefix)',\n  ExpressionAttributeValues: { ':pk': 'USER#usr_991', ':skPrefix': 'ORDER#' },\n  ScanIndexForward: false,\n  Limit: 10\n});"
+        "title": "Data Access Comparison: Relational JOIN vs NoSQL Partitioned Document",
+        "code": "-- 1. Relational SQL: Normalized schema with JOIN\nSELECT u.name, o.id, o.total, i.product_name\nFROM users u\nJOIN orders o ON u.id = o.user_id\nJOIN order_items i ON o.id = i.order_id\nWHERE u.id = $1;\n\n// 2. DynamoDB / NoSQL: Single O(1) query on pre-joined partition key\nconst orderItem = await dynamoDb.get({\n  TableName: \"UserOrders\",\n  Key: {\n    userId: \"usr_102\",      // Partition Key\n    orderId: \"ord_99824\"     // Sort / Clustering Key\n  }\n});"
       }
     },
     {
-      "heading": "Scaling Characteristics & Consistency Boundaries",
-      "body": "Traditional RDBMS engines were designed for single-node vertical scaling with shared-disk memory architectures. While NewSQL systems (CockroachDB, Google Spanner) add distributed consensus over relational SQL, they incur cross-node coordination latency. Native NoSQL systems shard automatically via consistent hashing, trading multi-key serializability for linear horizontal write scalability.",
+      "heading": "Scaling Characteristics and Consistency Boundaries",
+      "body": "Relational engines scale vertically; scaling them horizontally requires complex application-level sharding that breaks multi-table foreign keys and joins. NoSQL systems were built from the ground up for horizontal distribution using consistent hashing rings, but sacrifice ad-hoc querying and multi-document ACID transactions.",
       "bullets": [
-        "Schema Evolution: SQL `ALTER TABLE` on billion-row tables requires careful online DDL tools (e.g., `gh-ost`), whereas NoSQL enforces schema-on-read in application code.",
-        "Secondary Indexes: Global secondary indexes in NoSQL are usually updated asynchronously, meaning index reads are eventually consistent.",
-        "Impedance Mismatch: Document databases map directly to in-memory object graphs, avoiding complex ORM hydration."
+        "Foreign Key Constraints: Relational databases guarantee that an order cannot point to a deleted user ID; NoSQL applications must handle orphaned references in application code.",
+        "Secondary Index Overhead: Global secondary indexes in NoSQL are maintained asynchronously, meaning secondary index lookups are eventually consistent.",
+        "The Polyglot Reality: Production systems rarely use just one. Modern platforms pair PostgreSQL for core transactional ledgers with DynamoDB for high-volume session data and Elasticsearch for free-text search."
       ]
     }
   ],
   "tradeOffs": [
     {
-      "option": "Relational RDBMS (PostgreSQL / MySQL)",
-      "pros": "Strict ACID guarantees, expressive SQL joins, strong constraints, mature tooling.",
-      "cons": "Horizontal write scaling (sharding) requires manual application routing or middleware.",
-      "bestFor": "Financial ledgers, billing, inventory, and domains with evolving query patterns."
+      "option": "Relational SQL (Postgres / MySQL)",
+      "pros": "Strict schema integrity; ad-hoc reporting via JOINs; battle-tested ACID transactions; mature ecosystem.",
+      "cons": "Horizontal write scaling requires manual sharding; schema migrations require locks on high-traffic tables.",
+      "bestFor": "Financial systems, ERPs, CRM platforms, e-commerce checkout, and relational domain graphs."
     },
     {
       "option": "Distributed NoSQL (DynamoDB / Cassandra)",
-      "pros": "Seamless horizontal partitioning, predictable latency at petabyte scale, high write throughput.",
-      "cons": "No native joins, rigid access patterns, eventual consistency pitfalls on secondary indexes.",
-      "bestFor": "IoT telemetry, chat message history, user activity feeds, and high-scale shopping carts."
+      "pros": "Predictable sub-10ms latency regardless of dataset size; linear horizontal scaling; automated partition rebalancing.",
+      "cons": "No cross-partition joins; querying by non-partition keys requires costly global secondary indexes or full table scans.",
+      "bestFor": "Real-time gaming state, IoT telemetry ingestion, shopping carts, chat history, and viral user sessions."
     }
   ],
-  "interviewTip": "Never justify NoSQL in an interview simply by saying 'we have a lot of data.' PostgreSQL easily handles terabytes of data. Justify NoSQL by pointing to specific write throughput requirements (e.g., 200k writes/sec) or strictly key-value/partitioned access patterns.",
+  "interviewTip": "Avoid claiming that NoSQL is 'better because it scales.' Senior engineers qualify their choice: 'We will use PostgreSQL because our domain requires multi-table relational integrity and ACID transactions. A single tuned instance handles 25k QPS, which satisfies our 5k QPS requirement. We will only introduce DynamoDB for unjoined event streams.'",
   "jsonUrl": "/api/subtopics/database/db-sql-vs-nosql.json"
 }

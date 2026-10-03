@@ -5,47 +5,45 @@
   "topicNumber": 13,
   "subtopicNumber": "13.7",
   "title": "File Storage",
-  "subtitle": "Dropbox / Google Drive Architecture: Content-Defined Chunking (Rabin Fingerprinting), CAS Deduplication & Delta Sync",
+  "subtitle": "Cloud file sync & storage: Content-Defined Chunking, CAS deduplication, and delta synchronization.",
   "readingTime": "26 min",
   "difficulty": "Staff+",
   "keyTakeaways": [
-    "Split files on the client into variable-size 4 MB–8 MB chunks using Content-Defined Chunking (Rabin Karp rolling hash) so inserting bytes at the start of a file only mutates a single chunk instead of shifting every subsequent chunk boundary.",
-    "Store chunks in Content-Addressable Storage (CAS) indexed by their `SHA-256` hash: before uploading raw bytes, the client calls a `precheck` API with its chunk hash list and only uploads chunks the server does not already possess.",
-    "Separate the Metadata Control Plane (sharded PostgreSQL/CockroachDB tracking file trees, versions, and chunk manifests) from the Data Plane (presigned direct uploads/downloads against S3/GCS)."
+    "Split files on the client into variable-size 4 MB–8 MB chunks using Content-Defined Chunking (Rabin-Karp rolling hash) so inserting bytes at the start of a large file only alters a single chunk instead of shifting every subsequent chunk boundary.",
+    "Store data in Content-Addressable Storage (CAS) indexed by chunk SHA-256 hashes: before uploading bytes, the client submits a manifest precheck and only transmits chunks the server does not already possess.",
+    "Decouple the Metadata Control Plane (sharded PostgreSQL/CockroachDB managing file trees, versions, and chunk manifests) from the Data Plane (direct presigned upload/download against cloud object storage)."
   ],
   "architectureDiagram": "+-------------------------------------------------------------------+\n|                   DESKTOP / MOBILE / WEB CLIENT                   |\n|  [File Watcher] -> [Rabin Chunker + SHA-256 + Zstd] -> [Local DB] |\n+-----------------+-------------------------------+-----------------+\n                  | (1) Metadata & Sync           | (2) Direct Presigned PUT/GET\n                  v (gRPC / Long-Poll / SSE)      v (Raw Encrypted Blocks)\n+---------------------------------+   +-----------------------------+\n|       API GATEWAY / LB          |   |   CLOUD OBJECT STORAGE      |\n+--------+---------------+--------+   |   (Amazon S3 / GCS CAS)     |\n         |               |            | Key: /cas/{sha256_prefix}/  |\n         v               v            +--------------+--------------+\n+----------------+ +--------------+                  |\n| Metadata &     | | Notification |                  | (3) S3 ObjectCreated\n| Sync Service   | | Service (SSE)|                  |     Event Notification\n+--------+-------+ +------+-------+                  v\n         |                ^                +-------------------+\n         v                |                | Kafka: block-evts |\n+----------------+        |                +---------+---------+\n| CockroachDB /  |--------+                          |\n| Sharded PG     | (Outbox / CDC)                    |\n| (Files,Revs,   |<----------------------------------+\n|  BlockManifest)| (4) Mark Block Verified & Commit File Revision\n+----------------+",
   "sections": [
     {
       "heading": "1. Requirements Engineering & Scope Boundaries",
-      "body": "A cloud file storage and synchronization system (like Dropbox, Google Drive, or OneDrive) enables users to store files reliably in the cloud and keep folders synchronized across multiple devices in near real-time with minimal bandwidth consumption.",
+      "body": "A Cloud File Storage and Synchronization platform (like Dropbox or Google Drive) allows users to store, synchronize, and share files across desktop and mobile devices with fast delta updates and offline support.",
       "bullets": [
-        "Functional Requirements: (1) Upload and download files up to 50 GB with resumable transfer support; (2) Automatic differential sync (modifying 10 KB inside a 1 GB file should only upload/download the modified ~4 MB chunk); (3) File versioning and rollback to historical revisions; (4) Real-time multi-device sync notifications and deterministic conflict resolution (e.g., generating 'Conflicted Copy' on concurrent offline edits); (5) File and folder sharing with ACL permissions (`OWNER`, `EDITOR`, `VIEWER`).",
-        "Non-Functional Requirements: (1) Durability: 99.999999999% (11 nines) for stored file blocks: zero data loss; (2) Consistency: Strong ACID consistency for file metadata, directory trees, and revision histories; (3) Availability: 99.99% for sync and download operations; (4) Bandwidth Efficiency: Global content-addressable deduplication and Zstandard compression.",
-        "Out of Scope: Real-time character-by-character collaborative document editing (like Google Docs OT/CRDTs, which is a separate service) and virus scanning implementation details."
+        "Functional: Upload, download, and sync files across devices; file version history and restore (up to 30 days); file and folder sharing with granular permissions; conflict resolution during concurrent offline edits.",
+        "Functional: Fast delta synchronization (only sync modified portions of large files).",
+        "Non-Functional: High durability (99.999999999% durability for stored file chunks).",
+        "Non-Functional: Bandwidth efficiency: minimize upload and download network traffic via chunk deduplication.",
+        "Out of Scope: Real-time collaborative document editing (Google Docs operational transformation/CRDTs) and third-party app marketplace integrations."
       ]
     },
     {
       "heading": "2. Traffic Modeling & Workload Assumptions",
-      "body": "We size the system for a large consumer and enterprise user base where metadata operations (polling, cursor checks, small delta edits) outnumber raw gigabyte transfers.",
+      "body": "Cloud storage platforms store massive petabyte-scale volumes while optimizing for bursty sync traffic when files are modified.",
       "bullets": [
-        "User Base: 500 Million registered users, 100 Million DAU (connected across an average of 2.5 devices per user = 250M active client connections).",
-        "File Inventory: Average user stores 200 files -> 100 Billion total files in the system.",
-        "Write/Sync Traffic: Each DAU creates or modifies 10 file revisions/day -> 1 Billion file revision writes/day.",
-        "Read/Download Traffic: 2 Billion file/chunk downloads or sync pulls/day (Read:Write ratio = 2:1).",
-        "Chunking & Payload Profile: Average file size = 2 MB (median is smaller, skewed by photos/videos). Files are split into variable-size chunks averaging 4 MB. Average modified delta per sync = 1 chunk (1.5 MB compressed). Global deduplication + compression saves ~40% of raw storage.",
-        "Peak Multiplier: 2.5x average traffic at 9:00 AM business-hour logins."
+        "User Base: 50 million registered users, with 10 million daily active users (DAU).",
+        "File Inventory: Each user stores an average of 200 files = 10 billion total files stored.",
+        "Daily Churn: 5% of active users modify or upload 20 files daily = 10 million file sync events/day.",
+        "Storage Volume: Average file size is 2 MB. 10 billion files * 2 MB = 20 Petabytes of total raw storage.",
+        "Deduplication Savings: Global chunk-level deduplication typically reduces raw storage footprint by 30 to 50% across large user populations."
       ]
     },
     {
       "heading": "3. Back-of-the-Envelope Capacity Calculations",
-      "body": "We calculate QPS for metadata transactions, Redis memory for active device session routing and hot directory metadata, and 5-year multi-petabyte object storage.",
+      "body": "Separating metadata from binary chunks is essential to handle 20 PB of data without overwhelming transactional databases.",
       "bullets": [
-        "Metadata Write QPS (File Revisions): 1B revisions / 86,400 sec ≈ 11,574 writes/sec average; Peak Write QPS (2.5x) ≈ 29,000 QPS.",
-        "Metadata Read QPS (Sync Cursor Checks & Manifest Fetches): 2B downloads + 3B cursor polls / 86,400 sec ≈ 57,870 reads/sec average; Peak Read QPS ≈ 145,000 QPS.",
-        "Redis Memory (Device Connection Registry + Metadata Cache): (a) 250M active device SSE/WebSocket sessions × 128 bytes (`device_id -> gateway_node_ip, workspace_id`) = 32 GB; (b) Hot file/folder metadata cache for 100M DAU (top 50 active file records × 500 bytes) = 2.5 TB. With replication, a 5.5 TB Redis cluster suffices.",
-        "5-Year Block Storage (S3/GCS): 1B daily edits × 1.5 MB average new delta = 1.5 PB/day raw. With 40% CAS deduplication + Zstd compression -> 900 TB/day net new blocks -> 328.5 PB/year -> 1.64 Exabytes over 5 years (stored across S3 Standard and Glacier Instant Retrieval with erasure coding).",
-        "5-Year Metadata Database Storage: 100B existing files + (1B revisions/day × 1,825 days = 1.825T revisions). Keeping 10 recent revisions hot and compacting older ones -> ~400B rows × 300 bytes = 120 TB raw -> 360 TB with 3-way Raft replication (CockroachDB/Spanner).",
-        "Bandwidth: Peak Upload Ingress = 29,000 writes/sec × 1.5 MB = 43.5 GB/sec (348 Gbps, handled directly by S3 edge endpoints via presigned URLs); Metadata API Bandwidth = 145,000 QPS × 2 KB = 290 MB/sec (2.32 Gbps)."
+        "Chunking math: Splitting a 20 MB file into 4 MB chunks creates 5 chunks. If a user edits a single paragraph, Content-Defined Chunking modifies only 1 chunk (~4 MB upload instead of 20 MB).",
+        "Metadata storage sizing: Each file record requires ~500 bytes of metadata (path, permissions, version, chunk hash list). 10 billion files * 500 bytes = ~5 TB of relational metadata.",
+        "Bandwidth requirements: 10 million daily sync events * 2 MB average upload = 20 TB/day of network ingress (~230 MB/s sustained bandwidth)."
       ],
       "codeSnippet": {
         "title": "File Storage Capacity & Storage Worksheet",
@@ -54,13 +52,12 @@
     },
     {
       "heading": "4. API Interface Contracts & Data Domain Models",
-      "body": "Core external REST/gRPC/WebSocket API contracts, request/response payloads, and underlying storage entities with primary keys (PK), foreign keys (FK), secondary/clustering indexes (IDX), and relationship cardinalities.",
+      "body": "APIs separate metadata manifests from binary chunk transfers using presigned object storage URLs.",
       "bullets": [
-        "POST /api/v1/files/init-upload: Submits list of 4MB chunk SHA-256 hashes; returns Pre-Signed S3 PUT URLs ONLY for chunks not already in global storage.",
-        "POST /api/v1/files/{fileId}/commit: Atomically commits new file_version using optimistic concurrency (expected_version).",
-        "GET /api/v1/sync/changes?cursor={sync_token}: Long-polling delta feed returning modified file manifests to connected devices."
+        "Chunk Precheck API: `POST /v1/files/precheck` takes `{ chunkHashes: [\"sha256_a\", \"sha256_b\"] }` and returns `{ missingChunks: [\"sha256_b\"] }`.",
+        "Commit File API: `POST /v1/files/commit` takes `{ path, parentFolderId, chunkHashes: [...], fileSizeBytes }` and returns `{ fileId, versionId }`.",
+        "Metadata Schema (PostgreSQL): `files` table (`file_id`, `user_id`, `path`, `latest_version_id`), `file_versions` table (`version_id`, `file_id`, `created_at`), and `file_chunks` table (`version_id`, `chunk_hash`, `chunk_index`)."
       ],
-      "erDiagramUrl": "/diagrams/er-design-file-storage.svg",
       "codeSnippet": {
         "title": "API Contracts & Storage Entity Schemas",
         "code": "// 1. Initialize Deduplicated Chunk Upload\nPOST /api/v1/files/init-upload\nRequest:\n{\n  \"file_id\": \"f47ac10b-58cc-4372-a567-0e02b2c3d479\",\n  \"expected_version\": 4,\n  \"chunks\": [\n    { \"index\": 0, \"sha256\": \"e3b0c44298fc1c14.\", \"size_bytes\": 4194304 },\n    { \"index\": 1, \"sha256\": \"8f434346648f6b96.\", \"size_bytes\": 2097152 }\n  ]\n}\nResponse (200 OK: Chunk 0 already exists, only upload Chunk 1!):\n{\n  \"already_present_indices\": [0],\n  \"upload_targets\": [\n    {\n      \"index\": 1,\n      \"sha256\": \"8f434346648f6b96.\",\n      \"presigned_put_url\": \"https://s3.amazonaws.com/god-blobs/8f434346.?X-Amz-Signature=.\"\n    }\n  ]\n}\n\n// ---------------------------------------------------------------------------\n// Core Storage Entities & Schema Definitions\n// ---------------------------------------------------------------------------\nENTITY files_metadata (Sharded PostgreSQL / Spanner) {\n  [PK ] file_id                UUID\n  [IDX] workspace_id           UUID\n        file_path              VARCHAR(1024)\n        latest_version         INT\n        is_deleted             BOOLEAN\n}\n\nENTITY file_versions (Sharded PostgreSQL / Spanner) {\n  [PK ] version_id             UUID\n  [FK ] file_id                UUID\n  [IDX] version_number         INT\n        total_size_bytes       BIGINT\n        committed_at           TIMESTAMPTZ\n}\n\nENTITY chunk_manifests (PostgreSQL + S3 Content-Addressed Blobs) {\n  [PK ] version_id             UUID (Composite PK)\n  [PK ] chunk_index            INT (Composite PK)\n  [IDX] chunk_sha256           CHAR(64) -> s3://blobs/\n        chunk_size_bytes       INT (~4MB)\n}\n\n// Relationships: files_metadata --(1 : N (version history))--> file_versions --(1 : N (ordered 4MB chunks))--> chunk_manifests"
@@ -68,59 +65,58 @@
     },
     {
       "heading": "5. High-Level Architecture Blueprint & Component Topology",
-      "body": "The architecture enforces a strict separation between the Metadata Control Plane and the Binary Data Plane. Application servers never proxy raw file bytes.",
+      "body": "The architecture decouples the metadata synchronization control plane from direct-to-object-storage binary data transfers.",
       "bullets": [
-        "Smart Client Agent (File Watcher + Rabin Chunker + Local SQLite): Monitors OS filesystem events (`FSEvents` on macOS, `inotify` on Linux), splits modified files using Content-Defined Chunking (Rabin rolling hash), compresses chunks with `Zstd`, computes `SHA-256` digests, and persists local sync state in SQLite.",
-        "Metadata & Sync Service: Stateless Java service managing directory trees, ACLs, CAS block deduplication lookups, and atomic revision commits against CockroachDB.",
-        "Cloud Object Storage (S3 / GCS CAS Bucket) & CDN: Stores immutable compressed blocks keyed by `/cas/{hash[0.3]}/{sha256_hash}`. Clients upload and download directly via short-lived Presigned URLs.",
-        "S3 Event Notification + Verification Worker: When a client finishes a presigned `PUT` to S3, S3 emits an `ObjectCreated` event to Kafka/SQS, marking the block `VERIFIED` in the `cas_blocks` table.",
-        "Notification Service (SSE / WebSocket Gateway): Subscribes to workspace commit events via Redis Pub/Sub and pushes lightweight invalidation pings (`{workspaceId, latestLsn}`) to connected devices so they immediately pull the delta manifest."
+        "Client Sync Engine: Watches local file system directories, calculates rolling checksums, splits files into chunks, and manages delta uploads.",
+        "Metadata Service: Manages hierarchical folder namespaces, user permissions, and file version manifests in PostgreSQL.",
+        "Sync Notification Service: Long-lived WebSocket or Server-Sent Events (SSE) connections that notify other client devices when files change.",
+        "Chunk Storage (Content-Addressable S3): Stores immutable 4 MB chunks indexed strictly by their SHA-256 hash (`s3://bucket/chunks/{sha256}`).",
+        "Global Chunk Registry: Redis/DynamoDB index tracking chunk reference counts to support global deduplication and safe garbage collection."
       ],
       "diagramImageUrl": "/diagrams/design-file-storage.jpg",
       "asciiDiagram": "+-----------------------------------------------------------------------------------+\n|                        CLIENT DEVICE A (Desktop / Mobile)                         |\n|  +--------------+   +------------------------+   +--------------+   +-----------+ |\n|  | OS FileWatch |-->| Rabin Rolling Chunker  |-->| Zstd + SHA256|-->| Local DB  | |\n|  +--------------+   | (Variable 4MB-8MB Blks)|   +------+-------+   | (SQLite)  | |\n+---------------------+------------------------+----------+-----------+-----------+\n                                                          |\n                +-----------------------------------------+-------------------+\n                | (1) Control Plane: Init & Commit (HTTPS)                    | (2) Data Plane:\n                v                                                             |     Presigned PUT\n+---------------------------------------+                                     v\n|        METADATA & SYNC SERVICE        |                           +-------------------+\n|  - CAS Block Dedup Lookup             |                           |  Amazon S3 / GCS  |\n|  - Issue Presigned S3 URLs            |                           |  CAS Block Store  |\n|  - OCC Version Check & Journal Commit |                           | /cas/a1b2/{sha256}|\n+-------+-----------------------+-------+                           +---------+---------+\n        |                       |                                             |\n        v                       v (4) Publish Workspace LSN                   | (3) S3 Event\n+-------------------+   +-------------------+                                 |\n|   CockroachDB     |   |  Redis Pub/Sub &  |<--------------------------------+\n| (Files, Revisions,|   |  Session Registry |\n|  CAS Block Index, |   +---------+---------+\n|  Workspace LSN)   |             |\n+-------------------+             v (5) Push SSE Invalidation Ping\n                        +-------------------+\n                        | Notification Svc  |\n                        | (SSE / WebSocket) |\n                        +---------+---------+\n                                  |\n                                  v (6) Pull /changes?cursor=lsn & Download Missing Blocks\n+-----------------------------------------------------------------------------------+\n|                        CLIENT DEVICE B (Peer Synced Device)                       |\n+-----------------------------------------------------------------------------------+"
     },
     {
       "heading": "6. Deep-Dive Execution Flows & Core Logic",
-      "body": "We trace the two defining cloud storage pipelines: content-defined chunk deduplication on upload and cross-device delta synchronization with conflict resolution.",
+      "body": "The heart of an efficient sync engine is Content-Defined Chunking paired with Content-Addressable Storage deduplication.",
       "bullets": [
-        "Chunk-Based Deduplication & Parallel Multipart Upload to S3: When a file is uploaded, the desktop client slices the file into 4 MB chunks using Rabin fingerprinting. The client queries the metadata service with chunk SHA-256 hashes; existing chunks are referenced by pointer without uploading, while new chunks are transferred in parallel directly to Amazon S3 via presigned URLs.",
-        "Cross-Device Delta Sync & Conflict Resolution: Each file workspace maintains a monotonically increasing Log Sequence Number (LSN). When Device A commits changes, a WebSocket notification wakes up Device B. Device B downloads only the modified 4 MB chunks from S3 and reassembles the file locally. If Device B made concurrent local edits, the synchronization engine creates a conflicted copy rather than overwriting unsaved work."
+        "Content-Defined Chunking (CDC): Fixed-size chunking (e.g., splitting every 4 MB) suffers from the \"boundary shift\" problem: inserting 1 byte at the start of a 100 MB file shifts every chunk boundary, invalidating all 25 chunk hashes. CDC uses a Rabin-Karp rolling hash over a sliding window, creating chunk boundaries only when the hash matches a specific bit pattern (e.g., `hash % 4MB == 0`).",
+        "Deduplication precheck flow: When a file is saved, the client computes SHA-256 hashes for all chunks. It calls the `/precheck` API. If 4 of the 5 chunks already exist in storage (uploaded previously or by another user), the server tells the client to upload only the 1 missing chunk.",
+        "Conflict resolution: If User A and User B edit the same file while offline, the first user to commit creates Version 2. When the second user reconnects and attempts to commit against Version 1, the server detects the conflict and saves the second file as `filename (Conflicted Copy from User B).ext`."
       ],
-      "flowDiagramUrl": "/diagrams/flow-design-file-storage.svg",
       "diagramImageUrl": "/diagrams/flow-design-file-storage.svg"
     },
     {
       "heading": "7. Production Hardening, Fault Tolerance & Resilience",
-      "body": "Operating an exabyte-scale cloud storage engine requires strict security around content-addressable deduplication, storage tiering, and LAN-level optimizations.",
+      "body": "Ensuring chunk durability, background garbage collection, and efficient mobile syncing keeps cloud storage reliable.",
       "bullets": [
-        "Convergent Encryption (Proof-of-Ownership for Cross-User CAS): Cross-user SHA-256 deduplication is vulnerable to a 'confirmation-of-a-file' side-channel attack if a malicious client simply guesses a known SHA-256 hash without possessing the file bytes. Fix this either by scoping deduplication per-tenant/workspace or by requiring clients to encrypt each chunk using a key derived from the chunk's own plaintext hash (Convergent Encryption / Message-Locked Encryption) plus a server challenge over random byte offsets.",
-        "Hot/Warm/Cold Storage Lifecycle Tiering: Newly uploaded CAS blocks start in S3 Standard. A background lifecycle policy transitions blocks untouched for 30 days to S3 Standard-IA, and blocks untouched for 90 days to S3 Glacier Instant Retrieval, cutting storage costs by 65% with millisecond retrieval.",
-        "Reference Counting & Orphan Block Garbage Collection: Because multiple file revisions can reference the same `block_hash`, blocks are never deleted synchronously on file deletion. A daily Spark/Flink mark-and-sweep job purges unreferenced staging blocks older than 24 hours and decrements `ref_count` on expired historical revisions.",
-        "LAN Sync Peer-to-Peer Transfer: When 50 employees in the same corporate office sync a shared 2 GB video folder, downloading 50× from S3 saturates the office WAN link. Desktop clients broadcast local chunk availability via UDP multicast on the local subnet and fetch verified `SHA-256` blocks directly from peer LAN devices."
+        "Chunk reference counting and garbage collection: Because chunks are shared across multiple files and users via deduplication, deleting a file must never delete underlying S3 chunks immediately. Decrement the chunk's reference count in the registry; only delete the S3 object when reference count reaches zero after a 30-day grace period.",
+        "Resumable chunk uploads: Upload chunks in parallel using presigned multipart S3 URLs. If a client loses Wi-Fi mid-upload, it resumes by uploading only the remaining incomplete chunks.",
+        "Bandwidth throttling on client: The desktop sync daemon monitors network interface utilization and applies token-bucket throttling to prevent background file uploads from saturating the user's home internet connection."
       ]
     }
   ],
   "tradeOffs": [
     {
-      "option": "Fixed-Size Block Chunking (e.g., strict 4 MB offsets)",
-      "pros": "Trivial to compute on the client using simple byte-offset arithmetic; zero CPU overhead for rolling hash calculation.",
-      "cons": "Inserting a single byte at the beginning of a file shifts all subsequent chunk boundaries, invalidating 100% of downstream chunks and destroying delta sync efficiency.",
-      "bestFor": "Append-only log files, immutable video segments, or simple backup blobs that are never edited in place."
+      "option": "Content-Defined Chunking (Rabin Fingerprints)",
+      "pros": "Resistant to boundary-shift problems; reduces delta upload size by 80-90% for modified documents.",
+      "cons": "Higher client-side CPU overhead to compute rolling hashes during file scanning.",
+      "bestFor": "Desktop sync clients (Dropbox, Google Drive, OneDrive) handling frequent edits to large files."
     },
     {
-      "option": "Content-Defined Chunking (Rabin Fingerprinting)",
-      "pros": "Chunk boundaries depend strictly on local byte content; mid-file insertions or deletions only affect the single modified chunk while all subsequent chunks deduplicate cleanly.",
-      "cons": "Higher client CPU usage to compute rolling hashes and requires tracking variable chunk lengths in the metadata manifest.",
-      "bestFor": "General-purpose cloud drives (Dropbox, Google Drive, OneDrive) handling editable documents, archives, and media."
+      "option": "Fixed-Size Chunking (e.g., 4 MB blocks)",
+      "pros": "Simple to compute; minimal client CPU utilization; predictable chunk boundaries.",
+      "cons": "Inserting bytes shifts all downstream chunk boundaries, forcing full re-uploads of modified files.",
+      "bestFor": "Append-only media files, disk images, or static archive backup utilities."
     },
     {
-      "option": "Proxy Upload through App Servers vs. Direct Presigned S3 Upload",
-      "pros": "Direct Presigned S3 Upload offloads hundreds of Gbps of binary throughput from application servers and routes clients to the nearest cloud edge POP.",
-      "cons": "Requires a two-phase Metadata Init -> S3 Upload -> Metadata Commit protocol with asynchronous S3 event verification.",
-      "bestFor": "All high-scale file and media storage architectures."
+      "option": "Direct S3 Upload via Presigned URLs",
+      "pros": "Application servers never touch heavy binary chunk data; scales to petabytes with zero server memory overhead.",
+      "cons": "Requires webhook/callback choreography to confirm that chunk uploads completed before committing metadata.",
+      "bestFor": "All production cloud storage platforms."
     }
   ],
-  "interviewTip": "Interviewers love testing whether you understand why fixed-size chunking fails when editing the start of a file. Explicitly explain **Content-Defined Chunking (Rabin rolling hash)** and pair it with the **two-step Init/Precheck -> Presigned Upload -> OCC Commit** flow so the interviewer sees both bandwidth deduplication and metadata consistency.",
+  "interviewTip": "Highlight the boundary-shift problem in cloud storage interviews: explain that fixed-size chunking forces a full re-upload if a single byte is inserted at the beginning of a file. Propose Content-Defined Chunking (Rabin-Karp rolling hash) to create dynamic chunk boundaries that isolate edits to a single chunk.",
   "diagramImageUrl": "/diagrams/design-file-storage.jpg",
   "jsonUrl": "/api/subtopics/must-practice-designs/design-file-storage.json",
   "flowDiagramUrl": "/diagrams/flow-design-file-storage.svg"

@@ -3,57 +3,54 @@
   "topicId": "distributed-systems",
   "topicTitle": "Distributed Systems",
   "topicNumber": 6,
-  "subtopicNumber": "6.3",
+  "subtopicNumber": "6.2",
   "title": "Consistent Hashing",
   "subtitle": "Minimizing data movement to O(K/N) during node scaling using Hash Rings, Virtual Nodes (VNodes), and Bounded-Load Hashing.",
   "readingTime": "8 min read",
   "difficulty": "Intermediate",
   "keyTakeaways": [
-    "With modular hashing (`hash(key) % N`), adding or removing 1 node forces `(N-1)/N` (~90%+) of keys to relocate; Consistent Hashing reduces movement to only `K/N` keys on average.",
-    "Both nodes and keys are hashed onto a circular 32-bit or 64-bit integer ring (`0` to `2^32 - 1`), and each key is assigned to the first node encountered moving clockwise.",
-    "Virtual Nodes (VNodes) assign each physical server 100–200 positions on the ring, preventing non-uniform data skew and spreading load evenly when a node crashes."
+    "Naive modulo hashing (`hash(key) % N`) remaps ~90% of all keys when node count N changes, causing catastrophic cache invalidation across entire clusters.",
+    "Consistent Hashing places both nodes and keys on a circular integer ring (`0` to `2^32 - 1`), ensuring that adding or removing a node moves only `K/N` keys on average.",
+    "Virtual Nodes (VNodes) solve non-uniform distribution by mapping each physical machine to 100-256 tokens on the ring, preventing hot shards and balancing failovers."
   ],
-  "architectureDiagram": "                     CONSISTENT HASHING RING (0 .. 2^32 - 1)\n                                    0 / 2^32\n                                 . - ~ ~ ~ - .\n                             . '               ' .\n                [Node C_v2]                        [Node A_v1]\n                    |                                   |\n                    |     Key 'k1' (hashes to 400)      v\n                    |     walks clockwise ---------> [Node B_v1 (pos 550)]\n                    |                                   |\n                [Node A_v2]                        [Node C_v1]\n                             .                 . '\n                               ' - . _ _ _ . - '",
+  "architectureDiagram": "CONSISTENT HASH RING WITH VIRTUAL NODES (0 to 2^32 - 1)\n                                 0 / 2^32\n                             .-------------.\n                      .----'        |        '----.\n                 .--'               |              '--.\n             .-'          Key 1     |                  '-.\n           .-'              *       |                     '-.\n        .'                          v                        '.\n       /    Node A#v1 ------------------------> Node B#v1      \\\n  Node C#v2                                                  Node A#v2\n      |                                                          |\n      |  * Key 2                                                 |\n       \\                                                        /\n        '.                          Node C#v1                 .'\n          '-.                           *                  .-'\n             '-.                      Key 3             .-'\n                '--.                                .--'\n                    '----.                    .----'\n                          '-------------.-----'",
   "sections": [
     {
-      "heading": "Ring Mechanics & The Power of Virtual Nodes (VNodes)",
-      "body": "Consistent hashing maps both storage nodes and data keys onto the same circular keyspace `[0, 2^32 - 1]` using a fast, uniform hash function like `MurmurHash3` or `xxHash` (never cryptographic SHA-1 on hot paths if speed matters, and never weak modulo). To locate the node for `key`, you compute `h = hash(key)` and perform a binary search (`O(log V)`) over the sorted array of ring tokens to find the first node with `position >= h` (wrapping around to index `0` if `h` exceeds the highest token).",
+      "heading": "Ring Mechanics and the Role of Virtual Nodes",
+      "body": "When building distributed caches or partitioned storage engines, mapping keys to servers using modulo arithmetic (`hash(key) % N`) is an operational catastrophe. Changing the node count from 9 to 10 changes the destination for `(N - 1) / N` = 90% of all keys, triggering a total cache wipeout that routes 100% of read traffic to primary databases. Consistent hashing resolves this by mapping both nodes and keys to a continuous integer ring spanning 0 to 2^32 - 1. A key routes to the first node encountered when walking clockwise.",
       "bullets": [
-        "Why Raw Nodes Fail: With only 3 physical nodes placed on the ring, random hash placement might give Node A 60% of the ring arc, Node B 30%, and Node C 10%.",
-        "Virtual Nodes (VNodes): By placing `150` virtual tokens per physical server (`NodeA#0 .. NodeA#149`), the variance in key distribution drops below <5%.",
-        "Graceful Rebuilding on Failure: When Physical Node B dies, its 150 VNode arcs are absorbed equally by all remaining physical nodes rather than dumping 100% of Node B's traffic onto a single clockwise neighbor!",
-        "Heterogeneous Hardware: A 64-core server can be assigned 300 VNodes while a 16-core server gets 75 VNodes."
+        "O(K/N) Key Migration: When Node N+1 joins, it claims keys only from its immediate counter-clockwise neighbor. All other servers remain untouched.",
+        "The Hotspot Flaw of Simple Rings: If you hash only 5 physical server hostnames onto the ring, the intervals between tokens will vary wildly, causing one node to own 50% of the ring while another owns 5%.",
+        "Virtual Nodes (VNodes): Assign each physical machine 128 to 256 virtual tokens (e.g., `server-1#1`, `server-1#2`). This interleaves tokens uniformly across the ring, evening out load and spreading key handoffs across all remaining nodes when a server dies."
       ],
       "codeSnippet": {
-        "title": "Production Consistent Hash Ring with Virtual Nodes & Binary Search",
-        "code": "export class ConsistentHashRing {\n  private ringKeys: number[] = [];\n  private ringMap = new Map<number, string>();\n\n  constructor(nodes: string[], private vnodesPerServer = 150) {\n    for (const node of nodes) this.addNode(node);\n  }\n\n  addNode(node: string): void {\n    for (let i = 0; i < this.vnodesPerServer; i++) {\n      const hash = this.murmur3(`${node}#vnode_${i}`);\n      this.ringMap.set(hash, node);\n      this.ringKeys.push(hash);\n    }\n    this.ringKeys.sort((a, b) => a - b);\n  }\n\n  getNode(key: string): string {\n    const hash = this.murmur3(key);\n    // Binary search for first token >= hash\n    let low = 0, high = this.ringKeys.length - 1;\n    while (low <= high) {\n      const mid = (low + high) >>> 1;\n      if (this.ringKeys[mid] >= hash) high = mid - 1;\n      else low = mid + 1;\n    }\n    const idx = low < this.ringKeys.length ? low : 0; // Wrap around ring\n    return this.ringMap.get(this.ringKeys[idx])!;\n  }\n  private murmur3(str: string): number { /* 32-bit hash */ return 0; }\n}"
-      },
-      "diagramImageUrl": "/diagrams/arch-dist-consistent-hashing.svg"
+        "title": "Production Consistent Hash Ring with Binary Search in Go",
+        "code": "type HashRing struct {\n  vnodes   int\n  ring     []uint32          // Sorted token slice\n  nodeMap  map[uint32]string // Token -> Physical Node ID\n  mu       sync.RWMutex\n}\n\nfunc (h *HashRing) GetNode(key string) string {\n  h.mu.RLock()\n  defer h.mu.RUnlock()\n  if len(h.ring) == 0 { return \"\" }\n\n  hash := fnv32(key)\n  // Binary search to find clockwise successor in O(log(N * vnodes))\n  idx := sort.Search(len(h.ring), func(i int) bool {\n    return h.ring[i] >= hash\n  })\n  // Wrap around ring if hash exceeds largest token\n  if idx == len(h.ring) { idx = 0 }\n  return h.nodeMap[h.ring[idx]]\n}"
+      }
     },
     {
-      "heading": "Replication on the Ring & Bounded-Load Consistent Hashing",
-      "body": "In distributed databases like Cassandra and DynamoDB, consistent hashing also dictates replication placement. To store `N=3` replicas of a key, the coordinator writes to the primary VNode owner and then walks clockwise along the ring to pick the next 2 VNodes that belong to *distinct physical racks/availability zones*.",
+      "heading": "Replication on the Ring and Bounded-Load Hashing",
+      "body": "In partitioned storage systems like Dynamo and Cassandra, consistent hashing is combined with replication. To store a key with a replication factor of `N = 3`, the coordinator routes the key to its primary coordinator node on the ring, and then replicates it to the next two distinct physical nodes encountered walking clockwise.",
       "bullets": [
-        "Rack/AZ-Aware Placement: Walking the ring skips additional VNodes belonging to the same physical host or AZ so a single rack outage never takes down more than 1 replica.",
-        "Consistent Hashing with Bounded Loads (Vimeo / Google paper): Assigns each node a maximum capacity factor `(1 + epsilon) * average_load`. If the target node on the ring is at capacity during a hot-spot surge, the request overflows clockwise to the next node with spare capacity."
+        "Distinct Physical Server Invariant: The replication engine must skip virtual nodes belonging to physical machines that already hold a copy of the partition.",
+        "Bounded-Load Consistent Hashing (Google Research): Standard consistent hashing can still overload a node if a single key goes viral. Bounded-load hashing caps maximum load per node at `1 + ε` (e.g., 125% of average load). If a node hits its cap, the key spills over to the next clockwise node."
       ]
     }
   ],
   "tradeOffs": [
     {
-      "option": "Consistent Hashing with Virtual Nodes (Dynamo / Cassandra)",
-      "pros": "Minimal data movement (K/N) on cluster resize; decentralized O(log V) lookup with no directory bottleneck.",
-      "cons": "Range queries across keys are inefficient; requires gossip protocol to keep ring membership synced.",
-      "bestFor": "Distributed caches, stateful load balancers (Envoy/Katran), and leaderless key-value stores."
+      "option": "Consistent Hashing with Virtual Nodes",
+      "pros": "Only `K/N` keys move on node additions or removals; balanced memory distribution; smooth failover.",
+      "cons": "Lookups require binary search (`O(log(N * V))` memory lookup) rather than `O(1)` modulo arithmetic; requires client-side cluster awareness.",
+      "bestFor": "Distributed caches (Memcached, Redis Cluster), DynamoDB/Cassandra partitioning, and L4 load balancer packet distribution."
     },
     {
-      "option": "Centralized Shard Map / Fixed Hash Slots (Redis Cluster / Vitess)",
-      "pros": "Explicit control over exact slot-to-node placement; no VNode binary search needed.",
-      "cons": "Requires cluster coordinator or slot migration orchestration when rebalancing.",
-      "bestFor": "Managed sharded databases and clusters with <1,000 nodes."
+      "option": "Centralized Directory Lookup Table",
+      "pros": "Exact explicit control over where every key lives; trivial to move individual tenant partitions manually.",
+      "cons": "The lookup table itself becomes a single point of failure and bottleneck requiring high availability coordination (etcd/ZooKeeper).",
+      "bestFor": "Database sharding managers (Vitess, Citus) and distributed object block storage."
     }
   ],
-  "interviewTip": "Always mention Virtual Nodes (VNodes) immediately after introducing Consistent Hashing, and explain the two problems VNodes solve: (1) uneven ring arc distribution with few nodes, and (2) cascading overload on a single neighbor when one node crashes.",
-  "jsonUrl": "/api/subtopics/distributed-systems/dist-consistent-hashing.json",
-  "diagramImageUrl": "/diagrams/arch-dist-consistent-hashing.svg"
+  "interviewTip": "In distributed caching or storage questions, never omit virtual nodes: 'We will use consistent hashing to map keys to storage nodes. To prevent uneven hash segment distribution and avoid hotspotting a single physical server, we will assign 128 virtual nodes per physical host, ensuring uniform load distribution.'",
+  "jsonUrl": "/api/subtopics/distributed-systems/dist-consistent-hashing.json"
 }

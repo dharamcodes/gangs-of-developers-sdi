@@ -5,45 +5,44 @@
   "topicNumber": 13,
   "subtopicNumber": "13.10",
   "title": "E-commerce Order System",
-  "subtitle": "Amazon / Flipkart Checkout Architecture: Saga Orchestration, Striped Flash-Sale Inventory & Immutable Price Snapshots",
+  "subtitle": "E-commerce order processing: Saga orchestration, striped inventory reservation, and immutable price snapshots.",
   "readingTime": "28 min",
   "difficulty": "Staff+",
   "keyTakeaways": [
-    "Coordinate distributed checkout across Order, Inventory, Payment, and Fulfillment services using a stateful Saga Orchestrator with explicit compensating transactions (`releaseInventory`, `refundPayment`) and Outbox persistence: never distributed XA two-phase commits across microservices.",
-    "Capture an immutable JSON/relational snapshot of item title, merchant ID, unit price, tax rate, and applied promo discount inside `order_items` at the exact moment of checkout so future catalog edits never mutate historical order totals.",
-    "Eliminate database row-lock bottlenecks on flash-sale SKUs (e.g., iPhone launch with 100,000 units) by striping inventory across $K = 64$ database sub-buckets (`sku_id#00`.`#63`) combined with an atomic Redis Lua token pre-check."
+    "Coordinate distributed order checkout across Order, Inventory, Payment, and Shipping services using a stateful Saga Orchestrator with explicit compensating transactions (releaseInventory, refundPayment): avoid distributed XA two-phase commits.",
+    "Record an immutable snapshot of item title, seller ID, unit price, tax rate, and applied discounts inside order_items at the exact moment of checkout so future catalog edits never mutate past orders.",
+    "Eliminate database row-lock contention on hot flash-sale items by striping inventory across K database sub-buckets (sku_id#00 through sku_id#63) combined with an atomic Redis token pre-reservation check."
   ],
   "architectureDiagram": "+------------+     +---------------+     +---------------------------+\n|   Buyer    | --> |  API Gateway  | --> | Checkout & Order Service  |\n|  (Client)  |     | (Auth + Rate) |     | (Saga Orchestrator + DB)  |\n+------------+     +---------------+     +-------------+-------------+\n                                                       |\n                                      (1) Persist Order + Saga Outbox (ACID)\n                                                       v\n                                         +---------------------------+\n                                         |   Kafka Event Backbone    |\n                                         +---+---------+---------+---+\n                                             |         |         |\n                       +---------------------+         |         +---------------------+\n                       | (Step 1: Reserve Stock)       | (Step 2: Charge)              | (Step 3: Ship)\n                       v                               v                               v\n         +---------------------------+   +---------------------------+   +---------------------------+\n         |     Inventory Service     |   |      Payment Service      |   |    Fulfillment Service    |\n         | - Redis Lua Token Gate    |   | - Idempotent PSP Charge   |   | - Warehouse Routing (WMS) |\n         | - Striped SKU DB (64 Bkts)|   | - Compensate: Refund/Void |   | - Split Shipment Orders   |\n         | - Compensate: Release Hold|   +---------------------------+   +---------------------------+\n         +---------------------------+",
   "sections": [
     {
       "heading": "1. Requirements Engineering & Scope Boundaries",
-      "body": "An E-commerce Order System (like Amazon, Flipkart, or Shopify Checkout) converts a buyer's shopping cart into a confirmed, paid, and warehouse-routed order while guaranteeing zero overselling and complete auditability across distributed microservices.",
+      "body": "An E-Commerce Order System coordinates checkout transactions across distributed services, ensuring reliable inventory reservation, payment capture, and order tracking.",
       "bullets": [
-        "Functional Requirements: (1) Cart-to-Checkout validation: verify item availability, compute item-level tax & shipping, and validate coupon/promo rules; (2) Order creation with immutable price/tax/catalog snapshotting; (3) Atomic inventory reservation with automatic release if payment fails or times out; (4) Distributed checkout orchestration across Inventory, Payment, Promo, and Warehouse Fulfillment services; (5) Order lifecycle tracking (`PENDING_RESERVATION -> RESERVED -> PAID -> FULFILLING -> SHIPPED -> DELIVERED / CANCELLED`) and partial/full cancellations.",
-        "Non-Functional Requirements: (1) Consistency: Zero overselling of physical inventory and strict eventual consistency (via Saga) across Order, Inventory, and Payment states; (2) Availability: 99.99% on the order placement path; (3) Latency: P99 < 300ms for checkout initiation and inventory reservation; (4) Flash-Sale Resilience: Handle 50,000 concurrent checkout attempts on a single hot launch SKU without locking up the inventory database.",
-        "Out of Scope: Product search relevance ranking, recommendation engines, and last-mile delivery truck GPS routing."
+        "Functional: Create orders from a shopping cart; reserve and decrement inventory atomically; coordinate payment capture; handle order cancellation and compensation.",
+        "Functional: View order history with immutable pricing and tax details; track shipment status.",
+        "Non-Functional: High consistency on checkout (never sell more units than physically exist in inventory).",
+        "Non-Functional: Support high-concurrency flash sales (e.g., 50,000 checkout attempts/second on a single hot item).",
+        "Out of Scope: Warehouse logistics robot pathfinding, personalized product recommendation models, and delivery driver dispatch."
       ]
     },
     {
       "heading": "2. Traffic Modeling & Workload Assumptions",
-      "body": "We size the system for a global retail marketplace handling both steady daily shopping and massive Prime Day / Singles' Day flash peaks.",
+      "body": "E-commerce platforms operate under steady baseline traffic punctuated by extreme flash-sale spikes.",
       "bullets": [
-        "User Base & Order Volume: 300 Million MAU, 80 Million DAU; 25 Million completed orders per day baseline (averaging 3 line items per order = 75 Million `order_items` per day).",
-        "Peak Flash-Sale Multiplier: 15x traffic spike during Prime Day / Black Friday opening hour (~17,000 orders/sec across the platform).",
-        "Read-to-Write Ratio: 20:1 (buyers check order status, tracking pages, and order history 20 times for every 1 order placed -> 500 Million order reads/day).",
-        "Average Payload Sizes: `orders` header + 3 `order_items` (with immutable price/tax/product snapshot) + `saga_state_log` = 4 KB per order.",
-        "Catalog & SKU Footprint: 500 Million active SKUs across 200 regional fulfillment centers."
+        "Baseline Volume: 5 million orders placed per day (~60 orders/second average, peaking at 500 orders/sec).",
+        "Flash Sale Peak: Limited-release product launches generate 50,000 checkout requests/second targeting the same SKU.",
+        "Order Record Size: Average order with items, addresses, and line-item tax details is ~2 KB. 5 million orders/day = 10 GB/day of data.",
+        "Consistency Requirement: Zero overselling. Strict inventory bounds must be enforced across concurrent buyers."
       ]
     },
     {
       "heading": "3. Back-of-the-Envelope Capacity Calculations",
-      "body": "We compute baseline and flash-sale QPS, Redis memory for hot SKU inventory counters and active carts, and 5-year sharded order database storage.",
+      "body": "Capacity bottlenecks in checkout systems are driven by database row-level locking on inventory tables rather than disk space.",
       "bullets": [
-        "Order Write QPS: 25M orders / 86,400 sec ≈ 290 orders/sec average (~870 `order_items`/sec); Peak Order Write QPS (15x) ≈ 4,350 orders/sec (and up to 15,000 checkout attempts/sec including failed flash-sale attempts).",
-        "Order Read QPS: 500M reads / 86,400 sec ≈ 5,787 reads/sec average; Peak Read QPS (15x) ≈ 86,800 reads/sec.",
-        "Redis Memory (Active Shopping Carts + Hot SKU Inventory Tokens + Idempotency): (a) 80M DAU active carts × 2 KB = 160 GB; (b) 50M active/hot SKUs cached in Redis (`sku:{id}:stock` + reservation hashes) × 256 bytes = 12.8 GB; (c) 50M checkout idempotency keys (48h TTL) × 256 bytes = 12.8 GB. Total Redis RAM with 2x replication ≈ 372 GB.",
-        "5-Year Relational Storage (Orders + Order Items + Saga Audit Log): 25M orders/day × 4 KB = 100 GB/day -> 36.5 TB/year -> 182.5 TB raw over 5 years. With 3x replication and secondary indexes (`buyer_id`, `seller_id`, `created_at`) ≈ 766 TB across sharded PostgreSQL/Vitess/CockroachDB.",
-        "Bandwidth: Peak Ingress = 15,000 checkout QPS × 4 KB = 60 MB/sec (480 Mbps); Peak Egress = 86,800 read QPS × 4 KB = 347 MB/sec (2.78 Gbps)."
+        "Row-lock concurrency limit: In PostgreSQL or MySQL, updating a single inventory row (`UPDATE inventory SET stock = stock - 1 WHERE sku_id = X`) acquires an exclusive row lock. A single database row can only process 1,000 to 2,000 updates/second before lock wait timeouts collapse the database.",
+        "Flash-sale shortfall: Handling 50,000 requests/second on a single SKU requires a 25x improvement over single-row lock throughput, mandating Redis pre-reservation or inventory striping.",
+        "Storage durability: 10 GB/day * 365 days = 3.65 TB/year of relational order history, easily managed with partitioned tables in PostgreSQL."
       ],
       "codeSnippet": {
         "title": "E-commerce Order System Capacity Worksheet",
@@ -52,13 +51,12 @@
     },
     {
       "heading": "4. API Interface Contracts & Data Domain Models",
-      "body": "Core external REST/gRPC/WebSocket API contracts, request/response payloads, and underlying storage entities with primary keys (PK), foreign keys (FK), secondary/clustering indexes (IDX), and relationship cardinalities.",
+      "body": "APIs must require client idempotency keys to protect against duplicate orders during network retries.",
       "bullets": [
-        "POST /api/v1/orders: Initiates Order Saga (Reserve Inventory -> Charge Payment -> Confirm Order -> Emit Fulfillment Event).",
-        "GET /api/v1/orders/{orderId}: Returns current order status, snapshotted item prices, and shipment tracking.",
-        "POST /api/v1/orders/{orderId}/cancel: Triggers compensating Saga steps (Refund Payment + Release Reserved Stock)."
+        "Create Order API: `POST /v1/orders/checkout` takes `{ idempotencyKey, cartId, shippingAddressId, paymentMethodId }` and returns `{ orderId, status: \"PROCESSING\" }`.",
+        "Order Schema: `orders` table (`order_id`, `user_id`, `total_amount`, `status`, `created_at`) with foreign keys to `order_items`.",
+        "Immutable Price Snapshot: `order_items` stores copies of `unit_price`, `title`, `tax_rate`, and `discount_amount` captured at the time of purchase, preventing future catalog updates from corrupting historical orders."
       ],
-      "erDiagramUrl": "/diagrams/er-design-ecommerce-order-system.svg",
       "codeSnippet": {
         "title": "API Contracts & Storage Entity Schemas",
         "code": "// 1. Place E-Commerce Order (Saga Entrypoint)\nPOST /api/v1/orders\nHeaders:\n  Idempotency-Key: checkout_usr881_cart42\nRequest:\n{\n  \"customer_id\": \"usr_881\",\n  \"shipping_address_id\": \"addr_102\",\n  \"payment_method_id\": \"pm_visa_9912\",\n  \"items\": [\n    { \"sku_id\": \"SKU-PS5-PRO\", \"quantity\": 1, \"unit_price_cents\": 69900 }\n  ]\n}\nResponse (201 Created):\n{\n  \"order_id\": \"ord_01HV9Z1029\",\n  \"saga_state\": \"CONFIRMED\",\n  \"total_cents\": 75492,\n  \"inventory_reservation_id\": \"res_88412\",\n  \"payment_id\": \"pay_99102\"\n}\n\n// ---------------------------------------------------------------------------\n// Core Storage Entities & Schema Definitions\n// ---------------------------------------------------------------------------\nENTITY orders (Sharded PostgreSQL (by customer_id)) {\n  [PK ] order_id               UUID\n  [IDX] customer_id            UUID\n  [IDX] idempotency_key        VARCHAR(128)\n        total_cents            BIGINT\n        saga_state             VARCHAR(32)\n}\n\nENTITY order_items (Sharded PostgreSQL) {\n  [PK ] order_item_id          UUID\n  [FK ] order_id               UUID\n  [IDX] sku_id                 VARCHAR(64)\n        quantity               INT\n        snapshot_price_cents   BIGINT\n}\n\nENTITY inventory_reservations (Inventory DB + Redis Hot-SKU Cache) {\n  [PK ] reservation_id         UUID\n  [FK ] order_id               UUID\n  [IDX] sku_id                 VARCHAR(64)\n        reserved_qty           INT\n        status                 ENUM('RESERVED','COMMITTED','RELEASED')\n}\n\n// Relationships: orders --(1 : N (line items))--> order_items --(1 : N (saga stock holds))--> inventory_reservations"
@@ -66,59 +64,58 @@
     },
     {
       "heading": "5. High-Level Architecture Blueprint & Component Topology",
-      "body": "The E-commerce Order architecture centers on a stateful Saga Orchestrator backed by the Transactional Outbox pattern, coordinating Inventory, Payment, and Warehouse Fulfillment over Kafka.",
+      "body": "The checkout architecture uses an orchestrator-driven Saga pattern to manage distributed state across services.",
       "bullets": [
-        "Checkout & Order Service (Saga Orchestrator): Snapshots current pricing/tax rules from the Cart & Pricing Service, writes the `orders`, `order_items`, `saga_instances`, and `outbox_events` rows in a single local ACID transaction, and drives the multi-step checkout workflow.",
-        "Inventory Service (Redis Token Gate + 64-Way Striped DB): Handles `ReserveInventoryCommand`. First checks/decrements the SKU's Redis token counter via Lua; if successful, persists the reservation in `sku_inventory_buckets` (`bucket_id = hash(orderId) % 64`) with a 15-minute payment TTL.",
-        "Payment Service: Processes `ProcessPaymentCommand` idempotently using `orderId` as the payment key. If the card is declined or expires after 15 minutes, emits `PaymentFailedEvent`.",
-        "Compensating Transaction Handler: When `PaymentFailedEvent` arrives, the Saga Orchestrator transitions the saga to `COMPENSATE_RELEASE_INVENTORY` and sends `ReleaseInventoryCommand` to restore the reserved stock back to the exact `bucket_id`.",
-        "Fulfillment & Order Split Service: Once paid, splits multi-item orders into physical `ShipmentOrder`s grouped by optimal fulfillment center proximity and dispatches pick-pack-ship tasks to the Warehouse Management System (WMS)."
+        "Order Service: Ingests checkout requests, validates idempotency keys, records the pending order, and initializes the Saga.",
+        "Saga Orchestrator (Temporal / Step Functions): Executes sequential steps across services (Reserve Inventory -> Capture Payment -> Confirm Order), executing compensating actions if any step fails.",
+        "Inventory Service: Manages stock levels using Redis token buckets for pre-reservation and striped relational tables for durable persistence.",
+        "Payment Gateway Adapter: Communicates with external payment processors outside the database transaction.",
+        "Transactional Outbox: Ensures events are published to Kafka reliably alongside database state changes."
       ],
       "diagramImageUrl": "/diagrams/design-ecommerce-order-system.jpg",
       "asciiDiagram": "+-----------------------------------------------------------------------------------+\n|                         BUYER CLIENT (Web / iOS / Android)                        |\n+-----------------------------------------+-----------------------------------------+\n                                          | POST /api/v1/orders/checkout\n                                          | Header: Idempotency-Key: <UUID>\n                                          v\n+-----------------------------------------------------------------------------------+\n|                      API GATEWAY (Auth, Rate Limit, Bot Shield)                   |\n+-----------------------------------------+-----------------------------------------+\n                                          |\n                                          v\n+-----------------------------------------------------------------------------------+\n|                   CHECKOUT & ORDER SERVICE (SAGA ORCHESTRATOR)                    |\n|  1. Fetch & Freeze Price/Tax/Promo Snapshot from Cart & Pricing Svc               |\n|  2. Persist Order + OrderItems + SagaInstance + OutboxEvent (Local ACID Tx)       |\n+-------+---------------------------------+---------------------------------+-------+\n        |                                 |                                 |\n        v (Sync Snapshot)                 v (Sharded by order_id)           v (Outbox CDC)\n+---------------+               +-------------------+               +---------------+\n| Cart, Pricing |               | CockroachDB / PG  |               | Kafka Cluster |\n| & Promo Svc   |               | - orders          |               | (Saga Cmds &  |\n+---------------+               | - order_items     |               |  Reply Events)|\n                                | - saga_instances  |               +---+---+---+---+\n                                +-------------------+                   |   |   |\n              +---------------------------------------------------------+   |   +--------------------+\n              | (Step 1: Reserve / Compensate)                              | (Step 2: Charge)       | (Step 3: Ship)\n              v                                                             v                        v\n+-------------------------------+                             +-------------------+      +-------------------+\n|       INVENTORY SERVICE       |                             |  PAYMENT SERVICE  |      | FULFILLMENT & WMS |\n| - Redis Lua Token Pre-Check   |                             | - Idempotent Auth |      | - Geo Warehouse   |\n| - 64-Bucket Striped Stock DB  |                             |   & Capture       |      |   Order Splitting |\n+-------------------------------+                             +-------------------+      +-------------------+"
     },
     {
       "heading": "6. Deep-Dive Execution Flows & Core Logic",
-      "body": "We trace the two fundamental high-concurrency order pipelines: 64-way striped inventory reservation and orchestrated Saga failure compensation.",
+      "body": "Coordinating checkout across independent microservices requires handling partial failures gracefully without distributed locks.",
       "bullets": [
-        "Striped Inventory Reservation (Prevents Hot-Row DB Lock Contention): For viral flash sales, storing inventory in a single row causes catastrophic row-level lock contention. The system stripes available stock across 64 database bucket rows per SKU; incoming orders hash their order ID to decrement a specific bucket (`bucket_id = hash(orderId) % 64`), scaling write throughput 64-fold.",
-        "Compensating Saga Orchestration & Rollback: Checkout is coordinated through an Orchestrated Saga. In the happy path, inventory is reserved, payment is captured, and fulfillment is scheduled. If payment fails or times out, the Saga Orchestrator dispatches compensating commands (`ReleaseInventoryCmd`, `RevokePromoRedemptionCmd`), restoring stock and marking the order `CANCELLED_PAYMENT_FAILED`."
+        "The Saga execution sequence: 1. Create order in `PENDING` state. 2. Reserve stock in Inventory Service. 3. Authorize and capture payment. 4. Update order to `CONFIRMED`.",
+        "Compensating on payment failure: If payment authorization fails in step 3, the orchestrator invokes the compensation step on the Inventory Service (`releaseInventory(orderId)`), returning stock to the available pool.",
+        "Inventory striping for flash sales: Divide inventory for SKU X into 32 sub-buckets (`sku_X_0` to `sku_X_31`), each holding a fraction of the total stock. Incoming checkouts pick a bucket randomly (`hash(userId) % 32`), distributing row locks across 32 separate database records."
       ],
-      "flowDiagramUrl": "/diagrams/flow-design-ecommerce-order-system.svg",
       "diagramImageUrl": "/diagrams/flow-design-ecommerce-order-system.svg"
     },
     {
       "heading": "7. Production Hardening, Fault Tolerance & Resilience",
-      "body": "Scaling an E-commerce Order System to support millions of third-party sellers and global fulfillment requires dual-sharded projections, bucket rebalancing, and asynchronous tax/fraud pipelines.",
+      "body": "Flash-sale resilience requires protecting databases from thundering-herd checkout traffic.",
       "bullets": [
-        "Tail-End Bucket Consolidation for Striped Inventory: When a flash-sale SKU has only 20 units left spread across 64 buckets (e.g., 1 unit in 20 different buckets) and a buyer orders `quantity = 2`, a single-bucket check would fail. Once total Redis remaining stock drops below `2 × NUM_INVENTORY_BUCKETS` (128 units), a lightweight background worker consolidates remaining stock into `bucket_id = 0` so multi-unit orders can still succeed cleanly.",
-        "Buyer vs. Seller Dual-Sharded Views (CQRS): Buyers query `GET /orders?buyerId=X` while third-party merchants query `GET /seller/orders?sellerId=Y`. Because a single buyer order can contain items from 3 different sellers, shard the authoritative `orders` table by `buyer_id` (or `order_id`), and stream `OrderItemCreated` events via Kafka into a read-optimized `seller_order_items` table sharded by `seller_id`.",
-        "Warehouse Geo-Routing & Order Splitting: If a buyer in Chicago orders 3 items where 2 are in the Illinois fulfillment center and 1 is only available in California, the Fulfillment Service splits the parent `Order` into two child `Shipment` entities after payment capture, minimizing shipping cost and delivery latency.",
-        "Abandoned Reservation Reaper: If a buyer reserves inventory at checkout and closes their browser tab without submitting payment, a background Reaper sweeps `inventory_reservations WHERE status = 'RESERVED' AND expires_at < NOW()`, emits `PAYMENT_TIMED_OUT` to the Saga Orchestrator, and restores both the DB bucket stock and Redis token counter."
+        "Redis pre-reservation with Lua scripts: Check and decrement stock in Redis before writing to the database. If Redis stock reaches zero, reject excess checkout attempts immediately with HTTP 409 (Sold Out), sparing the database.",
+        "Idempotency state machine: Store idempotency keys in Redis with status `IN_PROGRESS`, `SUCCESS`, or `FAILED`. If a client retries while an order is processing, return a `409 Conflict` or poll for completion.",
+        "Reconciliation cron workers: Run hourly reconciliation jobs that compare inventory reservation logs against confirmed orders to release abandoned or orphaned stock locks."
       ]
     }
   ],
   "tradeOffs": [
     {
-      "option": "Saga Orchestration (Central Order Coordinator) vs. Saga Choreography (Peer-to-Peer Events)",
-      "pros": "Orchestration centralizes checkout state transitions and compensating rollbacks in one place (`saga_instances`), making timeout handling and debugging straightforward.",
-      "cons": "The Order Service must know the command contracts of Inventory, Payment, and Fulfillment services.",
-      "bestFor": "E-commerce checkout flows where a multi-step transaction has a clear owner (the Order) and strict rollback ordering."
+      "option": "Orchestrated Saga (Centralized State Machine)",
+      "pros": "Clear end-to-end visibility of transaction state; easy to monitor, debug, and enforce timeouts.",
+      "cons": "The orchestrator service is a critical component that requires high availability and durability.",
+      "bestFor": "Complex multi-step e-commerce checkouts involving inventory, billing, tax, and shipping."
     },
     {
-      "option": "Reserve Inventory Before Payment vs. Deduct Inventory Only After Payment Capture",
-      "pros": "Reserving inventory *before* charging the buyer guarantees you never take a customer's money for an out-of-stock item (zero overselling refunds).",
-      "cons": "Requires a 10–15 minute reservation hold TTL and compensating release logic if the buyer abandons payment.",
-      "bestFor": "Flash sales, limited-stock physical goods, and high-trust retail marketplaces."
+      "option": "Choreographed Saga (Event-Driven via Kafka)",
+      "pros": "Decoupled services; no single orchestrator bottleneck; services listen to domain events independently.",
+      "cons": "Hard to trace the complete workflow during incidents; risk of cyclic event dependencies and difficult compensations.",
+      "bestFor": "Simple, loosely coupled 2-step workflows like sending a confirmation email after signup."
     },
     {
-      "option": "Single SKU Row vs. 64-Way Striped Inventory Buckets",
-      "pros": "64-way striped buckets eliminate database row-lock contention on hot SKUs, increasing single-SKU checkout throughput from ~500 TPS to >30,000 TPS.",
-      "cons": "Requires bucket probing or tail-end consolidation when remaining inventory is very low.",
-      "bestFor": "Platforms running flash sales, product drops, or high-velocity promotions (Amazon Prime Day, Flipkart Big Billion Days)."
+      "option": "Striped Database Inventory vs Redis Pre-Reservation",
+      "pros": "Redis pre-reservation absorbs 50,000 QPS with sub-millisecond latency; striped DB rows provide durable persistence.",
+      "cons": "Requires keeping Redis and database stock synchronized; potential for drift during Redis crash recovery.",
+      "bestFor": "High-concurrency ticket drops, smartphone launches, and viral flash-sale platforms."
     }
   ],
-  "interviewTip": "When designing an E-commerce Order System, always emphasize two architectural pillars: (1) **Immutable Price & Tax Snapshotting** inside `order_items` (never join `order_items` with the live `products` table to calculate historical order totals!), and (2) **Saga Orchestration with 64-Way Striped Inventory Buckets** so flash-sale SKUs never bottleneck on a single database row lock.",
+  "interviewTip": "Do not use distributed 2-Phase Commit (XA) across microservices—explain that network partitions lock database tables and degrade availability. Propose an Orchestrated Saga with explicit compensating actions, and describe inventory striping to solve single-row database lock contention during flash sales.",
   "diagramImageUrl": "/diagrams/design-ecommerce-order-system.jpg",
   "jsonUrl": "/api/subtopics/must-practice-designs/design-ecommerce-order-system.json",
   "flowDiagramUrl": "/diagrams/flow-design-ecommerce-order-system.svg"

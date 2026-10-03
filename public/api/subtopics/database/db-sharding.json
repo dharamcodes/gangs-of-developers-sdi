@@ -6,54 +6,52 @@
   "subtopicNumber": "4.8",
   "title": "Sharding",
   "subtitle": "Horizontal data partitioning across independent database nodes: Shard Keys, Routing, Resharding, and Cross-Shard Joins.",
-  "readingTime": "10 min read",
+  "readingTime": "9 min read",
   "difficulty": "Advanced",
   "keyTakeaways": [
-    "Sharding splits a single logical dataset across multiple independent database servers (shards) so each node handles a fraction of the writes and storage.",
-    "Choosing the right Shard Key is critical: it must have high cardinality and align with the primary query pattern to prevent cross-shard scatter-gather queries.",
-    "Directory-based or Consistent Hashing with Virtual Shards (Logical Shards) simplifies rebalancing when adding new physical hardware."
+    "Sharding splits a massive database into independent, isolated physical instances (shards), each holding a subset of rows.",
+    "Shard key selection is a permanent architectural commitment: choosing a poor shard key causes uneven data distribution and hotspotting.",
+    "Sharding eliminates single-node hardware limits, but sacrifices cross-shard joins, distributed ACID transactions, and foreign key integrity."
   ],
-  "architectureDiagram": "                   [Application / Stateless API]\n                                 |\n                                 v\n             +---------------------------------------+\n             |   Shard Router (Vitess / Citus / App) |\n             |   hash(tenant_id) % 1024 -> Shard Map |\n             +---------------------------------------+\n                /                |                \\\n               v                 v                 v\n      +----------------+ +----------------+ +----------------+\n      |   Shard 01     | |   Shard 02     | |   Shard 03     |\n      | VBuckets 0-340 | | VBuckets 341.. | | VBuckets 682.. |\n      | (Primary+Repl) | | (Primary+Repl) | | (Primary+Repl) |\n      +----------------+ +----------------+ +----------------+",
+  "architectureDiagram": "DATABASE SHARDING TOPOLOGY & QUERY ROUTER\n[ Client Query: WHERE tenant_id = 't_99' ]\n                    |\n                    v\n         [ Routing Proxy / Vitess ]\n         (Computes hash(t_99) % 3 = Shard 1)\n                    |\n      +-------------+-------------+\n      |                           |\n      v                           v\n[ Shard 0 (Postgres) ]      [ Shard 1 (Postgres) ]      [ Shard 2 (Postgres) ]\n(Tenants 0-333)             (Tenants 334-666)           (Tenants 667-999)",
   "sections": [
     {
-      "heading": "Shard Key Selection & Routing Strategies",
-      "body": "A shard is an independent database instance with its own CPU, memory, disk, and replication group. When sharding a table, every query should ideally include the `shard_key` in its `WHERE` clause so the router can dispatch the query to a single shard. If a query omits the shard key, the coordinator must perform a 'scatter-gather' query across all N shards, meaning total latency is dictated by the slowest shard (tail latency amplification).",
+      "heading": "Shard Key Selection and Routing Mechanics",
+      "body": "Sharding should be your last resort when scaling a database—only when write IOPS or storage volume exceeds the limits of the largest available vertical hardware. Once you shard, selecting the shard key (partition key) dictates how traffic and storage distribute across the cluster.",
       "bullets": [
-        "Range-Based Sharding: Shards hold contiguous ranges (e.g., `created_at` month or zip code); great for range scans, but suffers from write hotspots on the latest time shard.",
-        "Hash-Based Sharding: Applies a hash function (`xxHash(user_id)`) to distribute writes uniformly across shards, but destroys range queries over the shard key.",
-        "Logical / Virtual Shards: Create 1,024 logical schemas/tables upfront across 4 physical machines (256 per host). To scale out, migrate whole logical shards to new machines via replication without rewriting application hash math."
+        "Hash-Based Sharding: Computes `hash(shard_key) % num_shards`. Distributes rows uniformly across shards, but makes range queries (`WHERE created_at BETWEEN X AND Y`) scatter-gather across every single shard.",
+        "Range-Based Sharding: Partitions data by contiguous ranges (e.g., User IDs 1-1000 on Shard A, 1001-2000 on Shard B). Supports efficient range scans, but creates extreme hot shards if rows are inserted with auto-incrementing timestamps.",
+        "Directory-Based Sharding: Uses an external lookup table or consistent hashing ring to map entity IDs to shard locations, enabling flexible data migrations at the cost of an extra lookup hop."
       ],
       "codeSnippet": {
-        "title": "Snowflake-Style Composite ID Embedding Shard ID",
-        "code": "// Instagram / Discord pattern: Embed logical_shard_id inside the 64-bit ID\n// [41 bits: Timestamp ms] [13 bits: Logical Shard ID (8192)] [10 bits: Seq]\nfunction generateShardedId(timestampMs: bigint, shardId: bigint, seq: bigint): bigint {\n  const epoch = 1704067200000n; // Custom epoch\n  return ((timestampMs - epoch) << 23n) | (shardId << 10n) | seq;\n}\n\nfunction extractShardId(entityId: bigint): number {\n  return Number((entityId >> 10n) & 0x1FFFn); // Direct O(1) routing from ID alone!\n}"
-      },
-      "diagramImageUrl": "/diagrams/arch-db-sharding.svg"
+        "title": "Consistent Hash Shard Router with Virtual Nodes",
+        "code": "import crypto from 'node:crypto';\n\nexport class ShardRouter {\n  constructor(private shards: string[]) {}\n\n  getShardForUser(userId: string): string {\n    // MD5 hash produces uniform 128-bit distribution\n    const hash = crypto.createHash('md5').update(userId).digest('hex');\n    const hashInt = parseInt(hash.substring(0, 8), 16);\n    const shardIndex = hashInt % this.shards.length;\n    return this.shards[shardIndex];\n  }\n}"
+      }
     },
     {
-      "heading": "Solving Cross-Shard Queries & Celebrity Hotspots",
-      "body": "Once data is sharded by `user_id`, how do you look up a post by `post_id` or query an index on `email`? You either embed the `shard_id` directly inside the `post_id` (as shown above) or maintain a Global Secondary Index table (itself sharded by the secondary attribute) that maps `email -> user_id`.",
+      "heading": "Solving Cross-Shard Queries and Re-Sharding",
+      "body": "The operational cost of sharding emerges when business logic requires querying data stored across multiple physical shards.",
       "bullets": [
-        "Reference / Broadcast Tables: Small, rarely changing lookup tables (e.g., currencies, countries, feature tiers) are replicated in full to every shard to allow local joins.",
-        "Co-located Joins: Tables sharded by the exact same key (`tenant_id`) can be joined locally within each shard without network hops.",
-        "Resharding Zero-Downtime: Copy historical snapshot from source shard to target shard, stream CDC/binlog changes until caught up, briefly pause writes to flip routing metadata, and resume."
+        "Scatter-Gather Queries: If a query cannot filter by the shard key (e.g., `SELECT * FROM orders WHERE customer_email = 'alice@example.com'` on an `order_id`-sharded database), the router must dispatch queries to all shards in parallel and merge results in memory.",
+        "Cross-Shard Joins: Traditional relational JOINs across shards are impossible. Applications must either denormalize data into the same shard, or query each shard independently and join in application memory.",
+        "Re-Sharding Complexity: When growing from 4 shards to 8 shards, modulo hashing (`hash % 4` to `hash % 8`) remaps ~75% of all keys. Using virtual bucket mapping (e.g., 1,024 fixed virtual buckets distributed across physical shards) ensures adding nodes only moves `1/N` keys."
       ]
     }
   ],
   "tradeOffs": [
     {
-      "option": "Hash-Based Sharding (e.g., hash(user_id))",
-      "pros": "Uniform distribution of data and write IOPS across all cluster nodes.",
-      "cons": "Range queries across the shard key require expensive scatter-gather fan-out.",
-      "bestFor": "Multi-tenant SaaS (`tenant_id`), social networks (`user_id`), and messaging apps."
+      "option": "Single Large Database (Vertical Scale + Replicas)",
+      "pros": "Full ACID transactions; native relational JOINs; zero routing infrastructure; simple backups.",
+      "cons": "Hard physical limits on CPU, memory, and write IOPS; high cost at top cloud instance tiers.",
+      "bestFor": "Most systems handling under 20,000 writes/sec and under 5 TB of relational data."
     },
     {
-      "option": "Range / Directory-Based Sharding",
-      "pros": "Efficient range queries; flexible mapping allows isolating VIP/huge tenants onto dedicated shards.",
-      "cons": "Requires a highly available lookup directory; prone to sequential write hotspots.",
-      "bestFor": "Time-series archival, enterprise multi-tenant systems with uneven tenant sizes."
+      "option": "Horizontally Sharded Architecture",
+      "pros": "Virtually unlimited storage and write throughput capacity; bounds the blast radius of single-node hardware failures.",
+      "cons": "Eliminates cross-shard ACID transactions; schema migrations require coordinating across dozens of nodes; complex resharding.",
+      "bestFor": "Hyperscale multi-tenant SaaS, global social networks, and payment engines processing 50k+ writes/sec."
     }
   ],
-  "interviewTip": "Exhaust vertical scaling, indexing, caching, connection pooling, and table partitioning before introducing Sharding. When you do shard, pick a key that co-locates 95%+ of your entity queries on a single shard.",
-  "jsonUrl": "/api/subtopics/database/db-sharding.json",
-  "diagramImageUrl": "/diagrams/arch-db-sharding.svg"
+  "interviewTip": "In system design interviews, never jump straight to sharding without justifying it with numbers: 'A single AWS RDS Postgres instance can handle 20,000 writes per second. Because our peak write volume is 60,000 writes/sec, we are forced to shard. We will shard by `tenant_id` to ensure that 99% of queries remain single-shard operations.'",
+  "jsonUrl": "/api/subtopics/database/db-sharding.json"
 }

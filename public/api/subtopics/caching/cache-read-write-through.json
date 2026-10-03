@@ -5,55 +5,53 @@
   "topicNumber": 5,
   "subtopicNumber": "5.2",
   "title": "Read/Write Through",
-  "subtitle": "Inline caching abstractions where the cache sits directly in the data path and coordinates synchronous database persistence.",
+  "subtitle": "Inline caching abstractions where the cache layer sits directly in the data access path and coordinates database persistence.",
   "readingTime": "7 min read",
   "difficulty": "Intermediate",
   "keyTakeaways": [
-    "In Read-Through and Write-Through caching, the application treats the cache provider (e.g., AWS DynamoDB Accelerator DAX, NCache) as the single main data store.",
-    "Write-Through updates both the cache and the underlying database synchronously on every write, guaranteeing strong cache-to-DB consistency.",
-    "Write-Through eliminates stale reads and cold-read misses for newly written data, at the cost of higher write latency."
+    "In Read-Through and Write-Through caching, the application interacts solely with the cache abstraction, treating it as the primary data store.",
+    "Write-Through caching writes synchronously to both the cache and the database before acknowledging success, guaranteeing consistency at the cost of higher write latency.",
+    "While simplifying application code, Write-Through caches can pollute memory with rarely-read data unless paired with aggressive LRU eviction or write-around policies."
   ],
-  "architectureDiagram": "                      READ-THROUGH & WRITE-THROUGH\n\n[Application] === 1. Write(k, v) ===> [Cache Proxy / DAX] === 2. Sync Write ===> [Database]\n[Application] <-- 4. ACK Success ---- [Cache Proxy / DAX] <-- 3. DB Commit ACK -- [Database]\n\n[Application] === 1. Read(k) =======> [Cache Proxy / DAX] --- (If Miss: Load) -> [Database]",
+  "architectureDiagram": "INLINE CACHING ARCHITECTURE (Read-Through & Write-Through)\nREAD PATH:\n  [ App Server ] --- 1. GET key ---> [ Cache Layer ]\n                                           |\n                                           +--- 2. On Miss: SELECT ---> [ Database ]\n                                           +--- 3. Populates Cache & Returns Data\n\nWRITE PATH (Synchronous Write-Through):\n  [ App Server ] --- 1. PUT key ---> [ Cache Layer ]\n                                           |\n                                           +--- 2. Synchronous UPDATE -> [ Database ]\n                                           +--- 3. Updates Cache Memory\n                                           +--- 4. Returns 200 OK to App Server",
   "sections": [
     {
-      "heading": "How Read-Through and Write-Through Work Together",
-      "body": "Unlike Cache-Aside, where application code explicitly talks to both Redis and PostgreSQL, Read-Through and Write-Through delegate storage coordination to an inline cache layer or data-access library. On a read miss, the cache provider itself loads the record from the backing database, stores it, and returns it. On a write, the cache updates its in-memory state and synchronously writes through to the database before acknowledging success.",
+      "heading": "How Read-Through and Write-Through Operate Together",
+      "body": "Unlike Cache-Aside where the application explicitly manages two separate network clients (Redis and the DB), inline caching abstracts the database behind the cache interface. The application treats the cache as the authoritative system of record. On reads, the cache handles cache misses transparently by querying the database. On writes, the cache writes data synchronously to both in-memory storage and the backing database before returning success.",
       "bullets": [
-        "Clean Application Code: Business logic interacts with a single unified storage interface rather than juggling cache invalidation logic.",
-        "Always Warm After Write: Newly created or updated records are immediately present in the cache, preventing read-after-write cache misses.",
-        "Real-World Examples: Amazon DynamoDB Accelerator (DAX), Hazelcast Read/Write-Through MapStore, and CDNs acting as read-through caches in front of S3 origins."
+        "Simplified Application Logic: Business services contain zero database fetch or fallback boilerplate; code interacts with a single unified data client.",
+        "Synchronous Consistency: Eliminates the stale read race condition found in naive cache-aside implementations because the cache layer serializes writes to both tiers.",
+        "Write Latency Overhead: Write latency is the sum of memory update latency and database disk fsync latency."
       ],
       "codeSnippet": {
-        "title": "Write-Through Wrapper with Distributed Lock / Version Guard",
-        "code": "class WriteThroughRepository {\n  async saveOrder(order: Order): Promise<void> {\n    // 1. Persist synchronously to authoritative DB first (or inside atomic proxy)\n    const committed = await this.db.orders.upsert(order);\n\n    // 2. Synchronously populate cache only if version is newer (conditional Lua update)\n    const luaScript = `\n      local currVer = redis.call('HGET', KEYS[1], 'version')\n      if (not currVer) or (tonumber(ARGV[1]) > tonumber(currVer)) then\n        redis.call('HSET', KEYS[1], 'version', ARGV[1], 'payload', ARGV[2])\n        redis.call('EXPIRE', KEYS[1], 3600)\n      end\n    `;\n    await this.redis.eval(luaScript, 1, `order:${order.id}`, committed.version, JSON.stringify(committed));\n  }\n}"
-      },
-      "diagramImageUrl": "/diagrams/arch-cache-read-write-through.svg"
+        "title": "Write-Through Cache Layer Abstraction",
+        "code": "export class WriteThroughCache<T> {\n  constructor(private cache: CacheStore, private db: DatabaseStore) {}\n\n  async get(key: string): Promise<T | null> {\n    const cached = await this.cache.get(key);\n    if (cached) return JSON.parse(cached);\n\n    // Transparently fetch from DB on miss\n    const record = await this.db.fetchById(key);\n    if (record) {\n      await this.cache.set(key, JSON.stringify(record), 3600);\n    }\n    return record;\n  }\n\n  async set(key: string, value: T): Promise<void> {\n    // Synchronously write to DB first to ensure durability\n    await this.db.persist(key, value);\n    // Update in-memory cache before acknowledging client\n    await this.cache.set(key, JSON.stringify(value), 3600);\n  }\n}"
+      }
     },
     {
-      "heading": "Handling Partial Failures & Cache Pollution",
-      "body": "The main downside of Write-Through is two-fold: first, every write pays the latency of both the database and the cache; second, write-once data (like audit logs or rarely viewed records) pollutes the cache memory and evicts hot read items unless a TTL or write-around policy is applied.",
+      "heading": "Handling Partial Failures and Cache Pollution",
+      "body": "The primary challenge in Write-Through caching is managing partial failures. If the cache update succeeds but the database write fails due to a constraint violation, the cache holds phantom data. Conversely, if the database write succeeds but the cache write fails, the cache serves stale data until eviction.",
       "bullets": [
-        "Write-Around Hybrid: Write infrequent/bulk data directly to the DB (bypassing cache) and let Read-Through populate only items that are actually read.",
-        "Dual-Write Atomicity: If implementing Write-Through in application code without a managed proxy, use a conditional version check (Lua script) so concurrent writers never overwrite a newer cached version with an older one.",
-        "Read-Your-Own-Writes Guarantee: Because the write is already in the cache before returning to the user, subsequent reads hitting the cache see the update immediately."
+        "Database First: Always commit to durable persistent storage first; if the database transaction fails, abort immediately before updating cache memory.",
+        "Cache Pollution Risk: Writing every single mutation into cache memory means high-volume batch imports or write-heavy tables can flush active hot data out of RAM.",
+        "Write-Around Alternative: For datasets with low read-to-write ratios (such as audit logs or telemetry), bypass the cache on writes entirely ('Write-Around') and let data populate lazily on first read."
       ]
     }
   ],
   "tradeOffs": [
     {
       "option": "Write-Through Caching",
-      "pros": "Cache is never stale after a write; immediate read-your-writes consistency; zero cold-read miss.",
-      "cons": "Higher write latency (sync DB + Cache write); pollutes cache with data that may never be read again.",
-      "bestFor": "User session state, active shopping carts, and managed caches like DynamoDB DAX."
+      "pros": "Cache is always fresh immediately following writes; completely abstracts database interactions from application microservices.",
+      "cons": "Higher write latency (must wait for synchronous DB commit); high memory churn if written data is rarely read.",
+      "bestFor": "Read-heavy entities with frequent read-after-write access patterns (user profile preferences, auth permissions)."
     },
     {
-      "option": "Cache-Aside with Delete-on-Write",
-      "pros": "Faster writes; never wastes cache memory on unread writes; works with any custom SQL query.",
-      "cons": "Next read after a write always incurs a cache miss and DB fetch.",
-      "bestFor": "General microservice architectures where read shapes differ from write entities."
+      "option": "Write-Around Caching",
+      "pros": "Prevents cache memory pollution from bulk writes; preserves RAM for frequently accessed hot datasets.",
+      "cons": "First read after a write always encounters a cache miss and pays full database query latency.",
+      "bestFor": "Real-time logging, analytical events, invoice archives, and historical record generation."
     }
   ],
-  "interviewTip": "Contrast Cache-Aside with Write-Through by asking: 'Will this newly written item be read immediately by thousands of users?' If yes (e.g., a breaking news article or live sports score), Write-Through prevents a cache miss storm on the database.",
-  "jsonUrl": "/api/subtopics/caching/cache-read-write-through.json",
-  "diagramImageUrl": "/diagrams/arch-cache-read-write-through.svg"
+  "interviewTip": "Distinguish between Write-Through and Write-Behind: 'Write-Through writes synchronously to both the cache and database before returning, ensuring zero data loss. Write-Behind acknowledges the write immediately to RAM and flushes to the database asynchronously, maximizing throughput at the risk of losing recent writes if the cache crashes.'",
+  "jsonUrl": "/api/subtopics/caching/cache-read-write-through.json"
 }

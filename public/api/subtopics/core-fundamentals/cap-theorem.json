@@ -5,55 +5,55 @@
   "topicNumber": 1,
   "subtopicNumber": "1.5",
   "title": "CAP Theorem",
-  "subtitle": "Navigating Consistency, Availability, and Partition Tolerance: plus the PACELC extension that governs normal operation.",
+  "subtitle": "Navigating Consistency, Availability, and Partition Tolerance, plus the PACELC trade-offs that govern normal operation.",
   "readingTime": "8 min read",
   "difficulty": "Intermediate",
   "keyTakeaways": [
-    "In any distributed system, network partitions (P) are inevitable hardware realities; therefore, CAP is really a choice between Consistency (CP) and Availability (AP) *during a partition*.",
-    "CAP's 'Consistency' specifically means Linearizability (every read sees the most recent write), and 'Availability' means every non-failing node returns a non-error response.",
-    "The PACELC theorem completes the picture: even when there is NO partition (Else), you must still trade off Latency (L) vs Consistency (C)."
+    "In physical networks, partitions (P) are an unavoidable reality; therefore, CAP is an architectural choice between Consistency (CP) and Availability (AP) during network failures.",
+    "In the CAP context, Consistency specifically means Linearizability (every read sees the latest write), and Availability means every healthy node returns a non-error response.",
+    "The PACELC theorem captures normal conditions: even when there is no partition, systems must still trade Latency (L) against Consistency (C)."
   ],
   "architectureDiagram": "            [ Network Partition Occurs (P) ]\n             Node A  ---( X Broken Link X )---  Node B\n               |                                  |\n     +---------+---------+              +---------+---------+\n     |                   |              |                   |\n     v                   |              |                   v\n[ CP System ]            |              |              [ AP System ]\nRejects writes/reads     |              |     Both nodes accept writes\non minority side to      |              |     and serve slightly stale\nprevent split-brain.     |              |     reads; reconcile later.\n(ZooKeeper, Etcd, HBase) |              |     (Cassandra, DynamoDB)",
   "sections": [
     {
-      "heading": "Deconstructing CAP: Why 'CA' Systems Do Not Exist",
-      "body": "Formulated by Eric Brewer and proven by Gilbert and Lynch, the CAP theorem states that a distributed data store can simultaneously provide at most two of three guarantees: Consistency (Linearizability), Availability, and Partition Tolerance. Because switches crash, fiber cables get cut, and GC pauses mimic network drops, Partition Tolerance (P) is non-negotiable in any multi-node system. Thus, architects must decide how the system behaves when nodes cannot talk to each other: cancel operations to preserve a single source of truth (CP), or keep accepting operations and resolve divergence later (AP).",
+      "heading": "Why 'CA' Systems Do Not Exist in Production",
+      "body": "The CAP theorem states that a distributed data store can guarantee at most two out of Consistency, Availability, and Partition Tolerance. Because cables get cut, switches reboot, and GC pauses mimic network dropouts, Partition Tolerance (P) is a physical constraint of running across multiple servers. An architect cannot opt out of partitions. The real decision is how the system behaves when nodes cannot talk: reject writes to prevent divergent state (CP), or keep accepting writes and reconcile conflicts later (AP).",
       "bullets": [
-        "CP (Consistency + Partition Tolerance): Majority quorum continues; minority partition rejects requests with errors to prevent split-brain.",
-        "AP (Availability + Partition Tolerance): All reachable nodes respond using local state, risking stale reads or conflicting writes.",
-        "Granular CAP: You don't choose CP or AP for an entire company, you choose CP for the checkout service and AP for the product review feed."
+        "CP Systems (Consistency + Partition Tolerance): The majority quorum continues serving; nodes on the minority partition reject requests with errors to prevent split-brain corruption.",
+        "AP Systems (Availability + Partition Tolerance): All reachable nodes accept local writes, risking stale reads or conflicting state across partitions.",
+        "Granular Selection: Organizations do not pick CP or AP globally. You choose CP for financial checkout and inventory reservation, and AP for social feed updates and analytics."
       ],
       "codeSnippet": {
-        "title": "Quorum Enforcement in a CP vs Tunable AP Store",
-        "code": "interface QuorumConfig {\n  replicationFactorN: number; // e.g., 3 replicas\n  writeQuorumW: number;       // Nodes that must ack a write\n  readQuorumR: number;        // Nodes queried on a read\n}\n\n// Strict Quorum (Strong Consistency / CP behavior): W + R > N\nexport const strictQuorum: QuorumConfig = {\n  replicationFactorN: 3,\n  writeQuorumW: 2,\n  readQuorumR: 2, // 2 + 2 > 3: Read set is guaranteed to overlap with latest Write set\n};\n\n// Sloppy Quorum (High Availability / AP behavior): W + R <= N\nexport const fastAvailableConfig: QuorumConfig = {\n  replicationFactorN: 3,\n  writeQuorumW: 1,\n  readQuorumR: 1, // Fast & available during partitions, but reads may be stale\n};"
+        "title": "Quorum Math in CP vs Tunable AP Storage",
+        "code": "interface QuorumConfig {\n  replicationFactorN: number; // e.g., 3 replicas\n  writeQuorumW: number;       // Nodes that must acknowledge write\n  readQuorumR: number;        // Nodes queried on read\n}\n\n// Strict Quorum (CP / Linearizable): W + R > N\n// The read set is mathematically guaranteed to overlap with the write set\nexport const strictQuorum: QuorumConfig = {\n  replicationFactorN: 3,\n  writeQuorumW: 2,\n  readQuorumR: 2,\n};\n\n// Sloppy Quorum (AP / Low Latency): W + R <= N\n// Fast and partition-tolerant, but reads can return stale data\nexport const highAvailabilityConfig: QuorumConfig = {\n  replicationFactorN: 3,\n  writeQuorumW: 1,\n  readQuorumR: 1,\n};"
       },
       "diagramImageUrl": "/diagrams/arch-cap-theorem.svg"
     },
     {
-      "heading": "Beyond CAP: The PACELC Theorem",
-      "body": "CAP only describes system behavior during rare network partitions. Daniel Abadi introduced PACELC to capture what happens the other 99.99% of the time: **If there is a Partition (P)**, how does the system trade off **Availability (A) and Consistency (C)**; **Else (E)**, when the system is running normally in the absence of partitions, how does the system trade off **Latency (L) and Consistency (C)**?",
+      "heading": "Beyond Partitions: The PACELC Theorem",
+      "body": "Network partitions represent an exceptional condition. Daniel Abadi formulated the PACELC theorem to describe system trade-offs during steady state: If there is a Partition (P), trade off Availability (A) versus Consistency (C); Else (E), trade off Latency (L) versus Consistency (C). To enforce strong consistency when networks are healthy, writes must coordinate across multiple nodes before responding, adding network round trips to baseline latency.",
       "bullets": [
-        "PC/EC (e.g., Spanner, CockroachDB, Etcd): Chooses Consistency during partitions AND pays replication latency during normal operation for strong reads.",
-        "PA/EL (e.g., Cassandra, DynamoDB default): Chooses Availability during partitions AND optimizes for low Latency during normal operation via async replication.",
-        "PA/EC (e.g., MongoDB configured with majority reads/writes in some topologies): Prioritizes consistency in normal mode or vice versa."
+        "PC/EC (e.g., CockroachDB, Spanner, etcd): Preserves consistency during partitions, and pays consensus latency during normal operations for linearizable reads.",
+        "PA/EL (e.g., Cassandra, DynamoDB defaults): Maintains availability during partitions, and optimizes for minimal latency via asynchronous replication during normal operations.",
+        "PA/EC (e.g., MongoDB with majority write concern): Optimizes for consistency during steady state, but drops to available mode under network splits."
       ]
     }
   ],
   "tradeOffs": [
     {
-      "option": "CP Architecture (e.g., Etcd, Spanner, ZooKeeper)",
-      "pros": "Guarantees linearizable state, prevents double-spending and split-brain corruption, simplifies application logic.",
-      "cons": "Returns errors/timeouts if majority quorum is unreachable; higher write latency due to consensus round-trips.",
-      "bestFor": "Distributed locks, leader election, seat booking, bank balances, and metadata configuration stores."
+      "option": "CP Architecture (e.g., etcd, Spanner, ZooKeeper)",
+      "pros": "Guarantees linearizable state; prevents double-spending and split-brain states; simplifies application logic.",
+      "cons": "Returns errors or times out if a quorum cannot be reached; higher write latency due to consensus round trips.",
+      "bestFor": "Distributed lock management, leader election, payment ledgers, and critical configuration storage."
     },
     {
-      "option": "AP Architecture (e.g., Cassandra, Dynamo, Riak)",
-      "pros": "Always accepts writes (via hinted handoffs) and serves reads even when data centers are severed; lowest possible latency.",
-      "cons": "Application must handle stale reads, read-repair, vector clocks, LWW (Last-Write-Wins), or CRDT conflict resolution.",
-      "bestFor": "Shopping carts (Amazon Dynamo model), user status/presence, IoT sensor ingestion, and social likes."
+      "option": "AP Architecture (e.g., Cassandra, DynamoDB, Couchbase)",
+      "pros": "Always accepts local writes via hinted handoffs; serves reads even when datacenters are severed; lowest baseline latency.",
+      "cons": "Applications must handle stale reads, conflict resolution (last-write-wins or CRDTs), and data divergence.",
+      "bestFor": "Shopping carts, user presence tracking, IoT sensor telemetry, and social media interactions."
     }
   ],
-  "interviewTip": "Never say 'I will pick CA from the CAP theorem.' Interviewers treat claiming a distributed system is 'CA' as an immediate red flag because you cannot prevent network partitions in physical reality.",
+  "interviewTip": "Never say 'I will design a CA system.' Claiming a distributed system is 'CA' indicates a fundamental misunderstanding of networking realities, because physical network partitions cannot be prevented.",
   "jsonUrl": "/api/subtopics/core-fundamentals/cap-theorem.json",
   "diagramImageUrl": "/diagrams/arch-cap-theorem.svg"
 }

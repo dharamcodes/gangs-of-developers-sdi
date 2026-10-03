@@ -3,59 +3,56 @@
   "topicId": "api-design",
   "topicTitle": "API Design",
   "topicNumber": 3,
-  "subtopicNumber": "3.5",
+  "subtopicNumber": "3.4",
   "title": "Rate Limiting",
-  "subtitle": "Comparing Token Bucket, Leaky Bucket, Fixed Window, and Sliding Window algorithms, plus distributed Redis Lua atomic execution.",
+  "subtitle": "Token Bucket, Leaky Bucket, Sliding Window algorithms, and distributed atomic enforcement using Redis Lua scripts.",
   "readingTime": "8 min read",
   "difficulty": "Intermediate",
   "keyTakeaways": [
-    "Rate limiting protects backend services from DDoS attacks, noisy-neighbor tenants, credential stuffing, and runaway cloud costs by returning `HTTP 429 Too Many Requests`.",
-    "**Token Bucket** is the industry default for APIs (allows controlled short bursts up to bucket capacity), while **Sliding Window Log/Counter** eliminates the 2x boundary spike bug of Fixed Windows.",
-    "In a distributed API Gateway fleet, prevent race conditions between concurrent gateway nodes by executing the rate-limit check-and-decrement inside an **atomic Redis Lua script**."
+    "Rate limiting protects backend systems from denial-of-service spikes, brute-force credential stuffing, and noisy-neighbor resource starvation.",
+    "The Token Bucket algorithm allows controlled bursts while enforcing an average rate; the Sliding Window Counter algorithm prevents 2x boundary spikes with minimal memory.",
+    "In distributed architectures, rate limit checks must execute atomically in Redis using single Lua scripts to prevent read-modify-write race conditions."
   ],
-  "architectureDiagram": "TOKEN BUCKET (Allows Bursts)              FIXED WINDOW BOUNDARY BUG (2x Spike!)\n   Refill: 2 tokens/sec                     Limit: 100 req / minute\n        |                                        Window 1          Window 2\n        v                                   |----00:00 to 01:00----|----01:00 to 02:00----|\n  +-----------+                                          [100 reqs] [100 reqs]\n  | o o o o o | Capacity = 5                             at 00:59!  at 01:01!\n  +-----+-----+                             --> 200 requests in 2 seconds!\n        |                                       (Solved by Sliding Window Counter)\n   Req takes 1 token -> 200 OK\n   Empty? -> 429 Too Many Requests",
+  "architectureDiagram": "DISTRIBUTED RATE LIMITING AT THE EDGE GATEWAY\n[ Client Requests ]\n        |\n        v\n+-------------------------------------------------------+\n|                   API Gateway Edge                    |\n| - Extracts Client Identifier (API Key, User ID, IP)   |\n| - Executes Atomic Lua Script on Redis Cluster         |\n+---------------------------+---------------------------+\n                            |\n           EVAL \"redis_sliding_window.lua\" (1 RTT)\n                            v\n+-------------------------------------------------------+\n|                 Redis Cluster / Shard                 |\n|  Allowed? -> Yes: Forward to Microservices            |\n|  Allowed? -> No:  Return HTTP 429 + Retry-After: 12   |\n+-------------------------------------------------------+",
   "sections": [
     {
-      "heading": "Comparing the 5 Core Rate Limiting Algorithms",
-      "body": "Choosing the right rate-limiting algorithm depends on whether your downstream system can tolerate short bursts of traffic (like a user opening 5 browser tabs at once) or requires a strictly smoothed constant inflow rate.",
+      "heading": "Comparing the Core Rate Limiting Algorithms",
+      "body": "Selecting a rate limiting algorithm depends on whether your workload requires smoothing traffic out into an even trickle or accommodating brief, legitimate bursts of client activity.",
       "bullets": [
-        "1. Token Bucket (Stripe / AWS API Gateway): A bucket holds up to `B` tokens and refills at `R` tokens/sec. Each request consumes 1 token. Allows legitimate bursts up to `B` while capping long-term average rate to `R`. Memory footprint: just 2 numbers (`tokens`, `last_refill_ts`) per user!",
-        "2. Leaky Bucket (Shopify / Network Traffic Shaping): Requests enter a FIFO queue of fixed size and leak out at a strict constant rate. Smooths bursts completely, but adds queuing delay.",
-        "3. Fixed Window Counter: Increments a Redis counter keyed by `user_id:minute_bucket`. Simple (`O(1)`), but allows `2x` the limit across window boundaries (e.g., 100 requests at `00:59` and 100 at `01:01`).",
-        "4. Sliding Window Log: Stores exact timestamps in a Redis Sorted Set (`ZSET`), removes entries older than `now - 60s` (`ZREMRANGEBYSCORE`), and counts remaining (`ZCARD`). 100% accurate, but high memory cost for high limits.",
-        "5. Sliding Window Counter: Hybrid weighted average of the previous fixed window and current fixed window (`prev_count * overlap_% + curr_count`). 99.9% accurate using only 2 integers!"
+        "Token Bucket: Tokens accumulate in a bucket at a steady rate up to a maximum capacity. Each request consumes one token. If empty, the request is rejected. Ideal for APIs that must tolerate natural client bursts while capping long-term throughput.",
+        "Leaky Bucket: Requests enter a FIFO queue and leak out at a constant, fixed rate. Flattens out bursts completely; excess requests overflow and drop. Best for queue-based worker protection and traffic shaping.",
+        "Fixed Window: Counts requests in fixed time windows (e.g., 100 requests per minute from 12:00 to 12:01). Severe flaw: a client can send 100 requests at 12:00:59 and another 100 requests at 12:01:01, dumping 200 requests within two seconds (2x burst spike).",
+        "Sliding Window Counter: Calculates an estimated count by taking the current window's count plus a weighted percentage of the previous window. Delivers 99%+ accuracy with tiny memory footprint (two integer keys per user)."
       ],
       "codeSnippet": {
-        "title": "Atomic Distributed Token Bucket in Redis Lua (Race-Condition Free)",
-        "code": "-- Executed via EVALSHA on Redis so read + refill math + write runs atomically in <0.2ms!\n-- KEYS[1] = \"rl:bucket:user_123\"\n-- ARGV[1] = capacity (e.g. 20), ARGV[2] = refill_rate_per_ms, ARGV[3] = now_ms\n\nlocal data = redis.call(\"HMGET\", KEYS[1], \"tokens\", \"last_ts\")\nlocal tokens = tonumber(data[1])\nlocal last_ts = tonumber(data[2])\nlocal capacity = tonumber(ARGV[1])\nlocal rate = tonumber(ARGV[2])\nlocal now = tonumber(ARGV[3])\n\nif tokens == nil then\n  tokens = capacity\n  last_ts = now\nelse\n  local elapsed = math.max(0, now - last_ts)\n  tokens = math.min(capacity, tokens + (elapsed * rate))\n  last_ts = now\nend\n\nif tokens >= 1 then\n  tokens = tokens - 1\n  redis.call(\"HMSET\", KEYS[1], \"tokens\", tokens, \"last_ts\", last_ts)\n  redis.call(\"EXPIRE\", KEYS[1], 3600)\n  return {1, math.floor(tokens)} -- Allowed (1) + remaining tokens\nelse\n  return {0, 0}                  -- Rejected (429 Too Many Requests)\nend"
-      },
-      "diagramImageUrl": "/diagrams/arch-rate-limiting.svg"
+        "title": "Atomic Sliding Window Rate Limiter via Redis Lua Script",
+        "code": "-- KEYS[1]: rate limit key (e.g., 'ratelimit:user_123')\n-- ARGV[1]: current timestamp in milliseconds\n-- ARGV[2]: window size in milliseconds (e.g., 60000 for 1 minute)\n-- ARGV[3]: max allowed requests in window\n\nlocal key = KEYS[1]\nlocal now = tonumber(ARGV[1])\nlocal window = tonumber(ARGV[2])\nlocal limit = tonumber(ARGV[3])\nlocal clearBefore = now - window\n\n-- 1. Remove timestamps outside the sliding window\nredis.call('ZREMRANGEBYSCORE', key, 0, clearBefore)\n\n-- 2. Count remaining requests in the active window\nlocal currentRequests = redis.call('ZCARD', key)\n\nif currentRequests < limit then\n  -- 3. Add current request and reset key expiration\n  redis.call('ZADD', key, now, now)\n  redis.call('PEXPIRE', key, window)\n  return 1 -- Allowed\nelse\n  return 0 -- Rejected (Rate limit exceeded)\nend"
+      }
     },
     {
-      "heading": "Distributed Rate Limiting Architecture & Client Headers",
-      "body": "When running 50 API Gateway pods, storing counters in local pod memory means a user can exceed their limit by 50x unless sticky routing is used. Centralizing state in a **Redis Cluster** using atomic Lua scripts solves this. Always return standard rate-limit response headers so well-behaved client SDKs can self-throttle before getting blocked.",
+      "heading": "Distributed Rate Limiting and Informative Client Headers",
+      "body": "In a multi-server deployment, rate limits cannot be stored in local server memory because requests from the same user land on different servers behind the load balancer. Storing counts in a centralized Redis cluster solves this, but naive client implementations that read a count, increment it, and write it back create race conditions under high concurrency. Atomic Lua scripts guarantee thread safety in a single round trip.",
       "bullets": [
-        "Standard Response Headers: `X-RateLimit-Limit: 100`, `X-RateLimit-Remaining: 42`, `X-RateLimit-Reset: 1710514800`, and `Retry-After: 15` on `HTTP 429`.",
-        "Fail-Open vs Fail-Closed: If the Redis rate-limiter cluster goes down, most user-facing APIs **fail open** (allow traffic through using local fallback memory limits) rather than taking down the entire company.",
-        "Multi-Dimensional Rules: Rate-limit by `User ID`, `API Key`, `IP Address` (for unauthenticated endpoints like `/login`), and endpoint cost weight."
+        "Standard Client Headers: Transparent APIs inform callers of their quota via `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset`.",
+        "Handling Rejections: Return HTTP 429 Too Many Requests paired with a `Retry-After: <seconds>` header so well-behaved clients back off without hammering the endpoint.",
+        "Tiered Enforcement: Apply multiple rate limits simultaneously (e.g., 10 requests per second for burst protection, paired with 5,000 requests per day for billing compliance)."
       ]
     }
   ],
   "tradeOffs": [
     {
-      "option": "Token Bucket (2 fields in Redis Hash via Lua)",
-      "pros": "O(1) tiny memory footprint (16 bytes per user), naturally accommodates brief user bursts without false-positive 429s.",
-      "cons": "Downstream services must be able to handle brief simultaneous bursts equal to bucket capacity `B`.",
-      "bestFor": "General user-facing REST/GraphQL APIs, SaaS tier quotas, and cloud control-plane APIs."
+      "option": "Token Bucket Algorithm",
+      "pros": "Supports natural bursty traffic while bounding average throughput; memory footprint is tiny (just token count and timestamp).",
+      "cons": "Allows bursts that can temporarily stress downstream microservices if burst capacity is configured too generously.",
+      "bestFor": "General public APIs (AWS, GitHub, Stripe), user authentication endpoints, and payment gateways."
     },
     {
-      "option": "Sliding Window Counter / Leaky Bucket",
-      "pros": "Prevents boundary burst spikes (Sliding Window) or smooths outflow to a strict constant QPS (Leaky Bucket) to protect fragile databases.",
-      "cons": "Leaky Bucket delays requests in a queue; Sliding Window Log consumes excessive RAM for high-volume users (e.g., 10,000 req/min).",
-      "bestFor": "Protecting legacy third-party banking rails, SMS gateways, or strict per-second compliance limits."
+      "option": "Leaky Bucket Algorithm",
+      "pros": "Smooths outgoing traffic into a perfectly steady flow; eliminates downstream database spikes.",
+      "cons": "Holds requests in memory queues, increasing latency for bursts; drops packets if queue overflows.",
+      "bestFor": "Asynchronous job queues, outgoing email/SMS delivery pipelines, and network packet shaping."
     }
   ],
-  "interviewTip": "If asked to design a Rate Limiter in an interview, explicitly mention the **Read-Modify-Write Race Condition** when two gateway nodes read `count = 99` from Redis at the same time and both write `100`, and explain how a **Redis Lua Script** (`EVAL`) or `INCR` guarantees single-threaded atomicity.",
-  "jsonUrl": "/api/subtopics/api-design/rate-limiting.json",
-  "diagramImageUrl": "/diagrams/arch-rate-limiting.svg"
+  "interviewTip": "Whenever an interviewer asks where rate limiting should live, recommend enforcing it at the API Gateway layer using Redis with Lua scripts: 'Enforcing rate limits at the gateway prevents unauthorized or excessive traffic from consuming compute resources in internal microservices, and using Lua scripts avoids race conditions without distributed locks.'",
+  "jsonUrl": "/api/subtopics/api-design/rate-limiting.json"
 }

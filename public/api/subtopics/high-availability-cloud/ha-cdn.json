@@ -5,23 +5,23 @@
   "topicNumber": 11,
   "subtopicNumber": "11.8",
   "title": "CDN",
-  "subtitle": "Anycast edge POPs, tiered origin shielding, stale-while-revalidate caching, and dynamic edge compute.",
+  "subtitle": "Anycast edge termination, origin shielding, cache invalidation, and absorbing traffic spikes.",
   "readingTime": "8 min read",
   "difficulty": "Foundational",
   "keyTakeaways": [
-    "A Content Delivery Network (CDN) terminates TLS/QUIC at hundreds of global Points of Presence (POPs) close to the user, eliminating long-haul TCP handshake RTTs and absorbing 85-99% of read traffic before it reaches the origin.",
-    "Origin Shielding funnels cache misses from hundreds of edge POPs through a single regional aggregation POP with request coalescing, preventing thundering-herd origin collapse on cache expiry.",
-    "Immutable content-addressed asset URLs (`app.8f92a.js`) paired with `stale-while-revalidate` and surrogate keys provide instant cache invalidation without origin load spikes."
+    "CDNs terminate TLS and TCP handshakes at hundreds of edge Points of Presence (POPs) near users, cutting round-trip latency and absorbing 90%+ of read traffic.",
+    "Origin Shielding places a centralized caching tier between edge POPs and the backend origin, coalescing simultaneous misses into a single origin request to prevent thundering herds.",
+    "Use content-addressed immutable URLs for static assets and combine stale-while-revalidate with Surrogate Keys for dynamic APIs to allow immediate invalidation without latency spikes."
   ],
   "architectureDiagram": "Users Worldwide\n  |       |       |  (Anycast BGP -> Nearest Edge POP: 5-15ms TLS Termination)\n  v       v       v\n+-------+-------+-------+      Cache Miss\n| POP 1 | POP 2 | POP 3 | --------------------+\n| Tokyo | Paris | NYC   |                     | (Collapsed Forwarding:\n+-------+-------+-------+                     |  1000 misses -> 1 request)\n                                              v\n                                    +-------------------+\n                                    |   Origin Shield   |\n                                    | (Regional Mid-Tier|\n                                    |  Persistent Conn) |\n                                    +---------+---------+\n                                              | (Single Origin Fetch)\n                                              v\n                                    +-------------------+\n                                    | Origin Load Bal   |\n                                    | & Storage / API   |\n                                    +-------------------+",
   "sections": [
     {
-      "heading": "Anycast Edge Termination, Origin Shielding & Request Coalescing",
-      "body": "CDNs do far more than cache static images. By advertising the same IP address from 300+ global locations via BGP Anycast, a CDN terminates the client's TCP and TLS 1.3 / HTTP/3 handshake within 10 milliseconds of the user, then reuses pre-warmed, multiplexed persistent connections over private fiber backbones to your origin.",
+      "heading": "Edge Termination and Origin Shielding Mechanics",
+      "body": "CDNs do much more than store static JPEG files. By advertising identical IP addresses from hundreds of locations worldwide using BGP Anycast, a CDN terminates client TCP and TLS handshakes locally, eliminating multiple round trips across long-haul undersea fiber.",
       "bullets": [
-        "Request Coalescing (Collapsed Forwarding): If a popular live-score JSON or video manifest expires at an Edge POP and 5,000 users request it within 20ms, the POP holds 4,999 requests in memory and sends only **1** fetch upstream.",
-        "Tiered Caching / Origin Shield: Without shielding, 300 global Edge POPs experiencing a cache miss still send 300 simultaneous requests to the origin. An Origin Shield POP sits right in front of the origin region, collapsing those 300 edge misses into a single origin request.",
-        "Dynamic API Acceleration & Edge Compute: Even for non-cacheable POST requests, edge TLS termination, TCP BBR congestion control, and Edge Workers (JWT validation, bot mitigation, A/B routing) offload heavy work from origin clusters."
+        "Anycast edge routing: A user in London connects to an edge server in London, completing the TLS handshake in under 15ms instead of waiting 85ms for a round trip to a US-East origin. Once connected, requests travel over optimized, persistent private backbone networks.",
+        "Origin Shielding: When 300 global edge POPs experience cache misses simultaneously, sending all 300 requests directly to the origin can trigger a thundering-herd crash. An Origin Shield acts as a regional caching parent, coalescing identical requests into a single backend fetch.",
+        "Connection reuse: Edge POPs maintain persistent, pre-warmed connection pools to the origin, removing the overhead of per-request TCP handshakes and TLS renegotiation."
       ],
       "codeSnippet": {
         "title": "Production Cache-Control & Surrogate-Key Headers for Edge Resilience",
@@ -29,29 +29,29 @@
       }
     },
     {
-      "heading": "Cache Key Design, Invalidation Strategies & Origin Outage Masking",
-      "body": "A CDN's cache hit ratio (CHR) depends on strict Cache Key normalization. Including raw query strings in random order (`?b=2&a=1` vs `?a=1&b=2`), tracking cookies, or raw `User-Agent` headers fragments the cache and drops hit ratios below 20%.",
+      "heading": "Cache Key Design, Invalidation, and Serving Stale on Origin Failure",
+      "body": "A CDN's effectiveness depends heavily on its Cache Hit Ratio (CHR). Poor cache key discipline can fragment the cache, causing hit rates to plummet from 95% down to 20%.",
       "bullets": [
-        "Content-Addressed Versioning vs Purging: For static bundles (JS/CSS/images), embed the SHA-256 content hash in the filename (`bundle.a1b2c3.js`) with `Cache-Control: public, max-age=31536000, immutable`. Never purge static assets, deploy a new HTML pointer.",
-        "Tag-Based Instant Invalidation (`Surrogate-Key` / `Cache-Tag`): For dynamic catalog or news pages, tag responses with entity IDs (`article_42`). When an editor updates the article, send a single API call to purge tag `article_42` globally in <150ms.",
-        "`stale-if-error` Origin Outage Shield: Directives like `stale-if-error=86400` instruct the CDN to continue serving slightly stale cached pages whenever the origin returns HTTP 500/502/503/504, masking backend outages from end users."
+        "Normalizing cache keys: Strip unnecessary query parameters (like marketing tags `utm_source` or `fbclid`) and sort remaining query params alphabetically (`?a=1&b=2` instead of `?b=2&a=1`) so identical requests map to the same cached object.",
+        "Surrogate Keys and tag-based purging: Tag cached objects with metadata headers (`Surrogate-Key: product_4921 category_18`). When an item updates, emit a single API call to purge all objects associated with that tag globally within 150ms.",
+        "Serving stale during origin failures: Using `stale-if-error=86400` in the `Cache-Control` header instructs CDN edge nodes to serve expired cached content if the origin returns HTTP 5xx or fails health checks, keeping the site functional during backend outages."
       ]
     }
   ],
   "tradeOffs": [
     {
-      "option": "Long TTL + Surrogate-Key Active Purge",
-      "pros": "Maximizes cache hit ratio (99%+) and shields origin completely until data actually mutates.",
-      "cons": "Requires reliable CDC/webhook integration to trigger tag purges; risk of stale data if a purge webhook fails.",
-      "bestFor": "E-commerce product catalogs, CMS/news publishing, and media metadata APIs."
+      "option": "Aggressive Edge Caching (Long TTLs + Stale-While-Revalidate)",
+      "pros": "Absorbs 95%+ of traffic at the edge; sub-20ms response times for users worldwide; protects origin from spikes.",
+      "cons": "Risk of serving stale data if invalidation webhooks fail or drop; requires strict cache-key normalization discipline.",
+      "bestFor": "Product catalogs, media streaming manifests, news articles, and static web assets."
     },
     {
-      "option": "Short TTL (5-30s) + Stale-While-Revalidate (Micro-Caching)",
-      "pros": "Zero purge infrastructure needed; automatically bounds staleness to seconds while still absorbing flash spikes.",
-      "cons": "Higher steady-state origin traffic for long-tail items with infrequent requests.",
-      "bestFor": "Live sports scores, stock tickers, flash-sale inventory counters, and high-fanout social feeds."
+      "option": "Dynamic Pass-Through (Edge Routing Only)",
+      "pros": "Guarantees strictly fresh data on every request with zero risk of cache inconsistency.",
+      "cons": "Every request hits the origin backend; higher cloud egress costs and longer latency for geographically distant users.",
+      "bestFor": "Personalized bank account balances, checkout payment authorization, and real-time trading order books."
     }
   ],
-  "interviewTip": "Mention **Micro-Caching** (`s-maxage=5, stale-while-revalidate=10` with Request Coalescing) in interviews: even a 5-second CDN cache on a dynamic endpoint reduces a 100,000 RPS flash-crowd spike down to 1 request every 5 seconds at your origin!",
+  "interviewTip": "When asked how to protect an origin backend during high-traffic events, highlight Origin Shielding with request collapsing (coalescing). Explain how this ensures that hundreds of edge POPs querying the same expired resource result in only one request hitting the origin.",
   "jsonUrl": "/api/subtopics/high-availability-cloud/ha-cdn.json"
 }

@@ -3,57 +3,56 @@
   "topicId": "api-design",
   "topicTitle": "API Design",
   "topicNumber": 3,
-  "subtopicNumber": "3.6",
+  "subtopicNumber": "3.7",
   "title": "API Gateway",
-  "subtitle": "Centralizing cross-cutting edge concerns: TLS termination, JWT validation, rate limiting, routing, and the Backend-for-Frontend (BFF) pattern.",
-  "readingTime": "7 min read",
+  "subtitle": "Centralizing edge concerns: TLS termination, JWT validation, rate limiting, routing, and the Backend-for-Frontend (BFF) pattern.",
+  "readingTime": "8 min read",
   "difficulty": "Intermediate",
   "keyTakeaways": [
-    "An API Gateway is the single L7 entry point for external clients, offloading cross-cutting concerns (AuthN, Rate Limiting, WAF, TLS, Observability) from internal microservices.",
-    "The **Backend-for-Frontend (BFF)** pattern deploys tailored gateway layers per client type (Mobile BFF vs Web BFF vs Public API) to optimize payload shapes and aggregation.",
-    "Never put heavy business logic or synchronous cross-service orchestration loops inside a monolithic shared API Gateway, or it becomes an organizational bottleneck and SPOF."
+    "An API Gateway serves as the single public entry point for client traffic, centralizing cross-cutting concerns like TLS, authentication, and rate limiting.",
+    "The Backend-for-Frontend (BFF) pattern deploys dedicated gateways tailored to specific client platforms (iOS, Android, Web), preventing bloated one-size-fits-all payloads.",
+    "API Gateways must avoid accumulating business domain logic; gateways should focus on routing, telemetry, and protocol translation, leaving domain logic to internal services."
   ],
-  "architectureDiagram": "[ iOS / Android ]      [ Web SPA ]         [ 3rd Party Devs ]\n                           |                      /\n         v                  v                     v\n+----------------------------------------------------------------+\n|                  EDGE API GATEWAY (Envoy / Kong)               |\n|  [1. TLS Termination] -> [2. WAF / DDoS] -> [3. Rate Limiter]  |\n|  [4. JWT Signature Auth] -> [5. Protocol Translation JSON->gRPC]|\n+----------------------------------------------------------------+\n         |                         |                      |\n         v                         v                      v\n  [ Mobile BFF ]            [ Order Svc ]          [ Search Svc ]",
+  "architectureDiagram": "BACKEND-FOR-FRONTEND (BFF) GATEWAY TOPOLOGY\n[ Web Clients ]         [ Mobile iOS/Android ]         [ Third-Party APIs ]\n       |                          |                               |\n       v                          v                               v\n[ Web BFF Gateway ]     [ Mobile BFF Gateway ]         [ Public Edge Gateway ]\n(Desktop Aggregation)   (Compact JSON / Protobuf)      (Strict Rate Limiting & Auth)\n       |                          |                               |\n       +--------------------------+-------------------------------+\n                                  |\n                                  v\n            [ Internal East-West Microservices Mesh ]\n            (Auth Service, Order Service, Inventory Service)",
   "sections": [
     {
-      "heading": "The 6 Core Responsibilities of an API Gateway",
-      "body": "Without an API Gateway, every single client app (iOS, Android, Web) would need to know the hostnames of 50 internal microservices, and every single microservice team would have to re-implement TLS termination, OAuth JWT validation, IP rate limiting, CORS headers, and access logging across 5 different programming languages. An API Gateway (such as Kong, AWS API Gateway, Envoy, or Apigee) consolidates these cross-cutting edge concerns into a hardened, horizontally scaled proxy tier.",
+      "heading": "Core Responsibilities of the Edge Gateway",
+      "body": "Exposing internal microservices directly to the public internet creates major security vulnerabilities, tight coupling, and excessive network round trips. An API Gateway sits between external clients and internal services, terminating connections and handling shared operational concerns.",
       "bullets": [
-        "1. Authentication Offload: Validates the client's JWT signature (using cached JWKS public keys) at the edge and forwards verified internal identity headers (`X-User-Id`, `X-Tenant-Id`) or an internal token to upstream services.",
-        "2. Rate Limiting & Quota Enforcement: Enforces per-tenant and per-IP token buckets before malicious traffic reaches internal compute.",
-        "3. Dynamic Routing & Canary Releases: Routes `/v1/orders` to the Order Service and shifts 5% of traffic to `orders-v2` canary pods.",
-        "4. Protocol Translation: Accepts external HTTP/JSON or GraphQL and transcodes it into high-speed internal gRPC calls."
+        "Edge Security & Auth: Terminates TLS, validates incoming JWT tokens or API keys, and drops unauthorized traffic before it touches internal networks.",
+        "Rate Limiting & DDoS Shielding: Enforces token bucket or sliding window limits per IP or account, protecting downstream services from saturation.",
+        "Protocol Transcoding: Accepts external JSON/REST or WebSockets from browsers and translates them into internal gRPC calls over HTTP/2.",
+        "Correlation & Tracing: Injects a unique `X-Request-ID` or W3C `traceparent` header into every inbound request, ensuring end-to-end distributed trace visibility."
       ],
       "codeSnippet": {
-        "title": "API Gateway Edge Pipeline Execution Order",
-        "code": "export async function apiGatewayPipeline(req: IncomingHttpRequest): Promise<HttpResponse> {\n  const traceId = req.headers[\"x-request-id\"] ?? crypto.randomUUID();\n\n  // 1. IP & WAF Check (Cheapest check first!)\n  if (wafBlockedIpSet.has(req.clientIp)) return { status: 403, body: \"Forbidden\" };\n\n  // 2. Authentication (Verify RS256/EdDSA JWT locally using cached public key - 0 DB calls!)\n  const claims = verifyJwtLocally(req.headers[\"authorization\"], cachedJwksPublicKeys);\n  if (!claims) return { status: 401, body: \"Unauthorized\" };\n\n  // 3. Per-Tenant Distributed Rate Limit\n  const allowed = await checkTokenBucket(claims.sub, claims.tier);\n  if (!allowed) return { status: 429, body: \"Too Many Requests\" };\n\n  // 4. Route & Forward with verified identity context + Distributed Trace Header\n  return forwardToUpstreamService(req, {\n    \"x-trace-id\": traceId,\n    \"x-authenticated-user-id\": claims.sub,\n    \"x-tenant-scopes\": claims.scopes.join(\",\"),\n  });\n}"
-      },
-      "diagramImageUrl": "/diagrams/arch-api-gateway.svg"
+        "title": "API Gateway Reverse Proxy Route Definition (Envoy / KrakenD style)",
+        "code": "endpoint: \"/api/v1/user-dashboard\"\nmethod: \"GET\"\noutput_encoding: \"json\"\nbackend:\n  - url_pattern: \"/internal/v1/users/{user_id}\"\n    method: \"GET\"\n    host: \"http://user-service:8080\"\n  - url_pattern: \"/internal/v1/orders/recent?user={user_id}\"\n    method: \"GET\"\n    host: \"http://order-service:8080\"\n# Concurrently queries user and order services and merges payloads into a single response"
+      }
     },
     {
       "heading": "The Backend-for-Frontend (BFF) Pattern",
-      "body": "A mobile app on a 3G connection wants a single compact endpoint (`GET /mobile/home-screen`) that aggregates user profile, unread notification count, and top 5 feed items in 2KB. Meanwhile, a desktop web dashboard wants rich 50-field tables. Instead of bloating one generic gateway, teams build specialized **Backend-for-Frontend (BFF)** services owned by the respective frontend/mobile teams, sitting just behind the edge routing gateway.",
+      "body": "A desktop browser on high-speed fiber has different requirements than a mobile phone on a spotty cellular connection. Building a single generic API forces mobile clients to make multiple network calls to gather dashboard data, while receiving oversized JSON payloads packed with desktop-only fields. The Backend-for-Frontend (BFF) pattern creates specialized edge gateways for each client category.",
       "bullets": [
-        "Mobile BFF: Strips unnecessary fields, merges 4 internal gRPC calls via `Promise.allSettled()`, and formats payloads for mobile UI components.",
-        "Partial Failure Resilience: If the internal Recommendation Service times out during BFF aggregation, the BFF still returns 200 OK with the user's orders and an empty `recommendations: []` fallback array."
+        "Mobile BFF: Aggregates multiple backend RPC calls into a single response; strips unnecessary fields to conserve mobile bandwidth; compresses payloads.",
+        "Web BFF: Delivers rich relational payloads tailored for large screens; handles server-side rendering (SSR) session hydration.",
+        "The Antipattern of the 'Smart Gateway': Never embed business logic, database transactions, or business rules into the gateway. Gateways should remain thin routing and orchestration proxies; when gateways become bloated with domain code, they turn into monolithic bottlenecks."
       ]
     }
   ],
   "tradeOffs": [
     {
-      "option": "Single Centralized API Gateway (Kong / Envoy / AWS API GW)",
-      "pros": "Uniform security, rate limiting, TLS, and observability across the entire company; simple single domain (`api.company.com`) for clients.",
-      "cons": "Adds an extra network hop (~1-2ms); can become a deployment bottleneck if teams put custom business logic or complex transformations inside it.",
-      "bestFor": "Cross-cutting edge security, routing, rate limiting, and public developer APIs."
+      "option": "Centralized Single API Gateway",
+      "pros": "Single operational boundary to manage; uniform security and rate limiting policies; straightforward deployment.",
+      "cons": "Becomes an organizational bottleneck if multiple teams fight over routing configuration; one-size-fits-all payload compromises.",
+      "bestFor": "Early-to-mid stage startups with uniform client requirements and smaller engineering teams."
     },
     {
-      "option": "Edge Gateway + Client-Specific BFFs (Mobile BFF, Web BFF)",
-      "pros": "Frontend and mobile teams iterate autonomously on payload aggregation; reduces chatty mobile round-trips over cellular networks.",
-      "cons": "Some duplication of aggregation code across Web BFF and Mobile BFF; more deployables to monitor.",
-      "bestFor": "Organizations with distinct Web, iOS/Android, TV, and Public API experiences consuming a large microservice fleet."
+      "option": "Backend-for-Frontend (BFF) Architecture",
+      "pros": "Frontend teams own their respective gateways; optimal network payloads and latency per client platform; independent release cycles.",
+      "cons": "Operational overhead of maintaining multiple gateway fleets; potential duplication of edge authentication boilerplate.",
+      "bestFor": "Large engineering organizations with dedicated mobile, web, and public platform teams."
     }
   ],
-  "interviewTip": "When placing an API Gateway in your architecture diagram, explicitly list the **exact order of operations** it performs: (1) TLS Termination -> (2) IP/WAF Filter -> (3) JWT Auth Validation -> (4) Rate Limiting -> (5) L7 Routing.",
-  "jsonUrl": "/api/subtopics/api-design/api-gateway.json",
-  "diagramImageUrl": "/diagrams/arch-api-gateway.svg"
+  "interviewTip": "In mobile-heavy system design problems (like Uber or Instagram), bring up the Backend-for-Frontend (BFF) pattern: 'To optimize for lossy mobile networks, we will place a Mobile BFF Gateway between the mobile app and internal services. It aggregates multiple microservice calls into a single response and trims unneeded fields to save cellular bandwidth.'",
+  "jsonUrl": "/api/subtopics/api-design/api-gateway.json"
 }

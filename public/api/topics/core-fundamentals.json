@@ -12,54 +12,54 @@
       "topicNumber": 1,
       "subtopicNumber": "1.1",
       "title": "Functional vs Non-Functional Requirements",
-      "subtitle": "Separating what a system does from the operational constraints and quality attributes under which it must perform.",
+      "subtitle": "Separating business capabilities from the operational constraints and latency envelopes that dictate real-world topology.",
       "readingTime": "6 min read",
       "difficulty": "Foundational",
       "keyTakeaways": [
-        "Functional requirements define user-visible features and API behaviors, while non-functional requirements (NFRs) dictate architecture.",
-        "Two systems with identical functional requirements (e.g., 'post a message') require radically different architectures when NFRs shift from 100 DAU to 500M DAU.",
-        "Always quantify NFRs during the first 5 minutes of a system design interview using concrete metrics (p99 latency, availability nines, RPO/RTO)."
+        "Functional requirements describe business features (what the system does); non-functional requirements (NFRs) describe physical constraints (how much traffic, latency, and failure it survives).",
+        "Two systems with identical API contracts (e.g., 'post a message') require completely different architectures when traffic shifts from 100 active users to 500 million.",
+        "Every non-functional guarantee carries an architectural cost: adding an extra nine of availability or cutting 50ms of p99 latency increases operational complexity and cloud spend."
       ],
       "architectureDiagram": "+-------------------------------------------------------------------+\n|                     SYSTEM DESIGN REQUIREMENTS                    |\n+---------------------------------+---------------------------------+\n                                  |\n              +-------------------+-------------------+\n              |                                       |\n              v                                       v\n+---------------------------+           +---------------------------+\n|  FUNCTIONAL REQUIREMENTS  |           | NON-FUNCTIONAL REQ (NFRs) |\n|      (\"What it does\")     |           |   (\"How well it does it\") |\n+---------------------------+           +---------------------------+\n| - Post a tweet / photo    |           | - Availability: 99.99%    |\n| - Follow another user     |           | - Read p99 < 150ms        |\n| - Fetch home timeline     |           | - Eventual Consistency    |\n| - Search by hashtag       |           | - Scale: 50k writes/sec   |\n+-------------+-------------+           +-------------+-------------+\n              |                                       |\n              v                                       v\n     [ API & Data Model ]                  [ Distributed Topology ]",
       "sections": [
         {
-          "heading": "Why Non-Functional Requirements Drive Architecture",
-          "body": "In a small CRUD application, functional requirements dominate engineering effort. At scale, non-functional requirements (NFRs), also known as quality attributes or '-ilities', are the primary drivers of architectural complexity. Anyone can build a timeline query using a SQL JOIN for 1,000 users; doing it for 300 million daily active users with sub-200ms p99 latency forces you to introduce fan-out-on-write caches, celebrity hybrid fan-out, and read-optimized stores.",
+          "heading": "Why NFRs Drive the Architecture, Not Features",
+          "body": "Writing an endpoint that stores a tweet in Postgres is trivial. The engineering challenge begins when that same endpoint must ingest 50,000 writes per second while 200 million users query their timelines with sub-100ms p99 latency. Functional requirements define the API contracts and entity relationships, but non-functional requirements dictate the actual infrastructure: whether you need a single relational database or a horizontally partitioned NoSQL cluster with fan-out queues and tiered caching.",
           "bullets": [
-            "Functional Requirements: Deterministic business rules, API endpoints, state transitions, and user workflows.",
-            "Non-Functional Requirements: Scalability, availability, latency targets, consistency guarantees, durability, security, and cost ceilings.",
-            "Extended / Out-of-Scope Requirements: Analytics pipelines, fraud detection, and GDPR compliance that should be explicitly scoped in or out."
+            "Functional Scope: Business operations, state machine transitions, API payload validation, and deterministic success/error paths.",
+            "Non-Functional Boundaries: Throughput envelopes (QPS), latency percentiles (p50/p99), availability targets, durability rules (RPO/RTO), and infrastructure cost caps.",
+            "The Trap of Over-Engineering: Chasing five nines of availability or sub-10ms global latency for an internal admin tool wastes engineering cycles and introduces distributed systems headaches where a simple monolith would thrive."
           ],
           "codeSnippet": {
-            "title": "Structured Interview Requirement Specification",
-            "code": "interface SystemDesignCharter {\n  functional: {\n    coreFeatures: string[];\n    outOfScope: string[];\n  };\n  nonFunctional: {\n    scale: { dau: number; peakReadQps: number; peakWriteQps: number };\n    latency: { readP50Ms: number; readP99Ms: number; writeP99Ms: number };\n    availabilityTarget: \"99.9%\" | \"99.99%\" | \"99.999%\";\n    consistencyModel: \"Strong\" | \"Eventual\" | \"Causal\" | \"Read-Your-Writes\";\n    durability: { rpoSeconds: number; rtoSeconds: number };\n  };\n}"
+            "title": "Structured Production Design Charter",
+            "code": "interface SystemDesignCharter {\n  functional: {\n    coreWorkflows: string[];\n    outOfScope: string[];\n  };\n  nonFunctional: {\n    scale: { dau: number; peakReadQps: number; peakWriteQps: number };\n    latency: { readP50Ms: number; readP99Ms: number; writeP99Ms: number };\n    availabilityTarget: \"99.9%\" | \"99.99%\" | \"99.999%\";\n    consistencyModel: \"Strong\" | \"Eventual\" | \"Causal\" | \"Read-Your-Writes\";\n    durability: { rpoSeconds: number; rtoSeconds: number };\n  };\n}"
           }
         },
         {
-          "heading": "Translating NFRs into Concrete Architectural Choices",
-          "body": "Every NFR statement maps directly to a set of infrastructure patterns. When you state an NFR in an interview, immediately pair it with the architectural consequence so the interviewer sees your causal reasoning rather than a memorized checklist.",
+          "heading": "Mapping Requirements to Concrete Infrastructure Choices",
+          "body": "Every non-functional constraint maps directly to an architectural pattern. Good technical design avoids arbitrary tech stack choices by showing the causal link between the operational requirement and the component selected to satisfy it.",
           "bullets": [
-            "Read-heavy (100:1 read/write) + Eventual Consistency -> Multi-tier caching (CDN + Redis) and read replicas.",
-            "Strict zero-data-loss (RPO = 0) + Strong Consistency -> Quorum or synchronous replication with Write-Ahead Logging (WAL) and fsync.",
-            "Ultra-low latency (< 50ms globally) -> Edge compute, Geo-DNS routing, and multi-region active-active replication."
+            "Read-heavy traffic (100:1 ratio) with eventual consistency: Deploy Redis or Memcached clusters in front of read replicas; serve static assets via edge CDN PoPs.",
+            "Strict zero data loss (RPO = 0) with strong consistency: Synchronous replication with Write-Ahead Logging (WAL) and disk fsync across multi-AZ quorums.",
+            "Sub-50ms worldwide response times: Anycast DNS routing, Geo-distributed edge caches, and localized read replicas near end users."
           ]
         }
       ],
       "tradeOffs": [
         {
-          "option": "Strict NFRs (99.999% SLA, Strong Consistency)",
-          "pros": "Zero data anomalies, simple mental model for application developers, enterprise-grade trust.",
-          "cons": "High write latency across regions, 3x-5x infrastructure cost, complex consensus protocols (Raft/Paxos).",
-          "bestFor": "Financial ledgers, billing systems, inventory reservation, and authentication services."
+          "option": "High-Constraint NFRs (99.999% SLA, Strong Consistency)",
+          "pros": "Eliminates race anomalies, prevents balance discrepancies, and provides a straightforward mental model for business logic.",
+          "cons": "Drastically higher write latency due to multi-datacenter consensus round-trips; cloud infrastructure bills scale up 3x to 5x.",
+          "bestFor": "Core banking ledgers, checkout settlement, stock trade execution, and primary authentication authority."
         },
         {
           "option": "Relaxed NFRs (99.9% SLA, Eventual Consistency)",
-          "pros": "Ultra-fast local reads/writes, resilient to network partitions, dramatically lower cloud spend.",
-          "cons": "Users may briefly see stale data, requires conflict resolution (LWW or CRDTs) in the app layer.",
-          "bestFor": "Social media feeds, view counters, product recommendations, and activity streams."
+          "pros": "Minimal read/write latency; local writes succeed even during cross-region network partitions; low infrastructure overhead.",
+          "cons": "Users occasionally observe stale data; requires conflict resolution (last-write-wins or CRDTs) in application code.",
+          "bestFor": "Social media feeds, view counts, product reviews, and activity status indicators."
         }
       ],
-      "interviewTip": "Never ask the interviewer 'What are the non-functional requirements?' Instead, propose sensible defaults based on the domain: 'Since this is a social feed, I suggest optimizing for high availability and sub-200ms p99 read latency with eventual consistency, rather than strong consistency. Does that align with your expectations?'",
+      "interviewTip": "Never ask the interviewer an open-ended question like 'What are the non-functional requirements?' Instead, state realistic baseline assumptions for the domain: 'For a ride-matching system, I'm assuming driver location updates need low latency over strong consistency, but the actual dispatch match requires strong transactional isolation to avoid double-booking. Does that sound right?'",
       "jsonUrl": "/api/subtopics/core-fundamentals/functional-vs-non-functional-requirements.json"
     },
     {
@@ -73,51 +73,51 @@
       "readingTime": "7 min read",
       "difficulty": "Foundational",
       "keyTakeaways": [
-        "Vertical scaling (scale-up) is operationally simple and eliminates network hop overhead, but hits hard hardware ceilings and creates a Single Point of Failure (SPOF).",
-        "Horizontal scaling (scale-out) provides near-infinite elasticity and fault isolation, but demands stateless services and data partitioning.",
-        "Modern architectures combine both: horizontally scaled stateless microservices paired with vertically beefy, horizontally sharded database nodes."
+        "Vertical scaling (scale-up) avoids distributed systems complexity and network hops, but hits hard hardware ceilings and creates a single point of failure.",
+        "Horizontal scaling (scale-out) provides elastic capacity and fault isolation, but introduces network partitions, distributed joins, and state synchronization challenges.",
+        "In production, standard practice combines both: horizontally auto-scaled stateless application servers paired with vertically sized, read-replicated databases."
       ],
       "architectureDiagram": "VERTICAL SCALING (Scale Up)          HORIZONTAL SCALING (Scale Out)\n+-------------------------+          +---------+    +---------------+\n|   Single Giant Server   |          |         |--->| App Server 01 |\n|  128 vCPU / 2 TB RAM    |          |  Load   |    +---------------+\n|  +-------------------+  |   VS.    | Balancer|--->| App Server 02 |\n|  |  Monolith / DB    |  |          |         |    +---------------+\n|  +-------------------+  |          |         |--->| App Server 03 |\n+-------------------------+          +---------+    +---------------+\nHard ceiling & SPOF risk             Elastic & Fault-tolerant",
       "sections": [
         {
-          "heading": "The Mechanics of Vertical vs Horizontal Scaling",
-          "body": "Scalability measures a system's ability to handle growing load by adding resources. Vertical scaling adds CPU, RAM, or faster NVMe disks to an existing node. Horizontal scaling adds more commodity nodes to a pool behind a load balancer or partitioning router. While stateless web tiers scale horizontally with trivial effort, stateful databases require careful sharding, replication, and rebalancing to scale out.",
+          "heading": "The Mechanics and Realities of Scaling",
+          "body": "Scaling up means swapping your hardware for a larger instance with more cores, RAM, and NVMe IOPS. Scaling out means placing multiple identical instances behind a load balancer. While stateless API servers scale out with minimal friction, stateful data stores introduce hard trade-offs around cross-node consensus, data partitioning, and rebalancing overhead.",
           "bullets": [
-            "Stateless Tier Prerequisite: Externalize session state to Redis or JWTs so any horizontal node can serve any request.",
-            "NUMA & Lock Contention: Even on a 256-core machine, vertical scaling suffers diminishing returns due to CPU cache coherence overhead and kernel lock contention.",
-            "Autoscaling Speed: Horizontal scaling relies on container spin-up times and AMI boot metrics (CPU > 70%, request queue depth)."
+            "Stateless Compute: Session state must live in external stores like Redis or signed tokens; any node should be capable of serving any request.",
+            "Hardware Limits of Scale-Up: Even on massive 128-core bare metal, lock contention in the kernel and memory bus bandwidth create diminishing returns.",
+            "Autoscaling Lag: Horizontal autoscaling is not instantaneous; VM boot times, container pull latency, and warm-up cycles must be accounted for during sudden traffic spikes."
           ],
           "codeSnippet": {
-            "title": "Stateless Service Pattern Enabling Horizontal Scale",
-            "code": "// BAD: In-memory session pins user to a single vertical box\nconst localSessions = new Map<string, UserSession>();\n\n// GOOD: Externalized state in Redis Cluster allows N horizontal replicas\nexport async function authenticateRequest(req: Request, redis: RedisClient) {\n  const sessionId = req.headers.get(\"x-session-id\");\n  if (!sessionId) throw new Error(\"Unauthorized\");\n  // Any of the 500 stateless pods can validate this session in <1ms\n  const payload = await redis.get(`session:${sessionId}`);\n  return payload ? JSON.parse(payload) : null;\n}"
+            "title": "Stateless Token Validation Enabling Horizontal Scale",
+            "code": "// BAD: In-memory session pins user requests to a specific server instance\nconst localSessions = new Map<string, UserSession>();\n\n// GOOD: Externalized session state allows any worker node to handle the request\nexport async function authenticateRequest(req: Request, redis: RedisClient) {\n  const sessionId = req.headers.get(\"x-session-id\");\n  if (!sessionId) throw new Error(\"Unauthorized\");\n  // Any of the 200 application containers can validate this in under 1ms\n  const payload = await redis.get(`session:${sessionId}`);\n  return payload ? JSON.parse(payload) : null;\n}"
           },
           "diagramImageUrl": "/diagrams/arch-scalability-vertical-vs-horizontal.svg"
         },
         {
-          "heading": "Pragmatic Scaling Progression in Production",
-          "body": "Premature horizontal sharding of databases is one of the costliest engineering mistakes. A single modern AWS RDS instance (`db.r7g.16xlarge` with 64 vCPUs and 512 GB RAM) can comfortably handle 25,000+ simple queries per second. In practice, teams scale vertically first, add read replicas second, introduce caching third, and shard horizontally only when write throughput or storage volume exceeds single-node physics.",
+          "heading": "A Realistic Scaling Progression for Growing Systems",
+          "body": "Sharding a database horizontally before you need to is an expensive operational trap. Modern managed database instances (such as a 64 vCPU instance with 512 GB RAM) handle 25,000+ relational queries per second without breaking a sweat. Mature teams scale vertically first, add read replicas second, introduce caching third, and shard only when write throughput or storage physics forces their hand.",
           "bullets": [
-            "Stage 1: Vertical scale-up of primary database + horizontal auto-scaling of stateless API servers.",
-            "Stage 2: Offload 80-95% of reads via Redis caching and read replicas.",
-            "Stage 3: Horizontal partitioning (sharding) by tenant or entity ID when write IOPS saturate the largest instance."
+            "Phase 1: Scale up the primary database instance while running horizontally autoscaled stateless API servers.",
+            "Phase 2: Offload read traffic using Redis caching and read replicas, routing only mutations to the primary.",
+            "Phase 3: Partition the database horizontally by tenant ID or user ID once write IOPS saturate the largest available hardware."
           ]
         }
       ],
       "tradeOffs": [
         {
           "option": "Vertical Scaling (Scale Up)",
-          "pros": "Zero distributed systems complexity, ACID transactions work natively in memory, no cross-node network serialization.",
-          "cons": "Hard physical limits (~24TB RAM max), non-linear cloud pricing, requires downtime or failover to resize, single point of failure.",
-          "bestFor": "Early-to-mid stage relational databases, in-memory graph processing, and workloads with tight transactional coupling."
+          "pros": "No network serialization overhead; ACID transactions work in-memory without two-phase commit; operations remain straightforward.",
+          "cons": "Physical limits on memory and CPU; non-linear cloud pricing at top tiers; resizing requires planned failover downtime.",
+          "bestFor": "Early-stage databases, relational models with heavy JOIN requirements, and analytical queries with tight transactional coupling."
         },
         {
           "option": "Horizontal Scaling (Scale Out)",
-          "pros": "Linear capacity growth using commodity VMs, automatic self-healing when nodes die, elastic scale-to-zero or burst capability.",
-          "cons": "Introduces network partitions, distributed joins, clock skew, deployment orchestration, and data rebalancing headaches.",
-          "bestFor": "Stateless API/web tiers, high-throughput NoSQL stores (Cassandra/DynamoDB), and event streaming clusters (Kafka)."
+          "pros": "Linear capacity expansion using commodity VMs; node failures are contained; supports rapid scale-to-zero or peak burst elasticity.",
+          "cons": "Requires distributed coordination; data rebalancing across nodes is operationally complex; cross-shard transactions become slow.",
+          "bestFor": "Stateless web layers, append-only event streaming (Kafka), and partitioned NoSQL storage (Cassandra, DynamoDB)."
         }
       ],
-      "interviewTip": "Show architectural maturity by noting that stateless services should be scaled horizontally from day one for high availability, whereas relational databases should be scaled vertically (plus read replicas) until write volume provably exceeds ~10k-20k writes/sec.",
+      "interviewTip": "Demonstrate practical judgment by resisting the urge to jump straight to database sharding. Clarify that stateless application pods should scale out behind a load balancer from day one, but the relational database should scale vertically with read replicas until write volume provably exceeds ~15k writes/sec.",
       "jsonUrl": "/api/subtopics/core-fundamentals/scalability-vertical-vs-horizontal.json",
       "diagramImageUrl": "/diagrams/arch-scalability-vertical-vs-horizontal.svg"
     },
@@ -128,54 +128,54 @@
       "topicNumber": 1,
       "subtopicNumber": "1.3",
       "title": "Availability & Reliability",
-      "subtitle": "Mastering the mathematics of 'Nines', MTBF vs MTTR, fault tolerance patterns, and composite SLA calculations.",
+      "subtitle": "Mastering uptime mathematics, MTBF vs MTTR, composite SLAs across service chains, and eliminating single points of failure.",
       "readingTime": "7 min read",
       "difficulty": "Foundational",
       "keyTakeaways": [
-        "Availability is the percentage of time a system responds successfully (`MTBF / (MTBF + MTTR)`), while Reliability is the probability it operates without failure over a given interval.",
-        "When components are placed in series, overall availability multiplies and degrades; when placed in parallel (redundancy), availability compounds upward.",
-        "Improving Mean Time To Recovery (MTTR) via automated failover is far cheaper and more effective than trying to make Mean Time Between Failures (MTBF) infinite."
+        "Availability measures the percentage of time a system returns successful responses (`MTBF / (MTBF + MTTR)`); Reliability measures whether it runs without failure over a given duration.",
+        "Chaining services in series multiplies their failure rates and drags down total uptime; placing redundant components in parallel compounds availability upward.",
+        "Reducing Mean Time To Recovery (MTTR) via automated health checks and instant failover yields far higher uptime improvements than trying to make hardware never fail."
       ],
       "architectureDiagram": "SERIES DEPENDENCY (Availability Degrades: 99.9% x 99.9% = 99.8%)\n[ Client ] ---> [ Service A (99.9%) ] ---> [ Database B (99.9%) ]\n\nPARALLEL REDUNDANCY (Availability Improves: 1 - (0.001 x 0.001) = 99.9999%)\n                +---> [ Node 1 (99.9%) ] ---+\n[ Client ] -----+                           +---> [ Response ]\n                +---> [ Node 2 (99.9%) ] ---+",
       "sections": [
         {
-          "heading": "The Mathematics of 'Nines', MTBF, and MTTR",
-          "body": "Availability is formally expressed as `Availability = MTBF / (MTBF + MTTR)`, where MTBF is Mean Time Between Failures and MTTR is Mean Time To Recovery. Each additional 'nine' reduces permissible annual downtime by an order of magnitude, from 8.76 hours/year at 99.9% ('Three Nines') to just 5.26 minutes/year at 99.999% ('Five Nines'). At Five Nines, human-in-the-loop incident response is mathematically impossible; detection and failover must be 100% automated.",
+          "heading": "The Mathematics of Nines, MTBF, and MTTR",
+          "body": "Availability is governed by `Availability = MTBF / (MTBF + MTTR)`. Every added 'nine' shrinks allowable yearly downtime by an order of magnitude: 99.9% permits 8.76 hours of downtime per year, while 99.999% allows barely 5.26 minutes. At five nines, human intervention is completely off the table; detection, drainage, and failover must execute automatically in seconds.",
           "bullets": [
-            "99.9% (3 Nines): 8h 45m downtime/year | 43.8m/month: Standard internal microservice SLA.",
-            "99.99% (4 Nines): 52m 36s downtime/year | 4.38m/month: Production customer-facing e-commerce/SaaS tier.",
-            "99.999% (5 Nines): 5m 15s downtime/year | 26.3s/month: Core payment rails, emergency services, DNS root servers."
+            "Three Nines (99.9%): ~8.7 hours downtime/year. Acceptable for most internal tools and non-critical enterprise workflows.",
+            "Four Nines (99.99%): ~52 minutes downtime/year. Standard target for customer-facing web services, commerce platforms, and SaaS products.",
+            "Five Nines (99.999%): ~5 minutes downtime/year. Reserved for core payment processing, cellular networks, and critical cloud infrastructure."
           ],
           "codeSnippet": {
             "title": "Composite SLA Calculator for Series vs Parallel Topologies",
-            "code": "// In series: all dependencies must be up simultaneously\nexport function seriesAvailability(availabilities: number[]): number {\n  return availabilities.reduce((acc, curr) => acc * curr, 1);\n}\n\n// In parallel (active-active): system only fails if ALL replicas fail\nexport function parallelAvailability(replicaAvailability: number, count: number): number {\n  const probabilityOfSingleFailure = 1 - replicaAvailability;\n  const probabilityAllFail = Math.pow(probabilityOfSingleFailure, count);\n  return 1 - probabilityAllFail;\n}\n\n// Example: Two 99.9% nodes in parallel yield 99.9999% (Six Nines)!"
+            "code": "// Series: Any single component failure takes down the request path\nexport function calculateSeriesAvailability(availabilities: number[]): number {\n  return availabilities.reduce((acc, curr) => acc * curr, 1);\n}\n\n// Parallel: The path stays available unless ALL redundant replicas fail\nexport function calculateParallelAvailability(replicaAvailability: number, replicaCount: number): number {\n  const failureProb = 1 - replicaAvailability;\n  return 1 - Math.pow(failureProb, replicaCount);\n}\n\n// Two 99.9% nodes in parallel yield 99.9999% (Six Nines)!"
           }
         },
         {
-          "heading": "Engineering for High Availability (Eliminating SPOFs)",
-          "body": "A system is only as available as its weakest single point of failure (SPOF). Achieving 99.99%+ requires redundancy across every layer, DNS, Load Balancers, Compute, Cache, and Storage, paired with graceful degradation and blast-radius containment (bulkheads, circuit breakers).",
+          "heading": "Eliminating Single Points of Failure (SPOFs)",
+          "body": "A system's uptime is bounded by its weakest un-replicated dependency. Delivering four or five nines requires identifying every single point of failure—from DNS and load balancers down to network switches and database instances—and backing each with automated failover and graceful degradation.",
           "bullets": [
-            "Active-Passive Failover: Standby node takes over via heartbeat/VIP promotion when primary dies (higher RTO, simpler consistency).",
-            "Active-Active Multi-AZ/Multi-Region: All nodes serve traffic concurrently; load balancer strips unhealthy nodes within seconds.",
-            "Graceful Degradation: If the recommendation engine crashes, serve a static 'Top Trending' list from CDN rather than returning HTTP 500."
+            "Active-Passive Failover: The backup node remains warm and assumes traffic via DNS or VIP re-pointing when the primary heartbeat fails.",
+            "Active-Active Multi-AZ: All healthy instances actively serve traffic; edge load balancers drop failing nodes within seconds.",
+            "Graceful Degradation: If a downstream personalization engine dies, fall back to a cached static list rather than surfacing an HTTP 500 error to the customer."
           ]
         }
       ],
       "tradeOffs": [
         {
           "option": "Active-Passive Redundancy",
-          "pros": "No write-write conflicts, strong consistency is easy to maintain, predictable failover state.",
-          "cons": "50% of hardware sits idle (or underutilized), failover takes 10-60 seconds during which writes fail (nonzero MTTR).",
-          "bestFor": "Primary relational databases (PostgreSQL/MySQL) with synchronous standby in another Availability Zone."
+          "pros": "No write concurrency conflicts; simpler transactional consistency; minimal state drift during steady state.",
+          "cons": "Secondary hardware sits idle; failover incurs a 15-60 second window of write rejection while health is verified.",
+          "bestFor": "Relational database primaries (Postgres/MySQL) paired with synchronous multi-AZ standby nodes."
         },
         {
           "option": "Active-Active Redundancy",
-          "pros": "Near-zero RTO (instantaneous load balancer rerouting), 100% fleet utilization during normal operations, achieves 99.999%.",
-          "cons": "Requires conflict resolution (CRDTs/last-write-wins) or distributed consensus if stateful writes occur on both sides.",
-          "bestFor": "Stateless microservices, CDN edge PoPs, and multi-master databases like DynamoDB Global Tables."
+          "pros": "Zero failover lag (traffic simply shifts away from unhealthy nodes); full fleet utilization; capable of reaching 99.999%.",
+          "cons": "Requires conflict resolution (CRDTs or last-write-wins) or cross-region consensus for stateful operations.",
+          "bestFor": "Stateless microservice pods, CDN points of presence, and multi-master databases like DynamoDB Global Tables."
         }
       ],
-      "interviewTip": "If an interviewer asks for 99.99% availability, audit your diagram from top to bottom and explicitly call out how you eliminate every Single Point of Failure: 'We run two L7 Load Balancers in active-active across AZs, stateless pods across 3 AZs, and a primary DB with automated synchronous standby failover.'",
+      "interviewTip": "If an interviewer asks for a 99.99% architecture, walk through your diagram top-to-bottom and systematically prove there is no single point of failure: 'We have multi-AZ load balancers, application instances distributed across three zones, and a primary database with automated synchronous standby failover.'",
       "jsonUrl": "/api/subtopics/core-fundamentals/availability-and-reliability.json"
     },
     {
@@ -185,55 +185,55 @@
       "topicNumber": 1,
       "subtopicNumber": "1.4",
       "title": "Latency vs Throughput",
-      "subtitle": "Understanding Little's Law, tail latency amplification (p95/p99), queuing theory, and the tension between batching and responsiveness.",
+      "subtitle": "Understanding Little's Law, tail latency amplification (p95/p99), queuing dynamics, and the batching trade-off.",
       "readingTime": "7 min read",
       "difficulty": "Foundational",
       "keyTakeaways": [
-        "Latency is the time to complete a single operation (ms), whereas Throughput is the number of operations completed per unit of time (QPS / MB/s).",
-        "Average latency is a lie: p99 and p99.9 tail latencies dictate real user experience, especially in microservice fan-out trees where slow tails compound.",
-        "By Little's Law (`L = λW`) and queuing theory, as resource utilization approaches 80-90%, queuing delay causes latency to spike exponentially even while throughput plateaus."
+        "Latency is how long one operation takes (ms); throughput is how many operations the system finishes per second (QPS or MB/s).",
+        "Average latency hides the worst user experiences: p99 and p99.9 tail latencies compound aggressively across microservice call trees.",
+        "Under Little's Law (`L = λW`), as server utilization passes 80%, queuing delays spike exponentially, driving up response times even while throughput flatlines."
       ],
       "architectureDiagram": "LATENCY vs UTILIZATION (Queuing Knee)      TAIL LATENCY FAN-OUT AMPLIFICATION\nLatency (ms)                               [ API Gateway ] (p99 = 1 - 0.99^10 = 9.6% slow!)\n  ^                  /                           |\n  |                 /                   +--------+--------+--------+\n  |                /  <- 85% Knee       |        |        |        |\n  |              /                      v        v        v        v\n  |____________/                     [Svc 1]  [Svc 2]  ...     [Svc 10]\n  +--------------------->            (Each service has 1% chance of p99 spike)\n  0%        50%       100% CPU",
       "sections": [
         {
-          "heading": "Little's Law, Queuing Theory, and Tail Latency Amplification",
-          "body": "Latency measures how long a single request takes from client dispatch to response receipt. Throughput measures how many requests a system processes per second. Little's Law states `L = λ × W` (Concurrent requests in system = Arrival rate × Mean response time). When arrival rate approaches the system's maximum processing rate, requests sit in queues, causing latency to skyrocket non-linearly. Worse yet, in a microservice architecture where 1 user request fans out to 20 parallel backend services, even if each service has a 99% chance of responding fast (<10ms), the probability that ALL 20 respond fast is `0.99^20 = 81.8%`, meaning nearly 20% of user requests experience tail latency!",
+          "heading": "Queuing Theory, Little's Law, and the Tail Latency Trap",
+          "body": "Latency is the round-trip duration of a single request; throughput is the aggregate volume of requests processed per second. Little's Law defines the relationship: `L = λ × W` (concurrency = arrival rate × mean latency). When arrival rate approaches maximum processing capacity, requests back up into operating system queues. Because queue wait times grow non-linearly near saturation, latency explodes. In distributed systems with fan-out patterns, tail latency compounds: if an API calls 20 microservices in parallel, each with a 99% chance of being fast, the likelihood that all 20 respond quickly is `0.99^20 ≈ 81.8%`. Nearly one in five user requests hits tail latency.",
           "bullets": [
-            "p50 (Median): Half of requests are faster. Masks severe outliers.",
-            "p99 / p99.9 (Tail Latency): Caused by GC pauses, noisy neighbors, TCP retransmits, cache misses, and disk compaction.",
-            "Hedged Requests: Send the same read request to a second replica if the first doesn't respond within the p95 threshold to chop off the p99 tail."
+            "Median (p50): Half the requests are faster. Useful for general health, but completely masks degradation for high-volume users.",
+            "Tail Percentiles (p99 / p99.9): Driven by JVM garbage collection pauses, lock contention, TCP retransmits, and cache misses.",
+            "Hedged Requests: If a primary read replica doesn't answer within the p95 latency window, fire an identical request to a second replica and take whichever finishes first."
           ],
           "codeSnippet": {
-            "title": "Hedged Read Request Pattern to Curb p99 Tail Latency",
-            "code": "export async function hedgedRead<T>(\n  primaryCall: () => Promise<T>,\n  backupCall: () => Promise<T>,\n  p95TimeoutMs = 15\n): Promise<T> {\n  return new Promise((resolve, reject) => {\n    let settled = false;\n    const timer = setTimeout(() => {\n      // Primary exceeded p95! Fire backup replica concurrently\n      backupCall().then((res) => {\n        if (!settled) { settled = true; resolve(res); }\n      }).catch(() => {});\n    }, p95TimeoutMs);\n\n    primaryCall().then((res) => {\n      clearTimeout(timer);\n      if (!settled) { settled = true; resolve(res); }\n    }).catch((err) => { if (!settled) reject(err); });\n  });\n}"
+            "title": "Hedged Read Pattern to Cut Off p99 Tail Spikes",
+            "code": "export async function hedgedRead<T>(\n  primaryCall: () => Promise<T>,\n  backupCall: () => Promise<T>,\n  p95ThresholdMs = 20\n): Promise<T> {\n  return new Promise((resolve, reject) => {\n    let completed = false;\n    const timer = setTimeout(() => {\n      // Primary is taking too long; fire backup replica concurrently\n      backupCall().then((res) => {\n        if (!completed) { completed = true; resolve(res); }\n      }).catch(() => {});\n    }, p95ThresholdMs);\n\n    primaryCall().then((res) => {\n      clearTimeout(timer);\n      if (!completed) { completed = true; resolve(res); }\n    }).catch((err) => { if (!completed) reject(err); });\n  });\n}"
           },
           "diagramImageUrl": "/diagrams/arch-latency-vs-throughput.svg"
         },
         {
-          "heading": "Trading Latency for Throughput via Batching",
-          "body": "Many high-scale systems intentionally sacrifice a few milliseconds of latency to achieve massive gains in throughput. Instead of performing a network round-trip and disk fsync for every single message, systems like Kafka and group-commit databases buffer records for `5-10ms` (or up to `64KB`) and flush them in a single sequential I/O operation.",
+          "heading": "Trading Off Latency for Throughput via Batching",
+          "body": "Pushing raw throughput requires amortizing the fixed costs of network headers, syscalls, and disk fsyncs. Systems like Kafka intentionally hold outbound messages for a few milliseconds (using `linger.ms`) to group individual records into compressed batches. This trades off a few milliseconds of single-message latency to achieve a 10x boost in sustained throughput.",
           "bullets": [
-            "Micro-batching (Kafka `linger.ms`): Waits 5ms to coalesce 500 messages into 1 compressed TCP packet, boosting throughput 10x.",
-            "Pipelining (Redis): Sends 50 commands in a single socket write without waiting for individual RTTs.",
-            "Asynchronous Offloading: Return `202 Accepted` in 5ms to keep user latency low, and process heavy work via background worker queues."
+            "Micro-Batching: Waiting 5ms to coalesce 200 events into one TCP packet drastically cuts network and CPU overhead.",
+            "Socket Pipelining: Sending batches of commands over a single TCP connection without waiting for individual round trips (e.g., Redis pipelines).",
+            "Async Buffering: Return `202 Accepted` in under 10ms and offload expensive write processing to background workers."
           ]
         }
       ],
       "tradeOffs": [
         {
-          "option": "Optimize for Ultra-Low Latency (No Batching)",
-          "pros": "Immediate per-request completion, ideal for interactive user-facing request/response loops.",
-          "cons": "High per-message syscall, network header, and disk IOPS overhead; saturates CPU and network cards at lower QPS.",
-          "bestFor": "Real-time bidding (RTB), gaming servers, interactive UI APIs, and high-frequency trading."
+          "option": "Low-Latency Optimization (Zero Batching)",
+          "pros": "Immediate per-request execution; ideal for interactive user-facing APIs and financial trading loops.",
+          "cons": "High per-message syscall and network overhead; CPU and network queues saturate at lower aggregate QPS.",
+          "bestFor": "Real-time gaming, conversational messaging, interactive web UI APIs, and live bidding."
         },
         {
-          "option": "Optimize for High Throughput (Micro-Batching & Compression)",
-          "pros": "10x-50x higher records/sec per core, sequential disk writes, high compression ratios across batch payloads.",
-          "cons": "Adds a deterministic baseline latency floor (`linger.ms` wait time) to every single item.",
-          "bestFor": "Log ingestion, telemetry pipelines, Kafka producers, analytics warehouses, and database group commits."
+          "option": "High-Throughput Optimization (Batching & Compression)",
+          "pros": "Massive scale-up in processed records per second; superior disk compression; reduced network packet counts.",
+          "cons": "Introduces an artificial latency floor equal to the batching window (`linger.ms`).",
+          "bestFor": "Log ingestion, telemetry aggregation, Kafka streaming, and analytical data warehouses."
         }
       ],
-      "interviewTip": "Never say 'latency should be under 100ms.' Always specify the percentile: 'We will target p50 read latency under 20ms and p99 read latency under 100ms.' This immediately signals senior production experience.",
+      "interviewTip": "Avoid vague latency statements like 'The API should be fast.' Always quote explicit percentiles: 'We will target p50 read latency under 15ms and p99 read latency under 100ms.' Interviewers look for this distinction immediately.",
       "jsonUrl": "/api/subtopics/core-fundamentals/latency-vs-throughput.json",
       "diagramImageUrl": "/diagrams/arch-latency-vs-throughput.svg"
     },
@@ -244,55 +244,55 @@
       "topicNumber": 1,
       "subtopicNumber": "1.5",
       "title": "CAP Theorem",
-      "subtitle": "Navigating Consistency, Availability, and Partition Tolerance: plus the PACELC extension that governs normal operation.",
+      "subtitle": "Navigating Consistency, Availability, and Partition Tolerance, plus the PACELC trade-offs that govern normal operation.",
       "readingTime": "8 min read",
       "difficulty": "Intermediate",
       "keyTakeaways": [
-        "In any distributed system, network partitions (P) are inevitable hardware realities; therefore, CAP is really a choice between Consistency (CP) and Availability (AP) *during a partition*.",
-        "CAP's 'Consistency' specifically means Linearizability (every read sees the most recent write), and 'Availability' means every non-failing node returns a non-error response.",
-        "The PACELC theorem completes the picture: even when there is NO partition (Else), you must still trade off Latency (L) vs Consistency (C)."
+        "In physical networks, partitions (P) are an unavoidable reality; therefore, CAP is an architectural choice between Consistency (CP) and Availability (AP) during network failures.",
+        "In the CAP context, Consistency specifically means Linearizability (every read sees the latest write), and Availability means every healthy node returns a non-error response.",
+        "The PACELC theorem captures normal conditions: even when there is no partition, systems must still trade Latency (L) against Consistency (C)."
       ],
       "architectureDiagram": "            [ Network Partition Occurs (P) ]\n             Node A  ---( X Broken Link X )---  Node B\n               |                                  |\n     +---------+---------+              +---------+---------+\n     |                   |              |                   |\n     v                   |              |                   v\n[ CP System ]            |              |              [ AP System ]\nRejects writes/reads     |              |     Both nodes accept writes\non minority side to      |              |     and serve slightly stale\nprevent split-brain.     |              |     reads; reconcile later.\n(ZooKeeper, Etcd, HBase) |              |     (Cassandra, DynamoDB)",
       "sections": [
         {
-          "heading": "Deconstructing CAP: Why 'CA' Systems Do Not Exist",
-          "body": "Formulated by Eric Brewer and proven by Gilbert and Lynch, the CAP theorem states that a distributed data store can simultaneously provide at most two of three guarantees: Consistency (Linearizability), Availability, and Partition Tolerance. Because switches crash, fiber cables get cut, and GC pauses mimic network drops, Partition Tolerance (P) is non-negotiable in any multi-node system. Thus, architects must decide how the system behaves when nodes cannot talk to each other: cancel operations to preserve a single source of truth (CP), or keep accepting operations and resolve divergence later (AP).",
+          "heading": "Why 'CA' Systems Do Not Exist in Production",
+          "body": "The CAP theorem states that a distributed data store can guarantee at most two out of Consistency, Availability, and Partition Tolerance. Because cables get cut, switches reboot, and GC pauses mimic network dropouts, Partition Tolerance (P) is a physical constraint of running across multiple servers. An architect cannot opt out of partitions. The real decision is how the system behaves when nodes cannot talk: reject writes to prevent divergent state (CP), or keep accepting writes and reconcile conflicts later (AP).",
           "bullets": [
-            "CP (Consistency + Partition Tolerance): Majority quorum continues; minority partition rejects requests with errors to prevent split-brain.",
-            "AP (Availability + Partition Tolerance): All reachable nodes respond using local state, risking stale reads or conflicting writes.",
-            "Granular CAP: You don't choose CP or AP for an entire company, you choose CP for the checkout service and AP for the product review feed."
+            "CP Systems (Consistency + Partition Tolerance): The majority quorum continues serving; nodes on the minority partition reject requests with errors to prevent split-brain corruption.",
+            "AP Systems (Availability + Partition Tolerance): All reachable nodes accept local writes, risking stale reads or conflicting state across partitions.",
+            "Granular Selection: Organizations do not pick CP or AP globally. You choose CP for financial checkout and inventory reservation, and AP for social feed updates and analytics."
           ],
           "codeSnippet": {
-            "title": "Quorum Enforcement in a CP vs Tunable AP Store",
-            "code": "interface QuorumConfig {\n  replicationFactorN: number; // e.g., 3 replicas\n  writeQuorumW: number;       // Nodes that must ack a write\n  readQuorumR: number;        // Nodes queried on a read\n}\n\n// Strict Quorum (Strong Consistency / CP behavior): W + R > N\nexport const strictQuorum: QuorumConfig = {\n  replicationFactorN: 3,\n  writeQuorumW: 2,\n  readQuorumR: 2, // 2 + 2 > 3: Read set is guaranteed to overlap with latest Write set\n};\n\n// Sloppy Quorum (High Availability / AP behavior): W + R <= N\nexport const fastAvailableConfig: QuorumConfig = {\n  replicationFactorN: 3,\n  writeQuorumW: 1,\n  readQuorumR: 1, // Fast & available during partitions, but reads may be stale\n};"
+            "title": "Quorum Math in CP vs Tunable AP Storage",
+            "code": "interface QuorumConfig {\n  replicationFactorN: number; // e.g., 3 replicas\n  writeQuorumW: number;       // Nodes that must acknowledge write\n  readQuorumR: number;        // Nodes queried on read\n}\n\n// Strict Quorum (CP / Linearizable): W + R > N\n// The read set is mathematically guaranteed to overlap with the write set\nexport const strictQuorum: QuorumConfig = {\n  replicationFactorN: 3,\n  writeQuorumW: 2,\n  readQuorumR: 2,\n};\n\n// Sloppy Quorum (AP / Low Latency): W + R <= N\n// Fast and partition-tolerant, but reads can return stale data\nexport const highAvailabilityConfig: QuorumConfig = {\n  replicationFactorN: 3,\n  writeQuorumW: 1,\n  readQuorumR: 1,\n};"
           },
           "diagramImageUrl": "/diagrams/arch-cap-theorem.svg"
         },
         {
-          "heading": "Beyond CAP: The PACELC Theorem",
-          "body": "CAP only describes system behavior during rare network partitions. Daniel Abadi introduced PACELC to capture what happens the other 99.99% of the time: **If there is a Partition (P)**, how does the system trade off **Availability (A) and Consistency (C)**; **Else (E)**, when the system is running normally in the absence of partitions, how does the system trade off **Latency (L) and Consistency (C)**?",
+          "heading": "Beyond Partitions: The PACELC Theorem",
+          "body": "Network partitions represent an exceptional condition. Daniel Abadi formulated the PACELC theorem to describe system trade-offs during steady state: If there is a Partition (P), trade off Availability (A) versus Consistency (C); Else (E), trade off Latency (L) versus Consistency (C). To enforce strong consistency when networks are healthy, writes must coordinate across multiple nodes before responding, adding network round trips to baseline latency.",
           "bullets": [
-            "PC/EC (e.g., Spanner, CockroachDB, Etcd): Chooses Consistency during partitions AND pays replication latency during normal operation for strong reads.",
-            "PA/EL (e.g., Cassandra, DynamoDB default): Chooses Availability during partitions AND optimizes for low Latency during normal operation via async replication.",
-            "PA/EC (e.g., MongoDB configured with majority reads/writes in some topologies): Prioritizes consistency in normal mode or vice versa."
+            "PC/EC (e.g., CockroachDB, Spanner, etcd): Preserves consistency during partitions, and pays consensus latency during normal operations for linearizable reads.",
+            "PA/EL (e.g., Cassandra, DynamoDB defaults): Maintains availability during partitions, and optimizes for minimal latency via asynchronous replication during normal operations.",
+            "PA/EC (e.g., MongoDB with majority write concern): Optimizes for consistency during steady state, but drops to available mode under network splits."
           ]
         }
       ],
       "tradeOffs": [
         {
-          "option": "CP Architecture (e.g., Etcd, Spanner, ZooKeeper)",
-          "pros": "Guarantees linearizable state, prevents double-spending and split-brain corruption, simplifies application logic.",
-          "cons": "Returns errors/timeouts if majority quorum is unreachable; higher write latency due to consensus round-trips.",
-          "bestFor": "Distributed locks, leader election, seat booking, bank balances, and metadata configuration stores."
+          "option": "CP Architecture (e.g., etcd, Spanner, ZooKeeper)",
+          "pros": "Guarantees linearizable state; prevents double-spending and split-brain states; simplifies application logic.",
+          "cons": "Returns errors or times out if a quorum cannot be reached; higher write latency due to consensus round trips.",
+          "bestFor": "Distributed lock management, leader election, payment ledgers, and critical configuration storage."
         },
         {
-          "option": "AP Architecture (e.g., Cassandra, Dynamo, Riak)",
-          "pros": "Always accepts writes (via hinted handoffs) and serves reads even when data centers are severed; lowest possible latency.",
-          "cons": "Application must handle stale reads, read-repair, vector clocks, LWW (Last-Write-Wins), or CRDT conflict resolution.",
-          "bestFor": "Shopping carts (Amazon Dynamo model), user status/presence, IoT sensor ingestion, and social likes."
+          "option": "AP Architecture (e.g., Cassandra, DynamoDB, Couchbase)",
+          "pros": "Always accepts local writes via hinted handoffs; serves reads even when datacenters are severed; lowest baseline latency.",
+          "cons": "Applications must handle stale reads, conflict resolution (last-write-wins or CRDTs), and data divergence.",
+          "bestFor": "Shopping carts, user presence tracking, IoT sensor telemetry, and social media interactions."
         }
       ],
-      "interviewTip": "Never say 'I will pick CA from the CAP theorem.' Interviewers treat claiming a distributed system is 'CA' as an immediate red flag because you cannot prevent network partitions in physical reality.",
+      "interviewTip": "Never say 'I will design a CA system.' Claiming a distributed system is 'CA' indicates a fundamental misunderstanding of networking realities, because physical network partitions cannot be prevented.",
       "jsonUrl": "/api/subtopics/core-fundamentals/cap-theorem.json",
       "diagramImageUrl": "/diagrams/arch-cap-theorem.svg"
     },
@@ -303,55 +303,55 @@
       "topicNumber": 1,
       "subtopicNumber": "1.6",
       "title": "Consistency Models",
-      "subtitle": "The spectrum from Linearizability and Sequential Consistency down to Causal, Read-Your-Writes, and Eventual Consistency.",
+      "subtitle": "The spectrum from Linearizability and Sequential Consistency to Causal, Read-Your-Writes, and Eventual Consistency.",
       "readingTime": "8 min read",
       "difficulty": "Advanced",
       "keyTakeaways": [
-        "Consistency is not binary ('Strong vs Eventual'), it is a rich spectrum trading off coordination latency against anomalous read behaviors.",
-        "Linearizability is the strongest single-object model (real-time ordering), whereas Serializability is a multi-object transactional guarantee.",
-        "In 80% of user-facing systems, Eventual Consistency paired with 'Read-Your-Own-Writes' session guarantees feels indistinguishable from Strong Consistency at a fraction of the cost."
+        "Consistency is a spectrum trading off coordination latency against stale read anomalies, not a simplistic 'Strong vs Eventual' toggle.",
+        "Linearizability guarantees a single global wall-clock timeline for single-object operations; Serializability is a multi-object transaction guarantee.",
+        "Client-centric guarantees like 'Read-Your-Own-Writes' eliminate the common user confusion of lagging replicas without paying the full latency penalty of global linearizability."
       ],
       "architectureDiagram": "STRONGEST (Highest Latency / Coordination)\n  ^\n  |  [ Linearizability ]       -> Real-time global ordering (wall-clock)\n  |  [ Sequential Consistency ]-> All nodes see operations in same logical order\n  |  [ Causal Consistency ]    -> Causally related ops ordered; concurrent ops free\n  |  [ Read-Your-Writes ]      -> Client always sees its own updates immediately\n  |  [ Eventual Consistency ]  -> Replicas converge if writes stop (no ordering)\n  v\nWEAKEST (Lowest Latency / Maximum Availability)",
       "sections": [
         {
-          "heading": "Navigating the Consistency Spectrum",
-          "body": "A consistency model is a contract between a distributed data store and the application developer regarding what values a `read(x)` is allowed to return when concurrent writes are happening across replicas. Choosing a weaker consistency model allows replicas to respond locally without cross-datacenter coordination, dramatically reducing latency and surviving network splits.",
+          "heading": "The Consistency Spectrum and Coordination Costs",
+          "body": "A consistency model defines the contract between a distributed data store and the application regarding what values a read operation may return in the presence of concurrent writes. Stronger models require coordination protocols (such as Raft, Paxos, or synchronized physical clocks) that force requests to wait for cross-datacenter round trips. Weaker models let replicas serve local state immediately at the cost of transient read anomalies.",
           "bullets": [
-            "Linearizability (Strongest): Once a write completes, all subsequent reads (by wall-clock time) across any replica MUST return that value or a newer one.",
-            "Sequential Consistency: Operations appear to execute in some single global order, consistent with each client's program order, but without strict real-time bounds.",
-            "Causal Consistency: If operation A causally precedes operation B (e.g., a reply to a comment), every node must see the comment before the reply.",
-            "Eventual Consistency: If no new updates are made, all replicas eventually converge to the same state via anti-entropy/gossip."
+            "Linearizability (Strongest): Once a write completes, every subsequent read across any replica must reflect that write or a newer one based on global wall-clock time.",
+            "Sequential Consistency: Operations appear in a single agreed-upon sequence that respects each client's program order, though not bounded by physical wall-clock time.",
+            "Causal Consistency: Operations causally linked (such as a question and its reply) appear in the same order everywhere; concurrent operations can be observed in different orders.",
+            "Eventual Consistency: Replicas eventually converge to identical state once new updates cease, using background anti-entropy or gossip protocols."
           ],
           "codeSnippet": {
-            "title": "Implementing Read-Your-Own-Writes via Monotonic Version Tokens",
-            "code": "// After a user writes to the Primary DB, we return the DB Log Sequence Number (LSN)\n// On subsequent reads, we only query a Read Replica if it has caught up to that LSN!\nexport async function readUserProfile(\n  userId: string,\n  clientLastSeenLsn: bigint,\n  primaryDb: DbNode,\n  replicaDb: DbNode\n) {\n  const replicaCurrentLsn = await replicaDb.getReplicationLsn();\n  if (replicaCurrentLsn >= clientLastSeenLsn) {\n    return replicaDb.query(\"SELECT * FROM users WHERE id = $1\", [userId]);\n  }\n  // Replica is lagging behind the user's own write; route to Primary!\n  return primaryDb.query(\"SELECT * FROM users WHERE id = $1\", [userId]);\n}"
+            "title": "Session-Level Read-Your-Own-Writes via LSN Watermarks",
+            "code": "// After writing to Primary DB, return the Log Sequence Number (LSN) token\n// Route reads to replicas only if they have caught up to the client's write LSN\nexport async function readUserProfile(\n  userId: string,\n  clientSeenLsn: bigint,\n  primaryDb: DbNode,\n  replicaDb: DbNode\n) {\n  const replicaCurrentLsn = await replicaDb.getReplicationLsn();\n  if (replicaCurrentLsn >= clientSeenLsn) {\n    return replicaDb.query(\"SELECT * FROM users WHERE id = $1\", [userId]);\n  }\n  // Replica is lagging; route directly to primary to prevent stale read\n  return primaryDb.query(\"SELECT * FROM users WHERE id = $1\", [userId]);\n}"
           }
         },
         {
           "heading": "Client-Centric Session Guarantees",
-          "body": "Often you want the scalability of asynchronous read replicas without confusing the user who just updated their profile picture and hit refresh. Client-centric consistency models solve this by scoping guarantees to a single user session rather than all users globally.",
+          "body": "In user-facing systems, you rarely need strict global linearizability across all users worldwide. What frustrates users is updating a profile photo, refreshing the page, and seeing the old photo because the read hit a lagging replica. Scoping consistency guarantees to the user's active session avoids this issue while keeping reads cheap.",
           "bullets": [
-            "Read-Your-Writes: A user who updates their bio is routed to the leader (or tracks an LSN watermark) so they immediately see their change.",
-            "Monotonic Reads: Once a user sees value `V2`, they will never be routed to a lagging replica that still returns `V1` ( prevents 'time travel').",
-            "Monotonic Writes: A user's writes are serialized in the order they were issued by that client."
+            "Read-Your-Writes: Guarantees that a user always sees their own updates immediately, usually implemented via session stickiness or replication LSN tracking.",
+            "Monotonic Reads: Ensures a client never observes older state after previously observing newer state (preventing time-travel reads across replica pools).",
+            "Monotonic Writes: Guarantees that an individual client's writes execute in the exact order they were submitted."
           ]
         }
       ],
       "tradeOffs": [
         {
           "option": "Linearizability / Strong Consistency",
-          "pros": "Eliminates stale reads, race conditions, and out-of-order causal anomalies; easiest mental model for engineers.",
-          "cons": "Requires Raft/Paxos or TrueTime coordination on every read/write; bounded by cross-AZ or cross-region speed of light.",
-          "bestFor": "Distributed lock managers, financial balances, uniqueness constraints (usernames), and access control lists."
+          "pros": "Completely eliminates stale reads and ordering anomalies; provides the simplest mental model for application developers.",
+          "cons": "Write and read throughput are constrained by consensus quorum round trips; bounded by datacenter network latency.",
+          "bestFor": "Distributed lock management, financial balance accounting, unique identifier assignment, and privilege escalation checks."
         },
         {
-          "option": "Causal / Read-Your-Writes Consistency",
-          "pros": "Can be fully satisfied while network-partitioned (strongest model possible in an AP system!); low local read latency.",
-          "cons": "Requires tracking dependency graphs (vector clocks or LSN watermarks) in client tokens or session middleware.",
-          "bestFor": "Comment threads, chat applications, collaborative editing, and user profile updates."
+          "option": "Causal / Read-Your-Own-Writes Consistency",
+          "pros": "Can be satisfied even during network partitions; delivers sub-5ms read latencies from local replicas.",
+          "cons": "Requires tracking causality metadata (vector clocks or LSN tokens) in client request headers or middleware.",
+          "bestFor": "Collaborative document editing, social commentary feeds, user profile dashboards, and chat platforms."
         }
       ],
-      "interviewTip": "A classic Staff+ move in interviews: when designing a feed or profile service with read replicas, explicitly mention adding a 'Read-Your-Writes' LSN token or sticky routing for 5 seconds after a mutation so users never think their write failed.",
+      "interviewTip": "Highlight architectural maturity by explaining how to provide Read-Your-Own-Writes without forcing all reads to the primary database: 'We can attach the transaction's commit LSN to a client cookie and only route reads to replicas that have caught up to that LSN, falling back to primary if the replica lags.'",
       "jsonUrl": "/api/subtopics/core-fundamentals/consistency-models.json"
     },
     {
@@ -361,56 +361,56 @@
       "topicNumber": 1,
       "subtopicNumber": "1.7",
       "title": "ACID & BASE",
-      "subtitle": "Contrasting transactional database guarantees (Atomicity, Consistency, Isolation, Durability) with distributed NoSQL paradigms (Basically Available, Soft state, Eventually consistent).",
+      "subtitle": "Contrasting transactional database guarantees (Atomicity, Consistency, Isolation, Durability) with distributed NoSQL patterns.",
       "readingTime": "8 min read",
       "difficulty": "Intermediate",
       "keyTakeaways": [
-        "ACID governs multi-operation database transactions on a single engine or NewSQL cluster, whereas BASE prioritizes availability and partition resilience across distributed shards.",
-        "Isolation is the most nuanced letter in ACID: most production SQL databases default to 'Read Committed' or 'Repeatable Read' (Snapshot Isolation), NOT true 'Serializable' isolation.",
-        "When spanning multiple microservices or heterogeneous databases, replacing distributed 2PC ACID transactions with the BASE-aligned Saga pattern avoids blocking locks."
+        "ACID enforces all-or-nothing guarantees on single database engines or NewSQL clusters; BASE prioritizes availability and horizontal partition resilience.",
+        "Isolation is the most nuanced letter of ACID: most production relational databases default to Read Committed or Repeatable Read, NOT true Serializable isolation.",
+        "Attempting distributed ACID transactions across microservices using Two-Phase Commit (2PC) creates blocking locks; the BASE-aligned Saga pattern avoids this bottleneck."
       ],
       "architectureDiagram": "ACID TRANSACTION (All-or-Nothing Lock/Commit)\n[ Begin Tx ] -> [ Debit $100 ] -> [ Credit $100 ] -> [ WAL fsync + Commit ]\n                    | (Error!)\n                    +-----------> [ Rollback Everything ]\n\nBASE / SAGA PATTERN (Eventual Convergence via Asynchronous Steps)\n[ Order Service ] --(Event)--> [ Payment Svc ] --(Event)--> [ Inventory Svc ]\n       ^                              | (Fails!)\n       +---(Compensating Refund)------+",
       "sections": [
         {
-          "heading": "Deep Dive into ACID & Database Isolation Levels",
-          "body": "ACID guarantees that database transactions are processed reliably even in the presence of crashes and concurrent access. **Atomicity** ensures all statements in a transaction succeed or none do (via undo logs). **Consistency** ensures application-defined invariants (foreign keys, constraints) hold. **Isolation** prevents concurrent transactions from corrupting each other. **Durability** ensures committed data survives power loss via a Write-Ahead Log (WAL) flushed to non-volatile disk.",
+          "heading": "Deconstructing ACID Guarantees and Isolation Anomalies",
+          "body": "ACID guarantees that database transactions complete reliably despite crashes, failures, and concurrency. Atomicity ensures all operations commit or all roll back via undo logs. Consistency enforces application constraints and schema invariants. Isolation prevents concurrent transactions from observing each other's partial work. Durability guarantees committed data survives power failure by flushing Write-Ahead Log (WAL) records to non-volatile disk.",
           "bullets": [
-            "Read Uncommitted: Allows 'Dirty Reads' (reading uncommitted data from another transaction).",
-            "Read Committed (Postgres Default): Prevents dirty reads, but allows 'Non-Repeatable Reads' and 'Lost Updates'.",
-            "Repeatable Read / Snapshot Isolation (MySQL InnoDB Default): Uses MVCC snapshots; prevents non-repeatable reads, though 'Write Skew' can still occur.",
-            "Serializable: Strongest isolation; transactions execute as if run one after another serially (via 2PL or SSI)."
+            "Read Uncommitted: Allows dirty reads (reading uncommitted changes from concurrent transactions). Rarely used in production.",
+            "Read Committed (Postgres Default): Prevents dirty reads, but allows non-repeatable reads where re-reading a row returns updated values.",
+            "Repeatable Read / Snapshot Isolation (MySQL InnoDB Default): Reads see a consistent snapshot from transaction start, preventing non-repeatable reads but vulnerable to write skew.",
+            "Serializable: Strongest isolation level; transactions execute as if completely sequential, typically implemented via strict two-phase locking (2PL) or Serializable Snapshot Isolation (SSI)."
           ],
           "codeSnippet": {
-            "title": "Preventing Lost Updates & Double Booking with ACID Row Locking",
-            "code": "-- Without proper Isolation, two concurrent requests read status='AVAILABLE'\n-- and both book the same seat! Use SELECT ... FOR UPDATE or Optimistic Concurrency:\n\nBEGIN TRANSACTION;\n\n-- Acquires an exclusive row-level lock (Pessimistic Locking)\nSELECT seat_id, status FROM concert_seats\nWHERE seat_id = 'A12' AND status = 'AVAILABLE'\nFOR UPDATE;\n\n-- If row returned, update status and insert booking atomically\nUPDATE concert_seats SET status = 'BOOKED', user_id = 'u_99' WHERE seat_id = 'A12';\nINSERT INTO bookings (booking_id, seat_id, user_id) VALUES ('b_501', 'A12', 'u_99');\n\nCOMMIT;"
+            "title": "Preventing Double-Booking via Pessimistic Row Locking",
+            "code": "-- Without row locking or optimistic checks, concurrent requests both read\n-- status='AVAILABLE' and overwrite each other's reservation.\nBEGIN TRANSACTION;\n\n-- Acquire an exclusive row-level lock\nSELECT seat_id, status FROM concert_seats\nWHERE seat_id = 'A12' AND status = 'AVAILABLE'\nFOR UPDATE;\n\n-- If available, update status and record booking atomically\nUPDATE concert_seats SET status = 'BOOKED', user_id = 'u_101' WHERE seat_id = 'A12';\nINSERT INTO bookings (booking_id, seat_id, user_id) VALUES ('b_901', 'A12', 'u_101');\n\nCOMMIT;"
           },
           "diagramImageUrl": "/diagrams/arch-acid-and-base.svg"
         },
         {
-          "heading": "The BASE Philosophy in Distributed Systems",
-          "body": "Coined as the diametric opposite of ACID on the spectrum, **BASE** stands for **Basically Available** (the system guarantees partial or degraded availability under failure), **Soft state** (the state of the system may change over time even without input due to background replication/TTL), and **Eventually consistent** (replicas converge asynchronously). Rather than holding distributed Two-Phase Commit (2PC) locks across services, which kills throughput and availability, BASE architectures use idempotent events and compensating transactions (Sagas).",
+          "heading": "The BASE Philosophy and Eventual Convergence",
+          "body": "Coined as the operational counterpart to ACID, BASE stands for Basically Available (system remains accessible under partition), Soft state (state may shift over time due to asynchronous replication), and Eventually consistent (replicas converge once updates cease). Rather than holding cross-service locks with Two-Phase Commit (which cripples throughput and availability), BASE architectures coordinate workflows using asynchronous events and compensating Sagas.",
           "bullets": [
-            "Why 2PC Struggles at Scale: A coordinator waiting on 5 microservices holds locks across all of them; if 1 node stalls, the entire pipeline freezes.",
-            "Saga Pattern (Choreography or Orchestration): Breaks a distributed transaction into local ACID transactions connected by events, with explicit compensating rollback actions.",
-            "Outbox Pattern: Bridges local ACID and distributed BASE by writing the DB state change and the outbound Kafka event in the same local SQL transaction."
+            "The Problem with Distributed 2PC: A coordinator holding locks across four services freezes entirely if a single node stalls or loses connectivity.",
+            "Saga Pattern: Coordinates a multi-service business workflow as a series of local ACID transactions connected by events, using compensating transactions to handle rollbacks.",
+            "Transactional Outbox: Bridges a local ACID write with an asynchronous event bus by committing the domain change and the outbound message to the same database transaction."
           ]
         }
       ],
       "tradeOffs": [
         {
-          "option": "ACID Transactions (RDBMS / NewSQL like Spanner)",
-          "pros": "Eliminates partial failure states, prevents race anomalies (dirty reads, lost updates), offloads complexity to the DB engine.",
-          "cons": "Lock contention under high write concurrency (hot rows), difficult to scale horizontally across independent microservices.",
-          "bestFor": "Core banking, ticket/inventory reservation, billing ledgers, and monolithic or modular-monolith data layers."
+          "option": "ACID Transactions (RDBMS / Spanner)",
+          "pros": "Guarantees data integrity; eliminates race anomalies; eliminates complex application-level rollback and reconciliation logic.",
+          "cons": "Hot-row lock contention reduces write throughput; horizontal scaling across distributed shards adds latency.",
+          "bestFor": "Financial ledgers, ticketing systems, inventory reservations, and billing workflows."
         },
         {
-          "option": "BASE + Saga Pattern (NoSQL + Event Streams)",
-          "pros": "Massive horizontal write scalability, services remain loosely coupled and independently deployable, no cross-service lock waiting.",
-          "cons": "Temporary intermediate states are visible to users, requires engineering idempotent consumers and compensating rollback logic.",
-          "bestFor": "Cross-service e-commerce checkout workflows (Order -> Payment -> Warehouse -> Notification) and high-scale ingestion."
+          "option": "BASE + Saga Workflows (Event-Driven Services)",
+          "pros": "High horizontal write throughput; services remain decoupled and deployable independently; avoids blocking locks.",
+          "cons": "Intermediate states are visible to users; requires careful implementation of idempotency and compensating rollbacks.",
+          "bestFor": "Distributed e-commerce checkout (Order -> Payment -> Inventory -> Shipment) and high-volume data pipelines."
         }
       ],
-      "interviewTip": "When designing a ticket-booking or payment system, explicitly name the concurrency anomaly you are preventing ('To prevent Lost Updates and Double Booking, I will use PostgreSQL ACID transactions with `SELECT FOR UPDATE` or optimistic version columns').",
+      "interviewTip": "When discussing ticket reservation or checkout flows, name the exact concurrency anomaly you are solving: 'To prevent lost updates and double-booking, we enforce row locking with SELECT ... FOR UPDATE or optimistic locking with a version column.'",
       "jsonUrl": "/api/subtopics/core-fundamentals/acid-and-base.json",
       "diagramImageUrl": "/diagrams/arch-acid-and-base.svg"
     },
@@ -421,54 +421,54 @@
       "topicNumber": 1,
       "subtopicNumber": "1.8",
       "title": "Synchronous vs Asynchronous Processing",
-      "subtitle": "Decoupling request-response paths with message queues, event streams, backpressure control, and dead-letter queues.",
+      "subtitle": "Decoupling request-response paths with message brokers, backpressure controls, idempotency, and dead-letter queues.",
       "readingTime": "7 min read",
       "difficulty": "Foundational",
       "keyTakeaways": [
-        "Synchronous calls block the caller until work completes, creating tight temporal coupling and cascading failure chains across microservices.",
-        "Asynchronous processing buffers work in durable queues (SQS, RabbitMQ, Kafka), absorbing traffic spikes (load leveling) and isolating downstream outages.",
-        "Every production async pipeline must include retry with exponential backoff + jitter, idempotency keys, and a Dead-Letter Queue (DLQ) for poison pills."
+        "Synchronous RPC calls block the caller until completion, creating temporal coupling and compounding failure risks across microservices.",
+        "Asynchronous processing decouples producers from consumers using durable message queues, absorbing traffic bursts and isolating downstream failures.",
+        "Every production async queue requires exponential backoff with jitter, idempotent consumers, and a Dead-Letter Queue (DLQ) for malformed poison-pill messages."
       ],
       "architectureDiagram": "SYNCHRONOUS (Temporal Coupling & Latency Summation: 50 + 200 + 300 = 550ms)\n[Client] --(550ms)--> [Order API] --(200ms)--> [PDF Invoice] --(300ms)--> [Email SMTP]\n\nASYNCHRONOUS (Shock Absorber & Fast Ack: 15ms Client Response)\n[Client] --(15ms: 202 Accepted)--> [Order API] ---> [ Durable Queue / Kafka ]\n                                                              |\n                                      +-----------------------+-----------------------+\n                                      v                                               v\n                              [Invoice Worker]                                [Email Worker]\n                              (Retries + DLQ)                                 (Rate-limited)",
       "sections": [
         {
-          "heading": "Temporal Decoupling and Load Leveling",
-          "body": "In a synchronous request-response model (HTTP/gRPC), the caller thread or connection waits for the downstream service to finish. If a user uploads a video and the API synchronously transcodes it into 4 resolutions, the HTTP connection hangs for minutes, threads exhaust, and any blip restarts the whole upload. By shifting to asynchronous processing, the API persists the raw video to object storage, publishes a `VideoUploaded` job to a queue, and immediately returns `202 Accepted` with a status polling URL or WebSocket channel.",
+          "heading": "Temporal Decoupling and Buffering Traffic Spikes",
+          "body": "In a synchronous request-response architecture (HTTP or gRPC), the calling thread blocks until the downstream service finishes its work. If a user uploads a video and the API transcodes it synchronously into three resolutions, the client connection hangs for minutes, worker threads exhaust, and any minor network blip forces a complete restart. Moving to asynchronous processing decouples the ingestion from the execution: the API writes the raw payload to object storage, enqueues a job message, and returns `202 Accepted` in milliseconds.",
           "bullets": [
-            "Load Leveling (Shock Absorption): If a flash sale generates 100,000 orders/sec, the queue buffers the burst while workers drain it steadily at the database's safe 5,000 writes/sec limit.",
-            "Fault Isolation: If the downstream Email or Analytics service crashes for 2 hours, user checkouts continue unimpeded; messages simply accumulate in the broker until recovery.",
-            "Independent Scaling: CPU-heavy video transcoding workers scale on queue depth metrics independently of lightweight API gateway pods."
+            "Load Leveling: When a flash sale spikes traffic to 50,000 orders/sec, the message queue buffers the burst while database workers drain it at a steady, sustainable 5,000 writes/sec.",
+            "Fault Isolation: If a downstream email or analytics service goes down for three hours, user checkouts continue unimpeded while messages accumulate safely in the broker.",
+            "Independent Scaling: Compute-intensive worker pools scale based on queue depth metrics completely independently of lightweight API gateway tiers."
           ],
           "codeSnippet": {
-            "title": "Async Job Producer + Resilient Worker with DLQ Routing",
-            "code": "// 1. API Handler: Fast admission & enqueue (<15ms)\nexport async function handleVideoUpload(req: UploadRequest, queue: QueueClient) {\n  const jobId = crypto.randomUUID();\n  await queue.publish(\"video-transcode-jobs\", {\n    jobId,\n    s3Key: req.s3Key,\n    resolutions: [\"1080p\", \"720p\", \"480p\"],\n    attempt: 1,\n  });\n  return { status: 202, jobId, statusUrl: `/api/v1/jobs/${jobId}` };\n}\n\n// 2. Worker: Retries with Exponential Backoff, routes Poison Pills to DLQ\nexport async function processJob(msg: JobMessage, queue: QueueClient) {\n  try {\n    await transcodeFfmpeg(msg.s3Key, msg.resolutions);\n  } catch (err) {\n    if (msg.attempt >= 5) {\n      await queue.publish(\"video-transcode-DLQ\", { ...msg, error: String(err) });\n    } else {\n      const backoffMs = Math.pow(2, msg.attempt) * 1000 + Math.random() * 500;\n      await queue.publishDelayed(\"video-transcode-jobs\", { ...msg, attempt: msg.attempt + 1 }, backoffMs);\n    }\n  }\n}"
+            "title": "Asynchronous Job Producer and Resilient Worker Pattern",
+            "code": "// 1. API Gateway: Fast admission and enqueue (<15ms response)\nexport async function handleVideoUpload(req: UploadRequest, queue: QueueClient) {\n  const jobId = crypto.randomUUID();\n  await queue.publish(\"video-transcode-jobs\", {\n    jobId,\n    s3Key: req.s3Key,\n    resolutions: [\"1080p\", \"720p\", \"480p\"],\n    attempt: 1,\n  });\n  return { status: 202, jobId, statusUrl: `/api/v1/jobs/${jobId}` };\n}\n\n// 2. Worker: Retries with exponential backoff and routes poison pills to DLQ\nexport async function processJob(msg: JobMessage, queue: QueueClient) {\n  try {\n    await transcodeFfmpeg(msg.s3Key, msg.resolutions);\n  } catch (err) {\n    if (msg.attempt >= 5) {\n      await queue.publish(\"video-transcode-DLQ\", { ...msg, error: String(err) });\n    } else {\n      const backoffMs = Math.pow(2, msg.attempt) * 1000 + Math.random() * 500;\n      await queue.publishDelayed(\"video-transcode-jobs\", { ...msg, attempt: msg.attempt + 1 }, backoffMs);\n    }\n  }\n}"
           }
         },
         {
-          "heading": "Handling Backpressure and Poison-Pill Messages",
-          "body": "Asynchronous queues are not magic infinite sinks. If producers continuously write faster than consumers can drain, queue memory/disk fills up and end-to-end queuing latency approaches infinity. Production systems must enforce bounded queues, backpressure signaling, and Dead-Letter Queues (DLQs) so malformed 'poison-pill' messages do not block worker threads in infinite crash loops.",
+          "heading": "Managing Backpressure and Poison-Pill Messages",
+          "body": "Message queues are buffers, not infinite storage wells. If producers consistently publish faster than worker fleets can consume, queue lag builds up, memory or disk saturates, and end-to-end processing delays grow unacceptable. Resilient production architectures must implement backpressure controls, idempotent workers, and dead-letter queues.",
           "bullets": [
-            "Backpressure: When queue depth crosses a high-water mark, apply rate limiting or shed non-critical load (`HTTP 429` or `503 Retry-After`) at the edge.",
-            "Dead-Letter Queue (DLQ): After `N` failed delivery attempts, move the message to a side queue for alerting, inspection, and manual replay.",
-            "At-Least-Once Delivery: Because brokers redeliver unacknowledged messages on timeout, downstream workers MUST be idempotent."
+            "Backpressure Controls: When queue lag exceeds safe thresholds, throttle incoming traffic at the edge with HTTP 429 or 503 Retry-After headers.",
+            "Dead-Letter Queues (DLQs): After a bounded number of failed retry attempts, isolate failing messages in a DLQ to prevent worker crash loops.",
+            "Idempotency: Because message brokers re-deliver unacknowledged messages upon timeout, worker processing logic must produce the same result regardless of duplicate deliveries."
           ]
         }
       ],
       "tradeOffs": [
         {
-          "option": "Synchronous Processing (Direct RPC / HTTP)",
-          "pros": "Immediate deterministic result returned to caller, simpler debugging and stack traces, no message broker infrastructure.",
-          "cons": "Latency equals the sum of all downstream calls, cascading timeouts if any dependency slows down, zero burst buffering.",
-          "bestFor": "Authentication checks, fetching user profile data, balance verification, and immediate search queries."
+          "option": "Synchronous Processing (Direct HTTP / gRPC)",
+          "pros": "Immediate result returned to client; simpler debugging and linear call stack traces; zero broker infrastructure to maintain.",
+          "cons": "End-to-end latency equals the sum of all downstream calls; slow dependencies exhaust thread pools and cause cascading outages.",
+          "bestFor": "User authentication, live search queries, account balance verification, and synchronous CRUD updates."
         },
         {
-          "option": "Asynchronous Processing (Message Queues / Event Streams)",
-          "pros": "Sub-20ms API response times, absorbs massive traffic spikes, isolates failures across services, enables fan-out to multiple consumers.",
-          "cons": "Client must poll or listen via WebSockets/webhooks for completion, eventual consistency, operational overhead of Kafka/RabbitMQ.",
-          "bestFor": "Media transcoding, email/push notifications, PDF generation, webhook delivery, and post-checkout order fulfillment."
+          "option": "Asynchronous Processing (Queues / Kafka Streams)",
+          "pros": "Sub-20ms client acknowledgment; absorbs massive traffic spikes; decouples failure domains across service boundaries.",
+          "cons": "Clients must poll or listen via WebSockets for results; eventual consistency; requires running and operating message brokers.",
+          "bestFor": "Video transcoding, transactional emails, billing settlement, push notifications, and webhook delivery."
         }
       ],
-      "interviewTip": "Whenever you draw a message queue in an interview, immediately add two details without waiting to be asked: (1) a Dead-Letter Queue (DLQ) for failed retries, and (2) how the client learns the async task finished (polling, WebSocket, or push notification).",
+      "interviewTip": "Whenever you introduce a message queue in a design interview, immediately address two operational realities: (1) how you route persistent failures to a Dead-Letter Queue (DLQ), and (2) how the client gets notified when work finishes (polling, WebSockets, or push notifications).",
       "jsonUrl": "/api/subtopics/core-fundamentals/synchronous-vs-asynchronous-processing.json"
     },
     {
@@ -478,54 +478,54 @@
       "topicNumber": 1,
       "subtopicNumber": "1.9",
       "title": "Back-of-the-Envelope Estimation",
-      "subtitle": "Rapid capacity planning using powers of two, latency numbers every programmer should know, QPS conversions, and storage math.",
+      "subtitle": "Practical capacity planning using powers of ten, latency orders of magnitude, QPS conversions, and storage sizing.",
       "readingTime": "8 min read",
       "difficulty": "Foundational",
       "keyTakeaways": [
-        "There are ~86,400 seconds in a day, always round to `100,000 (10^5)` seconds/day for mental math, and multiply average QPS by `2x–3x` for peak QPS.",
-        "Memorize latency orders of magnitude: L1/RAM is nanoseconds, SSD is ~100 microseconds, Intra-DC network is ~0.5 milliseconds, Cross-Continent is ~150 milliseconds.",
-        "The goal of estimation is not arithmetic perfection; it is proving whether your data fits in a single node's RAM (64GB) or requires sharding across 50 nodes."
+        "There are 86,400 seconds in a day; round to `100,000 (10^5)` for quick mental calculations, and multiply average QPS by `2x–3x` to budget for peak traffic.",
+        "Memorize order-of-magnitude latency baselines: L1/RAM is nanoseconds, SSD random reads are ~100 microseconds, intra-datacenter network hops are ~0.5 milliseconds, and cross-continent hops are ~100 milliseconds.",
+        "The goal of estimation is to make architectural decisions: proving whether your dataset fits in RAM on a single box (64 GB) or requires sharding across dozens of storage nodes."
       ],
       "architectureDiagram": "LATENCY HIERARCHY (Orders of Magnitude)\n[ CPU / L1-L2 Cache ]  ~ 1 - 5 ns         (Instant)\n[ Main Memory (RAM) ]  ~ 100 ns           (0.1 us)\n[ NVMe SSD Random Read]~ 100 us           (0.1 ms)\n[ Same-AZ Network RTT ]~ 500 us           (0.5 ms)\n[ Cross-US Network RTT]~ 70,000 us        (70 ms)\n[ Global Packet RTT   ]~ 150,000 us       (150 ms)\n\nDAILY VOLUME -> QPS SHORTCUT\n100M requests/day  ÷  100,000 sec/day  =  1,000 Avg QPS  (Peak ~ 2,500 QPS)",
       "sections": [
         {
-          "heading": "Golden Constants and Shortcuts for Mental Math",
-          "body": "During a system design interview, spending 8 minutes doing long division wastes precious architecture time. Instead, convert every number into scientific notation (`10^N`) and use standardized approximations. Every estimation should answer three architectural questions: (1) What is our read/write QPS? (2) How much storage do we accumulate over 5 years? (3) How much cache memory and network bandwidth do we need?",
+          "heading": "Mental Math Shortcuts for High-Speed Estimation",
+          "body": "Spending ten minutes doing exact long division during an architectural review or interview wastes valuable time. Instead, express numbers in powers of ten (`10^N`) and standardize on clean approximations. Every sizing exercise should answer three core architectural questions: What is the peak read and write QPS? How much storage accumulates over five years? How much cache memory and network bandwidth will we consume?",
           "bullets": [
-            "Time Shortcuts: `1 day ≈ 10^5 seconds` (86,400) | `1 month ≈ 2.5 × 10^6 seconds` | `1 year ≈ 3 × 10^7 seconds`.",
-            "Volume Powers of 10: `10^3 = 1 KB` | `10^6 = 1 MB` | `10^9 = 1 GB` | `10^12 = 1 TB` | `10^15 = 1 PB`.",
-            "Single Node Rule-of-Thumb: 1 Redis node = ~100k QPS | 1 SQL Primary = ~10k write QPS / 30k read QPS | 1 App Server = ~5k-10k QPS."
+            "Time Conversions: `1 day ≈ 10^5 seconds` (exact: 86,400) | `1 month ≈ 2.5 × 10^6 seconds` | `1 year ≈ 3 × 10^7 seconds`.",
+            "Capacity Multipliers: `10^3 = 1 KB` | `10^6 = 1 MB` | `10^9 = 1 GB` | `10^12 = 1 TB` | `10^15 = 1 PB`.",
+            "Hardware Throughput Baselines: 1 Redis node ≈ 100k QPS | 1 Relational Primary ≈ 10k write QPS / 30k read QPS | 1 Stateless Node ≈ 5k-10k QPS."
           ],
           "codeSnippet": {
-            "title": "Worked Example: Capacity Estimation for a URL Shortener (100M DAU)",
-            "code": "/*\n * 1. TRAFFIC (QPS)\n * - Write: 100M new URLs/month -> 10^8 / (2.5 * 10^6 sec) = 40 Writes/sec (Peak ~100 WPS)\n * - Read (100:1 ratio): 40 * 100 = 4,000 Reads/sec (Peak ~10,000 RPS)\n * -> Conclusion: 1 SQL Primary easily handles 100 WPS! No write sharding needed initially.\n *\n * 2. STORAGE (5 Years)\n * - Total rows: 100M/mo * 12 mo * 5 yrs = 6 Billion URLs (6 * 10^9)\n * - Row size: 8B id + 7B slug + 500B long_url + metadata ≈ 500 Bytes\n * - Total Storage: (6 * 10^9) * 500 Bytes = 3 * 10^12 Bytes = 3 TB over 5 years\n * -> Conclusion: Fits on a single multi-TB SSD instance with read replicas!\n *\n * 3. CACHE MEMORY (80/20 Pareto Rule: Cache 20% of daily active URLs)\n * - Daily reads: 4,000 RPS * 10^5 sec = 400M requests/day (~80M unique URLs)\n * - 20% hot set: 16M URLs * 500 Bytes ≈ 8 GB RAM\n * -> Conclusion: Fits comfortably inside a single 16GB Redis node (with 1 replica)!\n */"
+            "title": "Worked Example: URL Shortener Capacity Calculation",
+            "code": "/*\n * 1. TRAFFIC ENVELOPE (QPS)\n * - Write Volume: 100M new URLs/month -> 10^8 / (2.5 * 10^6 sec) = 40 Writes/sec (Peak ~100 WPS)\n * - Read Volume (100:1 ratio): 40 * 100 = 4,000 Reads/sec (Peak ~10,000 RPS)\n * -> Architecture Decision: A single Postgres or MySQL primary easily handles 100 WPS.\n *    No write sharding needed at launch!\n *\n * 2. 5-YEAR PERSISTENT STORAGE\n * - Total records: 100M/month * 12 months * 5 years = 6 Billion records (6 * 10^9)\n * - Record size: 8B id + 7B slug + 500B long_url + metadata ≈ 500 Bytes\n * - Total Raw Storage: 6 * 10^9 * 500 Bytes = 3 TB over 5 years\n * -> Architecture Decision: 3 TB comfortably fits on a single NVMe SSD volume with replicas.\n *\n * 3. CACHE SIZING (80/20 Rule: Cache top 20% of daily active links)\n * - Daily read requests: 4,000 RPS * 10^5 sec = 400M requests/day (~80M unique URLs)\n * - 20% hot working set: 16M URLs * 500 Bytes ≈ 8 GB RAM\n * -> Architecture Decision: Easily fits inside a single 16 GB Redis instance with a standby replica.\n */"
           }
         },
         {
-          "heading": "Tying Numbers Directly to Design Decisions",
-          "body": "Interviewers hate 'disconnected math', calculating 3.2 TB of storage and then never mentioning it again. Every single number you compute must immediately justify an architectural component choice.",
+          "heading": "Connecting Calculated Numbers Directly to Architectural Decisions",
+          "body": "Calculating numbers without connecting them to infrastructure choices is wasted effort. Every calculated metric must directly justify a specific component selection or debunk an over-engineered assumption.",
           "bullets": [
-            "If Hot Working Set = 40 GB -> 'This fits inside a single 64GB Redis cluster shard; we don't need complex cache sharding.'",
-            "If Write QPS = 80,000/sec -> 'A single Postgres leader caps out around 15k writes/sec, so we MUST shard by `user_id` across at least 8 shards or use Cassandra.'",
-            "If Media Ingress = 5 GB/sec -> 'Our API servers shouldn't proxy 40 Gbps of raw video bytes; clients must upload directly to S3 via Presigned URLs.'"
+            "Hot working set equals 16 GB: 'Because this fits comfortably in RAM on a single standard node, we do not need complex distributed cache partitioning.'",
+            "Peak write volume equals 60,000 QPS: 'A single relational database primary saturates around 10k-15k writes/sec, so we must partition writes across shards or adopt an append-only distributed store like Cassandra.'",
+            "Media ingress equals 10 GB/sec: 'Application servers must not proxy raw multi-gigabyte video streams; clients must upload directly to object storage via presigned S3 URLs.'"
           ]
         }
       ],
       "tradeOffs": [
         {
-          "option": "Upfront Full Capacity Estimation (Before Drawing)",
-          "pros": "Establishes global scale constraints early, prevents designing a toy architecture for a planetary problem.",
-          "cons": "Can eat up 5-7 minutes of interview time on arithmetic before any boxes are drawn.",
-          "bestFor": "Storage-heavy or bandwidth-heavy prompts (YouTube, Dropbox, Twitter Feed, Web Crawler, Metrics System)."
+          "option": "Upfront Capacity Estimation",
+          "pros": "Identifies scale boundaries early; prevents designing toy solutions for massive scale or over-architecting small workloads.",
+          "cons": "Consumes 5-7 minutes of upfront discussion before system topology diagrams are drafted.",
+          "bestFor": "Storage-intensive or bandwidth-heavy systems (video streaming, cloud drives, social media feeds, logging backbones)."
         },
         {
-          "option": "Just-in-Time (JIT) Scoped Estimation (During Deep Dive)",
-          "pros": "Saves time upfront, calculates numbers only where needed to justify sharding or caching a specific bottleneck.",
-          "cons": "Risk of realizing halfway through the design that your chosen database cannot handle the write QPS.",
-          "bestFor": "Workflow-heavy or state-machine prompts (Uber Ride Matching, Payment System, Ticketmaster, Rate Limiter)."
+          "option": "Just-in-Time Scoped Estimation",
+          "pros": "Speeds up initial architecture layout; calculates metrics only when deciding whether a specific bottleneck needs sharding or caching.",
+          "cons": "Risk of realizing late in the design that a chosen database cannot support the required write throughput.",
+          "bestFor": "Workflow-heavy state machines (ride dispatch, payment processing pipelines, rate limiting)."
         }
       ],
-      "interviewTip": "Always state your rounding assumptions out loud ('I'll approximate 86,400 seconds/day as 100,000 to keep the math clean') and end your estimation with a 1-sentence architectural verdict.",
+      "interviewTip": "State your rounding assumptions out loud ('I'll round 86,400 to 100,000 to keep mental math rapid') and always wrap up your calculations with a concrete infrastructure takeaway.",
       "jsonUrl": "/api/subtopics/core-fundamentals/back-of-the-envelope-estimation.json"
     }
   ]

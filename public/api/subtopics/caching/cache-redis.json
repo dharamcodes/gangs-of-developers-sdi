@@ -3,55 +3,56 @@
   "topicId": "caching",
   "topicTitle": "Caching",
   "topicNumber": 5,
-  "subtopicNumber": "5.9",
+  "subtopicNumber": "5.6",
   "title": "Redis",
-  "subtitle": "Single-threaded event loop architecture, core data structures, RDB vs AOF persistence, and Redis Cluster 16,384 hash slots.",
-  "readingTime": "10 min read",
+  "subtitle": "Single-threaded event loop mechanics, core data structures, RDB vs AOF durability, and Cluster hash slot distribution.",
+  "readingTime": "8 min read",
   "difficulty": "Intermediate",
   "keyTakeaways": [
-    "Redis achieves 100k+ ops/sec using a single-threaded event loop with I/O multiplexing (`epoll`/`kqueue`), eliminating lock contention and context switches (with multi-threaded network I/O in Redis 6+).",
-    "Beyond simple strings, Redis provides native atomic data structures: Sorted Sets (`ZSET` skip-list + hash table for leaderboards/rate limiters), Hashes, Streams, and HyperLogLog.",
-    "Redis Cluster partitions the keyspace into 16,384 fixed CRC16 hash slots (`CRC16(key) % 16384`) distributed across master nodes without a central proxy."
+    "Redis achieves 100,000+ operations/sec on a single core using an event loop with non-blocking I/O multiplexing (`epoll`), eliminating mutex lock contention.",
+    "Selecting the correct data structure matters: Sorted Sets (`ZSET`) back leaderboards and rate limiters; Hashes reduce memory overhead via ziplist encoding.",
+    "Redis Cluster partitions keys across 16,384 fixed hash slots (`CRC16(key) % 16384`) without a centralized proxy; multi-key operations require `{hash_tag}` braces."
   ],
-  "architectureDiagram": "                     REDIS INTERNALS & CLUSTER TOPOLOGY\n  [Clients] === Pipelined Commands ===> [I/O Multiplexer (epoll / kqueue)]\n                                                       |\n                                        [Single-Threaded Command Loop]\n                                         (Zero Locks! Atomic Lua/Ops)\n                                          /            |            \\\n                                      [ZSET]        [HASH]        [HLL]\n  REDIS CLUSTER (16,384 Hash Slots):\n  +-----------------------+  +-----------------------+  +-----------------------+\n  | Node A: Slots 0..5460 |  | Node B: 5461..10922   |  | Node C: 10923..16383  |\n  +-----------------------+  +-----------------------+  +-----------------------+",
+  "architectureDiagram": "REDIS ARCHITECTURE: EVENT LOOP & CLUSTER HASH SLOTS\n  [ Client Pool ] === Pipelined TCP ===> [ I/O Multiplexer (epoll / kqueue) ]\n                                                    |\n                                     [ Single-Threaded Event Loop ]\n                                      (Zero Locks! Atomic Lua/Ops)\n                                       /            |            \\\n                                   [ZSET]        [HASH]        [HLL]\n\n  REDIS CLUSTER TOPOLOGY (16,384 Hash Slots):\n  +------------------------+  +------------------------+  +------------------------+\n  | Master A: Slots 0-5460 |  | Master B: 5461-10922   |  | Master C: 10923-16383  |\n  +------------------------+  +------------------------+  +------------------------+",
   "sections": [
     {
-      "heading": "Data Structures & Single-Threaded Event Loop",
-      "body": "Because Redis executes commands sequentially on a single thread in RAM, every command (and every embedded Lua script) is atomic by default without needing mutexes. However, this means O(N) commands like `KEYS *`, `SMEMBERS` on a 1M-element set, or slow Lua scripts will block the entire Redis server and cause cascading timeouts.",
+      "heading": "Data Structures and the Single-Threaded Event Loop",
+      "body": "Because Redis executes commands sequentially on a single thread in memory, every command and embedded Lua script runs atomically without mutexes. However, this architectural choice means long-running O(N) commands like `KEYS *`, `SMEMBERS` on a 1-million-item set, or slow Lua scripts freeze the entire Redis server, triggering cascading timeouts across upstream services.",
       "bullets": [
-        "Sorted Set (`ZSET`): Backed by both a Hash Table (O(1) score lookup by member) and a Skip List (O(log N) range queries by score/rank). The gold standard for real-time gaming leaderboards (`ZADD`, `ZREVRANGE`), sliding-window rate limiters, and delayed job schedulers.",
-        "HyperLogLog (`PFADD`, `PFCOUNT`): Estimates unique cardinality (e.g., unique daily page visitors) with 0.81% standard error using a fixed 12 KB of memory, even for 100 million unique users!",
-        "Pipelining & Lua Scripting: Pipelining batches multiple commands in a single TCP write to eliminate RTT latency; Lua scripts (`EVAL`) execute multi-step read-modify-write logic atomically inside Redis."
+        "Strings & Hashes: Hashes store objects with less memory than JSON strings because small hashes are encoded internally as compact contiguous memory buffers (ziplists).",
+        "Sorted Sets (`ZSET`): Backed by a Hash Table (O(1) member lookups) and a Skip List (O(log N) rank and score range queries). Essential for leaderboards and sliding-window rate limiters.",
+        "HyperLogLog (`PFADD`, `PFCOUNT`): Estimates unique cardinality (e.g., unique daily website visitors) with 0.81% standard error using a fixed 12 KB of memory, even for 100 million distinct elements.",
+        "Pipelining: Batches multiple commands into a single TCP socket write, eliminating round-trip latency overhead."
       ],
       "codeSnippet": {
-        "title": "Real-Time Leaderboard & Sliding Window Rate Limiter in Redis",
-        "code": "// 1. Leaderboard with ZSET: O(log N) update + O(log N + K) top-K fetch\nawait redis.zIncrBy('leaderboard:weekly:2026_w39', 50, 'player_882');\nconst top10 = await redis.zRangeWithScores('leaderboard:weekly:2026_w39', 0, 9, { REV: true });\nconst myRank = await redis.zRevRank('leaderboard:weekly:2026_w39', 'player_882'); // 0-indexed\n\n// 2. Hash Tags in Redis Cluster: Co-locate related keys on the SAME hash slot\n// Both keys hash ONLY the substring 'user_42' inside {}, enabling multi-key Lua/MGET!\nconst cartKey = '{user_42}:cart';\nconst promoKey = '{user_42}:promo';"
+        "title": "Atomic Sliding Window Rate Limiter via Redis Sorted Set (ZSET)",
+        "code": "export async function checkRateLimit(\n  userId: string,\n  limit = 100,\n  windowMs = 60000\n): Promise<boolean> {\n  const key = `ratelimit:${userId}`;\n  const now = Date.now();\n  const windowStart = now - windowMs;\n\n  // Pipeline multi-step operations to reduce RTT\n  const pipeline = redis.pipeline();\n  pipeline.zremrangebyscore(key, 0, windowStart); // Drop expired timestamps\n  pipeline.zadd(key, now, `${now}-${Math.random()}`); // Add current timestamp\n  pipeline.zcard(key); // Count requests in active window\n  pipeline.pexpire(key, windowMs); // Reset TTL\n\n  const results = await pipeline.exec();\n  const requestCount = results![2][1] as number;\n  return requestCount <= limit;\n}"
       }
     },
     {
-      "heading": "Persistence (RDB vs AOF) & Redis Cluster Architecture",
-      "body": "When used for sessions, rate limits, or leaderboards, Redis needs durability across restarts and horizontal scalability beyond a single machine's RAM.",
+      "heading": "Persistence Trade-Offs and Cluster Architecture",
+      "body": "When used for stateful workloads like sessions or leaderboards, Redis provides two distinct persistence mechanisms alongside its horizontal sharding architecture.",
       "bullets": [
-        "RDB Snapshots (`BGSAVE`): Forks a child process using OS Copy-on-Write (CoW) memory pages to write a compact point-in-time binary snapshot. Fast restarts, but loses minutes of data between snapshots.",
-        "AOF (Append-Only File): Logs every write command sequentially (`appendfsync everysec`). Redis 7+ combines an RDB base snapshot with incremental AOF logs for fast recovery and minimal data loss.",
-        "Redis Cluster (16,384 Slots): Smart clients compute `slot = CRC16(key) & 16383` and connect directly to the owning node. If slots are migrating, nodes return `-MOVED` or `-ASK` redirects. Use `{hash_tag}` braces when executing multi-key transactions or Lua scripts so all involved keys reside on the same slot."
+        "RDB Snapshots (`BGSAVE`): Uses OS `fork()` and Copy-on-Write (CoW) memory pages to dump a point-in-time binary snapshot to disk. Extremely fast restarts, but loses minutes of data between snapshot intervals.",
+        "Append-Only File (AOF): Appends every write command sequentially (`appendfsync everysec`). Limits data loss to at most 1 second with minimal performance overhead. Redis 7+ combines an RDB base snapshot with incremental AOF logs.",
+        "Redis Cluster (16,384 Slots): Smart clients compute `CRC16(key) & 16383` and connect directly to the owning master node. If slots are migrating, nodes return `-MOVED` or `-ASK` redirects. Use `{hash_tag}` braces (`{user:101}:profile`) to force related keys onto the same slot for multi-key transactions."
       ]
     }
   ],
   "tradeOffs": [
     {
-      "option": "RDB Point-in-Time Snapshots Only",
-      "pros": "Compact files, minimal disk I/O overhead during normal operation, fastest restart times.",
-      "cons": "Loses all writes since the last snapshot (often 5–15 minutes) on power loss; `fork()` CoW can spike RAM.",
-      "bestFor": "Pure caches where data can be reconstructed from the primary SQL/NoSQL database."
+      "option": "RDB Snapshots Only",
+      "pros": "Compact single-file backups; fast server reboot times; minimal disk I/O overhead during normal operations.",
+      "cons": "Loses all writes since the last snapshot on sudden power failure; `fork()` can double memory usage on write-heavy nodes.",
+      "bestFor": "Pure caches where data can be reconstructed from primary databases."
     },
     {
-      "option": "Hybrid RDB + AOF (`appendfsync everysec`)",
-      "pros": "Bounds potential data loss to at most 1 second with near-native in-memory performance.",
-      "cons": "Larger disk footprint and background AOF rewrite I/O overhead.",
-      "bestFor": "Session stores, rate limiters, real-time leaderboards, and write-behind buffers."
+      "option": "AOF (`appendfsync everysec`)",
+      "pros": "Limits potential data loss to at most 1 second; append-only format avoids corruption.",
+      "cons": "Larger disk footprint; background log rewrites (`BGREWRITEAOF`) consume disk I/O.",
+      "bestFor": "Real-time leaderboards, session stores, rate limiting buckets, and message queues."
     }
   ],
-  "interviewTip": "Know the exact time complexity and internal structure of Redis `ZSET` (Hash Map + Skip List, O(log N)) and explain why `KEYS *` is forbidden in production (use `SCAN` cursor iteration instead).",
+  "interviewTip": "Never say `KEYS *` in a system design interview. Always state: 'Because Redis is single-threaded, `KEYS *` blocks the server until full traversal completes. In production, we must use `SCAN` with cursor-based iteration to scan keys incrementally without blocking the event loop.'",
   "jsonUrl": "/api/subtopics/caching/cache-redis.json"
 }

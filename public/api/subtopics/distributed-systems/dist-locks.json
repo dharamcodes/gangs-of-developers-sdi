@@ -6,51 +6,52 @@
   "subtopicNumber": "6.6",
   "title": "Distributed Locks",
   "subtitle": "Coordinating mutual exclusion across processes: Redis SET NX + Lua release, Redlock controversies, and etcd/ZooKeeper locks.",
-  "readingTime": "9 min read",
+  "readingTime": "8 min read",
   "difficulty": "Advanced",
   "keyTakeaways": [
-    "Use Distributed Locks for **efficiency** (avoiding duplicate expensive work) or **correctness** (preventing concurrent mutation of shared state, which additionally requires Fencing Tokens).",
-    "A single-node Redis lock must use `SET lock_key unique_owner_token NX PX 5000` to acquire, and an atomic Lua script comparing `unique_owner_token` before `DEL` to release.",
-    "For strict correctness under failovers, prefer consensus-backed locks (`etcd`, `ZooKeeper`, or database `SELECT FOR UPDATE` / advisory locks) over asynchronous Redis replication."
+    "Distributed locks coordinate mutual exclusion across independent processes that share no physical memory.",
+    "A correct Redis lock requires setting a unique random token via `SET key token NX EX ttl` and releasing it via a Lua script that verifies token ownership before deleting.",
+    "Use Redis locks for efficiency (preventing duplicate expensive work); use consensus-backed locks (etcd/ZooKeeper) with fencing tokens for correctness (preventing data corruption)."
   ],
-  "architectureDiagram": "               SAFE REDIS LOCK ACQUISITION & LUA RELEASE\n  [Worker A] -- 1. SET lock:job1 'uuid_A' NX PX 5000 --> [Redis]\n  [Worker A] <-- OK (Lock Acquired!) -------------------- [Redis]\n  [Worker A] -- 2. Execute Critical Section...\n  [Worker A] -- 3. EVAL Lua: if GET == 'uuid_A' then DEL -> [Redis]\n                   (Prevents deleting Worker B's lock if A's TTL expired!)",
+  "architectureDiagram": "REDIS DISTRIBUTED LOCK LIFECYCLE (SET NX + LUA RELEASE)\n1. ACQUIRE LOCK (Atomic):\n   SET lock:order_124 \"unique-uuid-99\" NX EX 10\n   (Succeeds only if key does not exist; auto-expires in 10s)\n\n2. EXECUTE CRITICAL SECTION\n\n3. RELEASE LOCK (Atomic Lua Script):\n   if redis.call('get', KEYS[1]) == ARGV[1] then\n     return redis.call('del', KEYS[1])\n   else\n     return 0 -- Lock was lost to another process; do NOT delete their key!\n   end",
   "sections": [
     {
-      "heading": "Anatomy of a Correct Redis Lock & Why Naive `DEL` Is Broken",
-      "body": "Developers often implement a distributed lock with `SETNX` followed by `EXPIRE` and a plain `DEL`. This has two fatal bugs: (1) if the client crashes between `SETNX` and `EXPIRE`, the lock is held forever (deadlock); (2) if Worker A's execution takes 6 seconds on a 5-second lock TTL, the lock expires, Worker B acquires the lock, and then Worker A finishes and calls `DEL`, deleting Worker B's active lock!",
+      "heading": "Anatomy of a Correct Redis Lock and the Broken DEL Antipattern",
+      "body": "Implementing a distributed lock in Redis looks simple on paper, but naive implementations are dangerously broken.",
       "bullets": [
-        "Atomic Acquisition: Always combine `NX` (only set if not exists) and `PX` (millisecond TTL) in a single atomic command: `SET resource_lock <random_uuid> NX PX 5000`.",
-        "Compare-And-Delete via Lua: When releasing the lock, pass `<random_uuid>` to a Lua script that deletes the key *only if* the current value still matches `<random_uuid>`.",
-        "Watchdog Auto-Renewal: Libraries like Redisson run a background watchdog timer every `TTL / 3` ms to extend the lock TTL via Lua if the owning thread is still alive and working."
+        "The Naive DEL Bug: Process A acquires a lock with a 10s TTL. Process A hits an unexpected 15s database stall. At 10s, the lock expires. Process B acquires the lock. At 15s, Process A finishes and blindly issues `DEL lock:key`, deleting Process B's active lock! Now Process C acquires the lock, and both Process B and C run concurrently.",
+        "Atomic Unique Tokens: Always generate a cryptographically random UUID per acquisition (`SET resource_key uuid NX EX 10`).",
+        "Safe Release via Lua: The release must execute as an atomic Lua script: check that the stored value matches the caller's UUID, and delete only if equal."
       ],
       "codeSnippet": {
-        "title": "Production Redis Distributed Lock with Atomic Lua Release",
-        "code": "import { randomUUID } from 'crypto';\n\nexport class RedisDistributedLock {\n  private readonly releaseLua = `\n    if redis.call('GET', KEYS[1]) == ARGV[1] then\n      return redis.call('DEL', KEYS[1])\n    else\n      return 0\n    end\n  `;\n\n  async acquire(key: string, ttlMs: number): Promise<string | null> {\n    const token = randomUUID();\n    const res = await redis.set(`lock:${key}`, token, 'PX', ttlMs, 'NX');\n    return res === 'OK' ? token : null;\n  }\n\n  async release(key: string, token: string): Promise<boolean> {\n    const res = await redis.eval(this.releaseLua, 1, `lock:${key}`, token);\n    return res === 1;\n  }\n}"
+        "title": "Safe Distributed Lock Acquisition and Release in Redis (Node.js)",
+        "code": "export class RedisLock {\n  constructor(private redis: RedisClient, private key: string, private ttlSec = 10) {}\n\n  async acquire(): Promise<string | null> {\n    const token = crypto.randomUUID();\n    const ok = await this.redis.set(this.key, token, 'NX', 'EX', this.ttlSec);\n    return ok === 'OK' ? token : null;\n  }\n\n  async release(token: string): Promise<boolean> {\n    // Atomic release script: only delete if the token still belongs to this caller\n    const script = `\n      if redis.call('get', KEYS[1]) == ARGV[1] then\n        return redis.call('del', KEYS[1])\n      else\n        return 0\n      end\n    `;\n    const res = await this.redis.eval(script, 1, this.key, token);\n    return res === 1;\n  }\n}"
       }
     },
     {
-      "heading": "Redlock vs Consensus Stores (Efficiency vs Correctness)",
-      "body": "What happens if the single Redis primary crashes right after granting a lock to Worker A, before replicating that key to its async replica? The promoted replica will grant the same lock to Worker B! Salvatore Sanfilippo (antirez) proposed `Redlock` (acquiring locks across 3 of 5 independent Redis masters). However, Martin Kleppmann demonstrated that Redlock relies on timing assumptions that can break under clock jumps or GC pauses, and lacks built-in monotonic fencing tokens.",
+      "heading": "Efficiency vs Correctness: Redis Redlock vs Consensus Stores",
+      "body": "Martin Kleppmann's famous critique of distributed locks established a fundamental distinction: why are you locking?",
       "bullets": [
-        "Locking for Efficiency (Use Redis): You want to prevent two cron pods from generating the same daily PDF report or sending a duplicate push notification. If a rare failover causes the work to run twice, it costs a few CPU cycles, single Redis lock is fast and ideal.",
-        "Locking for Correctness (Use etcd / ZooKeeper / DB Transaction): Concurrent execution would corrupt financial state or double-book inventory. Use PostgreSQL row locks/advisory locks (`pg_try_advisory_xact_lock`) or `etcd` leases with `ModRevision` fencing tokens."
+        "Locking for Efficiency: Preventing redundant expensive computation (e.g., avoiding rendering the same report twice). If the lock fails once in a million times, a minor amount of compute is wasted, but no data is corrupted. Redis single-instance or Redlock is ideal.",
+        "Locking for Correctness: Preventing double-spending, split-brain corruption, or incorrect inventory deduction. A single lock failure destroys financial state. Distributed Redis locks (including Redlock) cannot guarantee safety here because unsynchronized system clocks, GC pauses, and asynchronous replication can cause two nodes to hold the lock simultaneously.",
+        "Correctness Architecture: Use consensus systems (etcd or ZooKeeper) that issue monotonic fencing tokens validated by the underlying storage tier."
       ]
     }
   ],
   "tradeOffs": [
     {
-      "option": "Redis Distributed Lock (`SET NX PX` + Lua)",
-      "pros": "Ultra-fast (<1ms), handles 100k+ lock ops/sec, trivial infrastructure footprint.",
-      "cons": "Async failover can violate mutual exclusion; does not generate monotonic fencing tokens.",
-      "bestFor": "Deduplicating cron jobs, preventing cache stampedes, and rate-limiting concurrent user actions."
+      "option": "Redis Single-Node Lock (SET NX + Lua)",
+      "pros": "Sub-millisecond acquisition latency; tens of thousands of locks/sec; zero heavy consensus overhead.",
+      "cons": "If Redis primary crashes before replicating to replica, the lock is lost, permitting two processes to execute concurrently.",
+      "bestFor": "Efficiency locks, preventing duplicate background jobs, and rate limit orchestration."
     },
     {
-      "option": "Consensus Lock (`etcd` / `ZooKeeper`) or DB Advisory Lock",
-      "pros": "Linearizable safety across node failures; provides monotonic revision tokens for fencing.",
-      "cons": "Lower throughput (~5k–15k writes/sec per consensus group) and higher latency due to quorum disk fsync.",
-      "bestFor": "Distributed storage leadership, cluster metadata mutations, and strict correctness invariants."
+      "option": "Consensus Store Lock (etcd / ZooKeeper)",
+      "pros": "Linearizable consistency; heartbeat keep-alives; generates monotonic transaction revisions (fencing tokens).",
+      "cons": "Higher acquisition latency; lower throughput (~5,000 locks/sec); requires running consensus cluster.",
+      "bestFor": "Mission-critical financial settlement, database primary promotion, and single-active job controllers."
     }
   ],
-  "interviewTip": "Ask yourself and the interviewer: 'Are we locking for Efficiency or for Correctness?' And if you already have a PostgreSQL database storing the entity being mutated, remember that a simple `SELECT ... FOR UPDATE` or `UNIQUE` constraint on the DB row often eliminates the need for an external distributed lock altogether!",
+  "interviewTip": "Demonstrate senior systems insight by referencing the efficiency vs correctness dilemma: 'If we need a lock for efficiency—like preventing two workers from transcoding the same video—Redis SET NX with a Lua release script is fast and appropriate. But if we need a lock for correctness—like updating an account balance—we must use etcd with monotonic fencing tokens checked by the database, because GC pauses can break Redis locks.'",
   "jsonUrl": "/api/subtopics/distributed-systems/dist-locks.json"
 }

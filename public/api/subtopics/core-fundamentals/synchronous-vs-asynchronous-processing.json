@@ -5,53 +5,53 @@
   "topicNumber": 1,
   "subtopicNumber": "1.8",
   "title": "Synchronous vs Asynchronous Processing",
-  "subtitle": "Decoupling request-response paths with message queues, event streams, backpressure control, and dead-letter queues.",
+  "subtitle": "Decoupling request-response paths with message brokers, backpressure controls, idempotency, and dead-letter queues.",
   "readingTime": "7 min read",
   "difficulty": "Foundational",
   "keyTakeaways": [
-    "Synchronous calls block the caller until work completes, creating tight temporal coupling and cascading failure chains across microservices.",
-    "Asynchronous processing buffers work in durable queues (SQS, RabbitMQ, Kafka), absorbing traffic spikes (load leveling) and isolating downstream outages.",
-    "Every production async pipeline must include retry with exponential backoff + jitter, idempotency keys, and a Dead-Letter Queue (DLQ) for poison pills."
+    "Synchronous RPC calls block the caller until completion, creating temporal coupling and compounding failure risks across microservices.",
+    "Asynchronous processing decouples producers from consumers using durable message queues, absorbing traffic bursts and isolating downstream failures.",
+    "Every production async queue requires exponential backoff with jitter, idempotent consumers, and a Dead-Letter Queue (DLQ) for malformed poison-pill messages."
   ],
   "architectureDiagram": "SYNCHRONOUS (Temporal Coupling & Latency Summation: 50 + 200 + 300 = 550ms)\n[Client] --(550ms)--> [Order API] --(200ms)--> [PDF Invoice] --(300ms)--> [Email SMTP]\n\nASYNCHRONOUS (Shock Absorber & Fast Ack: 15ms Client Response)\n[Client] --(15ms: 202 Accepted)--> [Order API] ---> [ Durable Queue / Kafka ]\n                                                              |\n                                      +-----------------------+-----------------------+\n                                      v                                               v\n                              [Invoice Worker]                                [Email Worker]\n                              (Retries + DLQ)                                 (Rate-limited)",
   "sections": [
     {
-      "heading": "Temporal Decoupling and Load Leveling",
-      "body": "In a synchronous request-response model (HTTP/gRPC), the caller thread or connection waits for the downstream service to finish. If a user uploads a video and the API synchronously transcodes it into 4 resolutions, the HTTP connection hangs for minutes, threads exhaust, and any blip restarts the whole upload. By shifting to asynchronous processing, the API persists the raw video to object storage, publishes a `VideoUploaded` job to a queue, and immediately returns `202 Accepted` with a status polling URL or WebSocket channel.",
+      "heading": "Temporal Decoupling and Buffering Traffic Spikes",
+      "body": "In a synchronous request-response architecture (HTTP or gRPC), the calling thread blocks until the downstream service finishes its work. If a user uploads a video and the API transcodes it synchronously into three resolutions, the client connection hangs for minutes, worker threads exhaust, and any minor network blip forces a complete restart. Moving to asynchronous processing decouples the ingestion from the execution: the API writes the raw payload to object storage, enqueues a job message, and returns `202 Accepted` in milliseconds.",
       "bullets": [
-        "Load Leveling (Shock Absorption): If a flash sale generates 100,000 orders/sec, the queue buffers the burst while workers drain it steadily at the database's safe 5,000 writes/sec limit.",
-        "Fault Isolation: If the downstream Email or Analytics service crashes for 2 hours, user checkouts continue unimpeded; messages simply accumulate in the broker until recovery.",
-        "Independent Scaling: CPU-heavy video transcoding workers scale on queue depth metrics independently of lightweight API gateway pods."
+        "Load Leveling: When a flash sale spikes traffic to 50,000 orders/sec, the message queue buffers the burst while database workers drain it at a steady, sustainable 5,000 writes/sec.",
+        "Fault Isolation: If a downstream email or analytics service goes down for three hours, user checkouts continue unimpeded while messages accumulate safely in the broker.",
+        "Independent Scaling: Compute-intensive worker pools scale based on queue depth metrics completely independently of lightweight API gateway tiers."
       ],
       "codeSnippet": {
-        "title": "Async Job Producer + Resilient Worker with DLQ Routing",
-        "code": "// 1. API Handler: Fast admission & enqueue (<15ms)\nexport async function handleVideoUpload(req: UploadRequest, queue: QueueClient) {\n  const jobId = crypto.randomUUID();\n  await queue.publish(\"video-transcode-jobs\", {\n    jobId,\n    s3Key: req.s3Key,\n    resolutions: [\"1080p\", \"720p\", \"480p\"],\n    attempt: 1,\n  });\n  return { status: 202, jobId, statusUrl: `/api/v1/jobs/${jobId}` };\n}\n\n// 2. Worker: Retries with Exponential Backoff, routes Poison Pills to DLQ\nexport async function processJob(msg: JobMessage, queue: QueueClient) {\n  try {\n    await transcodeFfmpeg(msg.s3Key, msg.resolutions);\n  } catch (err) {\n    if (msg.attempt >= 5) {\n      await queue.publish(\"video-transcode-DLQ\", { ...msg, error: String(err) });\n    } else {\n      const backoffMs = Math.pow(2, msg.attempt) * 1000 + Math.random() * 500;\n      await queue.publishDelayed(\"video-transcode-jobs\", { ...msg, attempt: msg.attempt + 1 }, backoffMs);\n    }\n  }\n}"
+        "title": "Asynchronous Job Producer and Resilient Worker Pattern",
+        "code": "// 1. API Gateway: Fast admission and enqueue (<15ms response)\nexport async function handleVideoUpload(req: UploadRequest, queue: QueueClient) {\n  const jobId = crypto.randomUUID();\n  await queue.publish(\"video-transcode-jobs\", {\n    jobId,\n    s3Key: req.s3Key,\n    resolutions: [\"1080p\", \"720p\", \"480p\"],\n    attempt: 1,\n  });\n  return { status: 202, jobId, statusUrl: `/api/v1/jobs/${jobId}` };\n}\n\n// 2. Worker: Retries with exponential backoff and routes poison pills to DLQ\nexport async function processJob(msg: JobMessage, queue: QueueClient) {\n  try {\n    await transcodeFfmpeg(msg.s3Key, msg.resolutions);\n  } catch (err) {\n    if (msg.attempt >= 5) {\n      await queue.publish(\"video-transcode-DLQ\", { ...msg, error: String(err) });\n    } else {\n      const backoffMs = Math.pow(2, msg.attempt) * 1000 + Math.random() * 500;\n      await queue.publishDelayed(\"video-transcode-jobs\", { ...msg, attempt: msg.attempt + 1 }, backoffMs);\n    }\n  }\n}"
       }
     },
     {
-      "heading": "Handling Backpressure and Poison-Pill Messages",
-      "body": "Asynchronous queues are not magic infinite sinks. If producers continuously write faster than consumers can drain, queue memory/disk fills up and end-to-end queuing latency approaches infinity. Production systems must enforce bounded queues, backpressure signaling, and Dead-Letter Queues (DLQs) so malformed 'poison-pill' messages do not block worker threads in infinite crash loops.",
+      "heading": "Managing Backpressure and Poison-Pill Messages",
+      "body": "Message queues are buffers, not infinite storage wells. If producers consistently publish faster than worker fleets can consume, queue lag builds up, memory or disk saturates, and end-to-end processing delays grow unacceptable. Resilient production architectures must implement backpressure controls, idempotent workers, and dead-letter queues.",
       "bullets": [
-        "Backpressure: When queue depth crosses a high-water mark, apply rate limiting or shed non-critical load (`HTTP 429` or `503 Retry-After`) at the edge.",
-        "Dead-Letter Queue (DLQ): After `N` failed delivery attempts, move the message to a side queue for alerting, inspection, and manual replay.",
-        "At-Least-Once Delivery: Because brokers redeliver unacknowledged messages on timeout, downstream workers MUST be idempotent."
+        "Backpressure Controls: When queue lag exceeds safe thresholds, throttle incoming traffic at the edge with HTTP 429 or 503 Retry-After headers.",
+        "Dead-Letter Queues (DLQs): After a bounded number of failed retry attempts, isolate failing messages in a DLQ to prevent worker crash loops.",
+        "Idempotency: Because message brokers re-deliver unacknowledged messages upon timeout, worker processing logic must produce the same result regardless of duplicate deliveries."
       ]
     }
   ],
   "tradeOffs": [
     {
-      "option": "Synchronous Processing (Direct RPC / HTTP)",
-      "pros": "Immediate deterministic result returned to caller, simpler debugging and stack traces, no message broker infrastructure.",
-      "cons": "Latency equals the sum of all downstream calls, cascading timeouts if any dependency slows down, zero burst buffering.",
-      "bestFor": "Authentication checks, fetching user profile data, balance verification, and immediate search queries."
+      "option": "Synchronous Processing (Direct HTTP / gRPC)",
+      "pros": "Immediate result returned to client; simpler debugging and linear call stack traces; zero broker infrastructure to maintain.",
+      "cons": "End-to-end latency equals the sum of all downstream calls; slow dependencies exhaust thread pools and cause cascading outages.",
+      "bestFor": "User authentication, live search queries, account balance verification, and synchronous CRUD updates."
     },
     {
-      "option": "Asynchronous Processing (Message Queues / Event Streams)",
-      "pros": "Sub-20ms API response times, absorbs massive traffic spikes, isolates failures across services, enables fan-out to multiple consumers.",
-      "cons": "Client must poll or listen via WebSockets/webhooks for completion, eventual consistency, operational overhead of Kafka/RabbitMQ.",
-      "bestFor": "Media transcoding, email/push notifications, PDF generation, webhook delivery, and post-checkout order fulfillment."
+      "option": "Asynchronous Processing (Queues / Kafka Streams)",
+      "pros": "Sub-20ms client acknowledgment; absorbs massive traffic spikes; decouples failure domains across service boundaries.",
+      "cons": "Clients must poll or listen via WebSockets for results; eventual consistency; requires running and operating message brokers.",
+      "bestFor": "Video transcoding, transactional emails, billing settlement, push notifications, and webhook delivery."
     }
   ],
-  "interviewTip": "Whenever you draw a message queue in an interview, immediately add two details without waiting to be asked: (1) a Dead-Letter Queue (DLQ) for failed retries, and (2) how the client learns the async task finished (polling, WebSocket, or push notification).",
+  "interviewTip": "Whenever you introduce a message queue in a design interview, immediately address two operational realities: (1) how you route persistent failures to a Dead-Letter Queue (DLQ), and (2) how the client gets notified when work finishes (polling, WebSockets, or push notifications).",
   "jsonUrl": "/api/subtopics/core-fundamentals/synchronous-vs-asynchronous-processing.json"
 }

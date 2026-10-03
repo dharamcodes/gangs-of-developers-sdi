@@ -5,49 +5,45 @@
   "topicTitle": "Must-Practice Designs",
   "subtopicNumber": "13.14",
   "title": "Metrics / Logging System",
-  "subtitle": "Designing a planet-scale observability platform (Datadog / Prometheus + Loki) with Gorilla XOR TSDB compression, inverted label indexes, and streaming alert evaluation",
+  "subtitle": "Observability platform architecture: Gorilla TSDB compression, inverted label indexes, and streaming alert evaluation.",
   "readingTime": "19 min",
   "difficulty": "Staff+",
   "keyTakeaways": [
-    "Prevent High-Cardinality Tag Explosion from crashing TSDB memory: decouple unique label combinations into a 64-bit `series_id` mapped via an Inverted Index (Roaring Bitmaps), and enforce per-tenant active time-series cardinality quotas at the ingestion edge.",
-    "Achieve 12x compression on time-series samples (16 bytes -> ~1.37 bytes/sample) using Facebook Gorilla encoding (Delta-of-Delta timestamps + XOR floating-point values) inside 2-hour immutable in-memory/disk blocks.",
-    "Store logs cost-effectively (Grafana Loki / ClickHouse pattern) by indexing only low-cardinality metadata labels (`service`, `env`, `region`, `level`) while streaming compressed log chunks (Zstd columnar blocks) directly to Object Storage (S3) with Bloom filters for fast full-text needle searches."
+    "Prevent high-cardinality tag explosions from exhausting TSDB memory: map unique label combinations to a 64-bit series_id using an Inverted Index (Roaring Bitmaps), and enforce per-tenant cardinality quotas at the ingestion gateway.",
+    "Achieve 10x-12x compression on time-series samples (16 bytes -> ~1.37 bytes per sample) using Facebook Gorilla encoding (Delta-of-Delta timestamps + XOR floating-point values) inside 2-hour immutable blocks.",
+    "Store logs cost-effectively (the Grafana Loki / ClickHouse pattern) by indexing only low-cardinality metadata labels (service, env, level) while streaming compressed log chunks directly to S3 with Bloom filters for fast needle-in-a-haystack substring searches."
   ],
   "architectureDiagram": "+-----------------------------------------------------------------------------------+\n|          HOST / K8S DAEMONSET AGENTS (OpenTelemetry Collector / Vector)           |\n|  * Local ring-buffer batching, Zstd compression, PII scrubbing, metric pre-agg    |\n+-----------------------------------------+-----------------------------------------+\n                                          | gRPC OTLP / HTTPS (Zstd Batches)\n                                          v\n+-----------------------------------------------------------------------------------+\n|            INGESTION DISTRIBUTOR & CARDINALITY GUARD (Stateless Edge)             |\n|  * Authenticates Tenant API Key & enforces Token-Bucket Rate + Series Limits      |\n|  * Consistent-Hash Ring (by `tenantId + seriesFingerprint`) -> Replicates RF=3    |\n+--------------------+-----------------------------------------+--------------------+\n                     | (Metrics Pipeline)                      | (Logs Pipeline)\n                     v                                         v\n+----------------------------------------+   +--------------------------------------+\n|          KAFKA METRICS TOPIC           |   |           KAFKA LOGS TOPIC           |\n+--------------------+-------------------+   +-----------------+--------------------+\n                     |                                         |\n        +------------+------------+                            v\n        |                         |          +--------------------------------------+\n        v                         v          |    LOG INGESTER (ClickHouse / Loki)  |\n+---------------+         +---------------+  |  * Builds Label Inverted Index +     |\n| STREAMING     |         | TSDB INGESTER |  |    Trigram / Bloom Filter per Block  |\n| ROLLUP &      |         | (WAL + 2h Head|  |  * Flushes 64MB Zstd Columnar Chunks |\n| ALERT ENGINE  |         |  Gorilla Mem  |  +-----------------+--------------------+\n| (Flink Rules) |         |  Block)       |                    |\n+-------+-------+         +-------+-------+                    |\n        |                         | Flushes 2h Block           |\n        v                         +--------------+-------------+\n+---------------+                                |\n| ALERTMANAGER  |                                v\n| (Dedup, Group,|         +---------------------------------------------------------+\n|  PagerDuty)   |         |     OBJECT STORAGE (S3) + COMPACTOR (1m/5m/1h Rollups)  |\n+---------------+         +----------------------+----------------------------------+\n                                                 |\n                                                 v\n                          +---------------------------------------------------------+\n                          |     FEDERATED QUERY ENGINE (PromQL / LogQL Coordinator) |\n                          |  * Merges TSDB Head RAM (< 2h) + S3 Historical Blocks   |\n                          +---------------------------------------------------------+",
   "sections": [
     {
       "heading": "1. Requirements Engineering & Scope Boundaries",
-      "body": "Modern cloud-native infrastructure requires a unified observability platform capable of ingesting tens of millions of metric data points and terabytes of structured application logs per second while powering real-time dashboards and sub-minute anomaly alerts.",
+      "body": "A centralized Observability Platform (similar to Datadog or Prometheus + Loki) ingests, stores, and queries high-volume time-series metrics and structured logs from thousands of microservices with real-time alerting.",
       "bullets": [
-        "Functional: Metrics Ingestion & Multi-Dimensional Tagging: Ingest counters, gauges, and histograms tagged with key-value labels (e.g., `http_requests_total{service=\"checkout\", region=\"us-east\", status=\"500\"}`).",
-        "Functional: Structured Log Ingestion & Search: Ingest structured JSON logs and support filtering by label selectors (`{service=\"checkout\", level=\"ERROR\"}`) combined with full-text substring/regex search (`|= \"NullPointerException\"`).",
-        "Functional: PromQL / Time-Series Querying & Downsampling: Support range queries, aggregations (`sum by (region) (rate(.[5m]))`), and automatic historical rollups (raw 10s resolution for 15 days -> 1m resolution for 90 days -> 1h resolution for 2+ years).",
-        "Functional: Real-Time Alerting Engine: Continuously evaluate threshold and rate-of-change rules over sliding windows, deduplicate flapping alerts, and route notifications to PagerDuty, Slack, and webhooks.",
-        "Non-Functional: Write-Always Availability & Low Query Latency: 99.99% ingestion availability (observability must stay up when production is burning!); P99 dashboard query latency < 500ms for recent 6-hour windows; alert evaluation lag < 15 seconds.",
-        "Non-Functional: High Compression & Cost Efficiency: Eventual consistency of 2–5 seconds on ingestion visibility is acceptable in exchange for massive batching and 10x+ storage compression.",
-        "Out of Scope: Distributed request tracing span flamegraphs (Jaeger/Tempo UI) and Real User Monitoring (RUM) session replay video capture."
+        "Functional: Ingest numeric time-series metrics (Counters, Gauges, Histograms) and structured JSON logs; provide fast PromQL/LogQL query capabilities for dashboards; evaluate alert rules continuously.",
+        "Functional: Support multi-tenancy with strict tag isolation and ingestion rate limiting.",
+        "Non-Functional: High write throughput (support 5 million metric samples/sec and 500,000 log events/sec).",
+        "Non-Functional: Sub-second dashboard query latency for common 24-hour time ranges.",
+        "Non-Functional: Extreme storage efficiency (under 2 bytes per metric sample on disk).",
+        "Out of Scope: Full APM distributed trace graph reconstruction (Jaeger/Tempo) and automated synthetic browser testing."
       ]
     },
     {
       "heading": "2. Traffic Modeling & Workload Assumptions",
-      "body": "We size the platform for a large cloud enterprise monitoring 500,000 hosts and 10 Million ephemeral Kubernetes containers.",
+      "body": "Observability infrastructure processes continuous, non-stop streams of machine-generated telemetry that surge during system outages.",
       "bullets": [
-        "Monitored Fleet & Active Time Series: 10 Million containers emitting 50 distinct metrics each = 500 Million active time series (`series_id` combinations) collected every 10 seconds.",
-        "Log Volume per Day: 10 Million containers emitting an average of 20 log lines/sec = 200 Million log events/sec (~500 bytes raw JSON per log line).",
-        "Read:Write Ratio: Extremely write-heavy (~1,000:1 writes to dashboard/alert reads). Over 95% of ingested telemetry is never queried directly after the first 2 hours unless an incident occurs.",
-        "Peak Traffic Multiplier: 3x surge during cascading production outages (when error logs explode and hundreds of engineers open live dashboards simultaneously).",
-        "Payload Sizes: Raw metric sample = 16 bytes (8B `int64` timestamp + 8B `float64` value) -> compressed via Gorilla to **1.37 bytes/sample**; Raw log line = 500 bytes -> compressed via Zstd columnar chunking (8:1 ratio) to **~62.5 bytes/log**."
+        "Metrics Throughput: 5 million metric samples per second (~300 million samples/minute).",
+        "Active Time Series: 10 million distinct active time series across all monitored services.",
+        "Log Volume: 500,000 log events per second at 500 bytes per log = 250 MB/s of log ingestion (~21.6 TB/day).",
+        "Query Patterns: 95% of queries target telemetry generated within the past 24 hours; long-term queries run over downsampled aggregations."
       ]
     },
     {
       "heading": "3. Back-of-the-Envelope Capacity Calculations",
-      "body": "Without Gorilla time-series encoding and Zstd columnar log compression, storing 50 million metric samples/sec and 200 million log lines/sec for 5 years would bankrupt any organization.",
+      "body": "Without specialized time-series compression and tiered storage, telemetry bills quickly exceed the cost of the underlying application infrastructure.",
       "bullets": [
-        "Metrics Ingestion QPS: 500 Million active series / 10-second scrape interval = 50,000,000 samples/sec average -> 150,000,000 samples/sec at 3x peak (batched at 1,000 samples per gRPC OTLP request = 50,000 RPC/sec avg).",
-        "Log Ingestion QPS: 200,000,000 log lines/sec average (100 GB/sec raw uncompressed text -> 12.5 GB/sec on the wire with agent-side Zstd compression).",
-        "TSDB Head Block Memory (RAM): 500 Million active time series * (128 bytes series metadata/inverted index overhead + 2-hour Gorilla chunk buffer of 720 samples * 1.37 B = ~1,115 bytes per series) = ~557.5 GB total Head Block RAM across the TSDB Ingester fleet (e.g., 100 nodes * 16 GB RAM each, with RF=3 = 300 nodes).",
-        "5-Year Storage (Downsampled Metrics + Tiered Logs): Metrics raw (15-day retention) = 50M/s * 86,400s * 1.37 B = 5.92 TB/day (88.8 TB for 15d); 1-minute rollup (min/max/sum/count = 32B/min -> ~5.5B compressed/min) = 3.96 TB/day -> 5 years = 7.22 PB. Logs (30-day hot/warm S3 retention + 5-year compliance audit subset of 10% critical logs): 200M/s * 62.5 B = 12.5 GB/s = 1.08 PB/day compressed (32.4 PB for 30 days; 10% audit logs for 5 years = 108 TB/day * 1,825 = 197 PB S3 Glacier).",
-        "Network Bandwidth: Agent-compressed Ingress = ~68.5 MB/s (metrics) + 12.5 GB/s (logs) = ~12.57 GB/s (100.5 Gbps) across regional ingestion endpoints."
+        "Uncompressed metric volume: 5M samples/sec * 16 bytes (8-byte timestamp + 8-byte float value) = 80 MB/s = ~6.9 TB/day of raw numbers.",
+        "Gorilla compression savings: Gorilla XOR compression shrinks samples to ~1.4 bytes each: 5M samples * 1.4 bytes = ~7 MB/s = ~600 GB/day (over 90% reduction).",
+        "Log storage costs: 21.6 TB/day of raw JSON logs compressed via Zstandard (10x ratio) yields ~2.1 TB/day of compressed columnar blocks stored cheaply in S3."
       ],
       "codeSnippet": {
         "title": "Metrics & Logging Platform Capacity Estimation Sheet",
@@ -56,13 +52,13 @@
     },
     {
       "heading": "4. API Interface Contracts & Data Domain Models",
-      "body": "Core external REST/gRPC/WebSocket API contracts, request/response payloads, and underlying storage entities with primary keys (PK), foreign keys (FK), secondary/clustering indexes (IDX), and relationship cardinalities.",
+      "body": "Telemetry collectors push data over standardized OpenTelemetry (OTLP) gRPC protocols or Prometheus scrape formats.",
       "bullets": [
-        "POST /v1/metrics & POST /v1/logs (OTLP): Ingests batched, Zstd-compressed telemetry from OpenTelemetry DaemonSet agents.",
-        "GET /api/v1/query_range?query={promql}&start={t1}&end={t2}: Evaluates PromQL using Roaring Bitmap label intersection and Gorilla chunk decoding.",
-        "POST /api/v1/logs/search: Executes columnar log scan using Bloom Filter skip indexes before decompressing Zstd blocks."
+        "Metrics Ingestion (OTLP / gRPC): Streams batches of `MetricRecord { name, labels: {key: val}, timestamp_ns, value_double }`.",
+        "Logs Ingestion: `POST /v1/logs/push` takes batches of `{ labels: {service, env}, lines: [{ ts, line, traceId }] }`.",
+        "Time Series Model: Metric series mapped to a unique 64-bit `SeriesID`. Inverted index maps `LabelKey=LabelValue` to a Roaring Bitmap of matching `SeriesID`s.",
+        "Chunk Storage: 2-hour compressed chunks holding 120 samples per series, flushed from memory to disk or S3."
       ],
-      "erDiagramUrl": "/diagrams/er-design-metrics-logging-system.svg",
       "codeSnippet": {
         "title": "API Contracts & Storage Entity Schemas",
         "code": "// 1. OpenTelemetry Batch Metrics Ingestion\nPOST /v1/metrics\nHeaders:\n  Content-Encoding: zstd\n  X-Scope-OrgID: tenant_prod_01\nRequest:\n{\n  \"series\": [\n    {\n      \"metric\": \"http_request_duration_ms_p99\",\n      \"labels\": { \"service\": \"checkout\", \"region\": \"us-east-1\", \"status\": \"200\" },\n      \"samples\": [\n        { \"timestamp_ms\": 1790784600000, \"value\": 42.8 },\n        { \"timestamp_ms\": 1790784610000, \"value\": 41.2 }\n      ]\n    }\n  ]\n}\nResponse (202 Accepted):\n{\n  \"accepted_samples\": 2,\n  \"rejected_high_cardinality\": 0\n}\n\n// ---------------------------------------------------------------------------\n// Core Storage Entities & Schema Definitions\n// ---------------------------------------------------------------------------\nENTITY metric_series_index (TSDB Inverted Index (Roaring Bitmaps)) {\n  [PK ] series_id              UINT64 (xxHash64)\n  [IDX] metric_name            VARCHAR(128)\n  [IDX] label_kv_pairs         JSONB / PostingList\n        tenant_id              VARCHAR(64)\n        created_epoch          BIGINT\n}\n\nENTITY gorilla_ts_chunks (TSDB Hot Storage + S3 Parquet) {\n  [PK ] series_id              UINT64 (Composite PK)\n  [PK ] block_start_ms         INT64 (2-Hour Window)\n        sample_count           INT\n        xor_compressed_blob    BYTEA (1.37 B/sample)\n}\n\nENTITY structured_log_chunks (ClickHouse / Loki Columnar Store) {\n  [PK ] tenant_stream_id       UINT64\n  [PK ] chunk_start_ns         INT64\n  [IDX] trace_id_bloom         BLOOM_FILTER\n        zstd_columnar_blob     BYTEA (10:1 Ratio)\n}\n\n// Relationships: metric_series_index --(1 : N (2-hour Gorilla blocks))--> gorilla_ts_chunks --(1 : N (correlated by trace_id))--> structured_log_chunks"
@@ -70,59 +66,58 @@
     },
     {
       "heading": "5. High-Level Architecture Blueprint & Component Topology",
-      "body": "The architecture follows the modern **Cortex / Thanos / Grafana Mimir & Loki** split: stateless Distributors validate and hash incoming batches; Ingesters buffer the latest 2 hours in a disk-backed Write-Ahead Log (WAL) and Gorilla memory chunks before flushing immutable blocks to S3; and Queriers federate real-time RAM state with historical S3 blocks.",
+      "body": "The architecture decouples high-throughput ingestion gateways, in-memory TSDB head blocks, long-term object storage, and streaming alert engines.",
       "bullets": [
-        "DaemonSet Collector Agent (OTel / Vector): Runs on every host. Buffers telemetry in a local ring buffer, strips accidental PII/secrets via regex, pre-aggregates high-frequency counters over 10s windows, and compresses batches with Zstd.",
-        "Cardinality Guard & Distributor: Protects the cluster against a developer accidentally putting `user_id` or `request_id` into a metric label (which would spawn 100M+ useless series). Tracks active series per tenant using HyperLogLog / Redis sets and drops or strips offending labels when a tenant exceeds their quota.",
-        "TSDB Ingester (2-Hour Head Block + WAL): Appends samples to a local disk WAL for crash recovery and compresses them in memory using Gorilla XOR encoding. Every 2 hours, cuts an immutable block (Index + Chunks + Tombstones) and uploads it to S3.",
-        "Query Frontend & Federated Querier: Splits multi-day PromQL queries into 1-day sub-queries, checks a Redis step-aligned result cache, and fans out across Ingesters (for data `< 2h` old) and Store Gateways (for S3 blocks `> 2h` old)."
+        "Ingestion Gateway Fleet: Validates OTLP payloads, enforces label cardinality quotas, and publishes streams to Kafka.",
+        "TSDB Ingestion Nodes (Head Block): Holds the current 2-hour window of time series in memory using Gorilla compression, backed by a Write-Ahead Log (WAL).",
+        "Compactor & Downsampler: Merges expired 2-hour blocks into 24-hour Parquet blocks in S3 and computes 5-minute/1-hour rollups for long-term retention.",
+        "Query Engine (PromQL / LogQL): Fan-out querier that reads hot data from Ingestion Head blocks and historical data from S3 chunk storage.",
+        "Streaming Alert Evaluator: Evaluates PromQL SLO rules continuously against the live in-memory metric stream without querying disk."
       ],
       "diagramImageUrl": "/diagrams/design-metrics-logging-system.svg",
       "asciiDiagram": "+------------------------------------------------------------------------------------+\n|               KUBERNETES PODS & HOSTS (500K Nodes / 10M Containers)                |\n|  +------------------------------------------------------------------------------+  |\n|  | Local OTel / Vector Agent: Ring-Buffer -> Pre-Aggregate -> Zstd Compress     |  |\n|  +--------------------------------------+---------------------------------------+  |\n+-----------------------------------------|------------------------------------------+\n                                          | gRPC OTLP (Batched & Compressed)\n                                          v\n+------------------------------------------------------------------------------------+\n|                   INGESTION DISTRIBUTOR & CARDINALITY FIREWALL                     |\n|  1. Computes `seriesId = xxHash64(metricName + sortedLabels)`                      |\n|  2. Checks Tenant Active Series Limit (Rejects high-cardinality `user_id` tags!)   |\n|  3. Consistent Hash Ring by `(tenantId, seriesId)` -> Writes to 3 Ingesters (Quorum)|\n+--------------------+------------------------------------------+--------------------+\n                     |                                          |\n                     v (Write Quorum 2/3)                       v (Kafka Stream)\n+-----------------------------------------+   +--------------------------------------+\n|       TSDB INGESTER FLEET (RF=3)        |   |     STREAMING ALERT & ROLLUP ENGINE  |\n|  * Appends to Local SSD Write-Ahead Log |   |  * Evaluates PromQL Alert Rules      |\n|  * Inverted Index: Label -> RoaringBmp  |   |  * Emits 1m/1h Downsampled Rollups   |\n|  * 2-Hour Head Block: Gorilla XOR RAM   |   +-----------------+--------------------+\n+--------------------+--------------------+                     |\n                     | Every 2 Hours (Flush Immutable Block)    v\n                     v                        +--------------------------------------+\n+-----------------------------------------+   |        ALERTMANAGER CLUSTER          |\n|    AMAZON S3 / GCS OBJECT STORAGE       |   |  * Gossip Dedup, Inhibition, Group   |\n|  * TSDB Blocks (Index + Gorilla Chunks) |   |  * PagerDuty / Slack / Webhook       |\n|  * Log Chunks (Zstd + Bloom Filters)    |   +--------------------------------------+\n+--------------------+--------------------+\n                     ^\n                     | Reads Historical Blocks (> 2h) via Mmap Index Cache\n+--------------------+---------------------------------------------------------------+\n|                        QUERY FRONTEND & FEDERATED QUERIERS                         |\n|  * Splits Range Queries by Day & Caches Step-Aligned Results in Redis              |\n|  * Intersects Roaring Bitmaps: `bitmap(\"service=api\") AND bitmap(\"status=500\")`    |\n|  * Merges Live Ingester Head (< 2h) + S3 Store Gateway (> 2h) -> PromQL Evaluator  |\n+------------------------------------------------------------------------------------+"
     },
     {
       "heading": "6. Deep-Dive Execution Flows & Core Logic",
-      "body": "We examine the two primary telemetry pipelines: Facebook Gorilla double-delta compression on ingestion and Roaring Bitmap inverted index queries on retrieval.",
+      "body": "Achieving sub-second queries across 10 million active series requires fast inverted index lookups and Gorilla compression algorithms.",
       "bullets": [
-        "Gorilla Time-Series Compression (16 Bytes -> 1.37 Bytes / Sample): Telemetry agents collect metric samples every 10 seconds. Consecutive timestamps are compressed using Delta-of-Delta encoding (storing a single 0 bit when intervals are uniform), while consecutive floating-point values are XOR-encoded, reducing 16-byte `(timestamp, value)` pairs down to 1.37 bytes.",
-        "Inverted Index Roaring Bitmap Query Execution: When a query like `sum(rate(http_requests{status=500}))` arrives, the query engine retrieves posting lists for each label as compressed Roaring Bitmaps. The bitmaps are intersected using SIMD bitwise AND operations in CPU registers (<0.05 ms) to produce the exact set of matching time-series IDs, which are then read and decompressed from disk blocks."
+        "Inverted index with Roaring Bitmaps: When a query requests `{service=\"checkout\", status=\"500\"}`, the engine looks up the bitmap of series IDs for `service=\"checkout\"` and the bitmap for `status=\"500\"`, performing a bitwise AND in CPU registers in microseconds to find matching series IDs.",
+        "Gorilla timestamp compression (Delta-of-Delta): Regular metrics arrive at fixed intervals (e.g., every 15s). The delta between timestamps is 15s, making the delta-of-delta zero. Gorilla encodes a zero delta-of-delta using a single bit `0`, consuming almost zero space for timestamps.",
+        "Gorilla value compression (XOR encoding): Floating-point metric values change little from sample to sample. XORing the current value with the previous value produces leading and trailing zeroes. Gorilla encodes only the meaningful bits between zeroes, shrinking 64-bit floats to an average of 1.1 bits per sample."
       ],
-      "flowDiagramUrl": "/diagrams/flow-design-metrics-logging-system.svg",
       "diagramImageUrl": "/diagrams/flow-design-metrics-logging-system.svg"
     },
     {
       "heading": "7. Production Hardening, Fault Tolerance & Resilience",
-      "body": "At planet scale, observability systems must defend against self-inflicted outages, query-of-death OOMs, and alert storms.",
+      "body": "Protecting observability platforms from cardinality explosions, backpressure, and ingestion dropouts is critical during infrastructure incidents.",
       "bullets": [
-        "Automated Cardinality Linter & Adaptive Label Dropping: Continuously track the top-K highest-cardinality label keys per metric using Count-Min Sketch. If a deployment introduces a `session_id` label that spikes cardinality by 500,000 series in 60 seconds, automatically strip that single label key at the Distributor while preserving the rest of the metric.",
-        "Step-Aligned Query Result Caching & Query Splitting: A 30-day dashboard query (`now-30d` to `now`) spans 29 immutable historical days and 1 live day. The Query Frontend aligns timestamps to `step` boundaries, fetches the first 29 days directly from Redis query cache, and only evaluates the final live hours against the Ingesters.",
-        "Out-of-Order Sample Ingestion Window: Mobile and edge IoT agents occasionally buffer metrics offline and upload them 30 minutes late. Maintain a dedicated out-of-order WBL (Write-Behind Log) chunk in the TSDB Head that gets merged during the 2-hour block compaction.",
-        "Alertmanager Gossip Deduplication & Inhibition Rules: Run Alertmanager as a 3-node mesh using HashiCorp Memberlist gossip so all 3 replicas evaluate alerts independently without sending duplicate PagerDuty pages, and configure Inhibition Rules (e.g., if `ClusterNetworkDown` is firing, suppress 500 downstream `PodUnreachable` alerts).",
-        "Meta-Monitoring (Watching the Watcher): Deploy a tiny, isolated 'Canary Observability Cluster' in a separate cloud region that monitors the primary observability cluster's WAL disk space, Kafka consumer lag, and Alertmanager delivery health."
+        "Tag cardinality circuit breakers: If a buggy deployment starts attaching `user_id` or raw query URLs as metric labels, the ingestion gateway detects that the metric's unique series count has exceeded 10,000. It rejects the new labels and triggers an alert, protecting the TSDB inverted index from memory exhaustion.",
+        "Downsampling for long-term retention: Raw 15-second metric samples are retained for 14 days. After 14 days, a background compactor downsamples the data to 5-minute averages, min, and max, and after 90 days downsamples to 1-hour rollups, cutting long-term storage costs by 95%.",
+        "Log label discipline (Loki model): Never index high-cardinality values (user IDs, IP addresses) in log metadata labels. Index only stable labels (`app`, `env`, `pod`), and rely on parallel brute-force grep across compressed S3 chunks for free-text substring searches."
       ]
     }
   ],
   "tradeOffs": [
     {
-      "option": "Custom Gorilla TSDB + Label-Only Log Indexing (Mimir + Loki / ClickHouse)",
-      "pros": "10–12x storage compression, immune to full-text index write amplification on logs, and seamless horizontal scaling backed by cheap S3 object storage.",
-      "cons": "Needle-in-a-haystack unindexed regex log searches across multi-TB windows require parallel brute-force chunk scanning (mitigated via Bloom filters and ClickHouse sparse primary indexes).",
-      "bestFor": "High-volume cloud infrastructure metrics and container logs where cost per TB and write throughput dominate."
+      "option": "Label-Indexed Log Chunk Storage (Grafana Loki)",
+      "pros": "80-90% lower infrastructure cost than Elasticsearch; tiny index size; zero JVM heap pressure; easy scaling on S3.",
+      "cons": "Slow for unindexed ad-hoc text searches across wide multi-month time ranges.",
+      "bestFor": "High-volume microservice application logs, VPC flow logs, and cloud-native Kubernetes platforms."
     },
     {
-      "option": "Full-Text Inverted Index for Everything (Elasticsearch / OpenSearch)",
-      "pros": "Sub-second arbitrary keyword and tokenized phrase search across every JSON field in logs.",
-      "cons": "Inverted index is often larger than the raw log data itself (1.2x–2x storage amplification), high JVM heap/GC pressure, and expensive shard rebalancing during traffic spikes.",
-      "bestFor": "Low-to-medium volume security SIEM logs or business audit events requiring ad-hoc full-text faceted search."
+      "option": "Full-Text Inverted Index (Elasticsearch / OpenSearch)",
+      "pros": "Sub-second needle-in-a-haystack searches across any arbitrary field, UUID, or stack trace substring.",
+      "cons": "Massive storage amplification (index is often 1.5x-2x larger than raw log data); expensive RAM requirements.",
+      "bestFor": "Security incident forensics, compliance audit trails, and low-to-medium log volume systems."
     },
     {
-      "option": "Push vs. Pull (Prometheus Scrape) Ingestion Model",
-      "pros": "Pull lets the TSDB control scrape pacing and automatically detects target liveness (`up == 0`); Push works seamlessly across NAT gateways, serverless functions (AWS Lambda), and ephemeral short-lived jobs.",
-      "cons": "Pure Pull struggles across multi-VPC firewalls; pure Push requires edge rate-limiting and Distributor load balancers to prevent thundering herds.",
-      "bestFor": "Hybrid architecture: local host DaemonSet scrapes pods locally (Pull) and forwards compressed OTLP batches to the central regional Distributor (Push)."
+      "option": "Pull-Based (Prometheus) vs Push-Based (OTLP Stream)",
+      "pros": "Pull controls scrape backpressure and automatically discovers dead pods; push works seamlessly with serverless and firewalled networks.",
+      "cons": "Pull requires direct network connectivity to application pods; push can overwhelm collectors during retry storms.",
+      "bestFor": "Use Pull for long-running Kubernetes pods; use Push for serverless lambdas and edge IoT devices."
     }
   ],
-  "interviewTip": "Interviewers love when you contrast **Metrics** vs. **Logs** storage internals: explain that Metrics use an **Inverted Index (`Label -> RoaringBitmap<SeriesId>`) + Gorilla XOR chunks** (where 16-byte samples shrink to `1.37 bytes`), whereas modern Logs (Loki/ClickHouse) avoid full-text indexing every word and instead index only low-cardinality labels + per-chunk **Bloom Filters** over Zstd-compressed columnar blocks on S3.",
+  "interviewTip": "When designing a metrics and logging platform, explain the Gorilla compression algorithm: demonstrate how Delta-of-Delta for timestamps and XOR for floating-point values compresses 16-byte samples down to ~1.4 bytes. Emphasize why you must protect against label cardinality explosions by enforcing quotas on unique series IDs.",
   "diagramImageUrl": "/diagrams/design-metrics-logging-system.svg",
   "jsonUrl": "/api/subtopics/must-practice-designs/design-metrics-logging-system.json",
   "flowDiagramUrl": "/diagrams/flow-design-metrics-logging-system.svg"

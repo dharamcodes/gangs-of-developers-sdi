@@ -5,49 +5,45 @@
   "topicNumber": 13,
   "subtopicNumber": "13.1",
   "title": "URL Shortener",
-  "subtitle": "Designing a Bitly/TinyURL-scale shortening and redirection service with Base62 encoding, distributed ID generation, and sub-10ms global redirects.",
+  "subtitle": "Bitly-scale URL shortening and redirection: Base62 encoding, range-allocated ID generation, and sub-10ms edge redirects.",
   "readingTime": "16 min",
   "difficulty": "Intermediate",
   "keyTakeaways": [
-    "A 7-character Base62 string ([0-9a-zA-Z]) yields 62^7 = 3.52 trillion unique codes: enough for 100+ years at 1,000 writes/sec without collisions.",
-    "Pre-generating counter ranges via ZooKeeper/etcd or using 64-bit Snowflake IDs encoded in Base62 completely eliminates write-path database contention and hash-collision retries.",
-    "Use HTTP 301 (Permanent) when minimizing origin server load via browser caching is top priority, or HTTP 302 (Temporary) when real-time click analytics and dynamic link target updates are required."
+    "A 7-character Base62 string ([0-9a-zA-Z]) provides 62^7 = 3.52 trillion unique aliases: enough for a century of traffic at 1,000 writes/second with zero collision risk.",
+    "Pre-allocating ID ranges using etcd or ZooKeeper leases leases blocks of numeric IDs to application servers in memory, eliminating write-time database round-trips and collision retries.",
+    "HTTP 301 offloads redirection to browser and CDN caches to minimize origin load, but blinds server-side analytics. HTTP 302 forces requests through your proxy, enabling real-time telemetry."
   ],
   "architectureDiagram": "+-----------------------------------------------------------------------------------+\n|                                   CLIENTS                                         |\n|                 (Web Browsers, Mobile Apps, Third-Party APIs)                     |\n+-----------------------------------------+-----------------------------------------+\n                                          |\n                                          v\n+-----------------------------------------------------------------------------------+\n|                        Cloudflare Edge CDN & Anycast DNS                          |\n|                (DDoS Protection, TLS Termination, Edge Cache for 301s)            |\n+--------------------+-----------------------------------------+--------------------+\n                     | POST /api/v1/urls (Write)               | GET /{shortCode} (Read)\n                     v                                         v\n+----------------------------------------+   +--------------------------------------+\n|          Write Service                 |   |        Redirect Service              |\n|  - Validates URL & custom alias        |   |  - Checks Local Caffeine L1 Cache    |\n|  - Fetches ID from Range/Snowflake     |   |  - Checks Redis Cluster L2 Cache     |\n|  - Encodes 64-bit ID -> Base62         |   |  - Emits async click event to Kafka  |\n+--------------------+-------------------+   +-----------------+--------------------+\n                     |                                         |\n                     |------------+               +------------|\n                                  |               |\n                                  v               v\n                     +-----------------------------------------+\n                     |       Redis Cluster (L2 Cache)          |\n                     |   Key: shortCode -> Value: longUrl      |\n                     |   (Top 20% hot links, LRU eviction)     |\n                     +--------------------+--------------------+\n                                          | Cache Miss / Write-Through\n                                          v\n                     +-----------------------------------------+\n                     |    Sharded Cassandra / DynamoDB         |\n                     |   Partition Key: shortCode              |\n                     |   (3x Replication, Multi-AZ Storage)    |\n                     +-----------------------------------------+",
   "sections": [
     {
       "heading": "1. Requirements Engineering & Scope Boundaries",
-      "body": "A URL Shortener converts long, unwieldy URLs (such as marketing links with UTM parameters) into compact aliases (e.g., `https://sho.rt/2bX9kLm`) and redirects users to the original destination with near-zero latency.",
+      "body": "A URL Shortener turns long URLs into compact aliases (e.g., `https://sho.rt/7kL9xQ`) and redirects incoming requests to the destination with low latency.",
       "bullets": [
-        "Functional Requirement 1: URL Shortening: Given a valid `longUrl`, generate a unique 7-character Base62 `shortCode`. Support optional user-defined `customAlias` (up to 16 chars) and configurable `expiresAt` TTL.",
-        "Functional Requirement 2: Redirection: Given `GET /{shortCode}`, redirect the client via HTTP 301 or 302 to the original `longUrl`, or return HTTP 404/410 if not found or expired.",
-        "Functional Requirement 3: Link Management & Basic Analytics: Allow authenticated users to deactivate links and asynchronously record click counts, referrers, and geo-regions.",
-        "Non-Functional Requirement 1: Ultra-Low Read Latency: Redirection (`GET /{shortCode}`) p99 latency must be < 10ms inside the data center (< 50ms globally via CDN edge).",
-        "Non-Functional Requirement 2: High Availability (AP over CP on Reads): 99.99% uptime for redirection (< 52 minutes downtime/year). Eventual consistency (~100ms replication lag) is acceptable for newly created links, except custom aliases which require strong uniqueness.",
-        "Out of Scope: Full user registration/OAuth provider implementation, real-time ad-bidding on interstitial pages, and deep HTML scraping of destination pages."
+        "Functional: Generate a unique 7-character Base62 code for any valid long URL; support optional custom aliases (up to 16 chars) and configurable expiration TTLs.",
+        "Functional: Redirect `GET /{shortCode}` to the target destination via HTTP 301 or 302, returning HTTP 404 or 410 if expired or not found.",
+        "Functional: Asynchronously record click analytics (timestamp, referrer, country, user agent) without stalling the redirect critical path.",
+        "Non-Functional: Redirection p99 latency under 10ms within the data center, and under 40ms globally via CDN edge caching.",
+        "Non-Functional: High read availability (99.99%). A transient database partition must never break redirects for existing cached URLs.",
+        "Out of Scope: Real-time user billing, malicious destination malware scanning pipelines, and link preview scrapers."
       ]
     },
     {
       "heading": "2. Traffic Modeling & Workload Assumptions",
-      "body": "Before estimating hardware, we establish realistic production traffic parameters modeled after a tier-1 URL shortening platform.",
+      "body": "URL shorteners are heavily read-skewed. Sizing the architecture requires understanding the 100:1 read-to-write ratio and diurnal traffic patterns.",
       "bullets": [
-        "Monthly Active Users (MAU): 500 Million users clicking shortened links globally; 50 Million Daily Active Users (DAU) generating or clicking links.",
-        "Write Volume (New URLs Created): 100 Million new shortened URLs created per day.",
-        "Read:Write Ratio: 100:1 (Read-heavy workload: 10 Billion redirects per day across web, SMS, and social platforms).",
-        "Peak Traffic Multiplier: 3x average traffic during major global events or marketing campaigns.",
-        "Average Object Size: `shortCode` (7 bytes) + `longUrl` (500 bytes average, up to 2,048 bytes max) + `userId` (8 bytes) + `createdAt` / `expiresAt` / metadata (64 bytes) ≈ 600 bytes raw (~1 KB with DB index and row overhead).",
-        "Data Retention Policy: 5 years default retention for links unless explicitly extended by enterprise accounts."
+        "Write Volume: 100 million new URLs created per month (~40 writes/second average, peaking at 200 writes/second).",
+        "Read Volume: 10 billion redirects per month (~4,000 reads/second average, peaking at 15,000 to 20,000 reads/second during viral campaigns).",
+        "Storage Footprint: Average URL record is ~500 bytes (original URL, short code, user ID, creation date, TTL). 100 million URLs/month * 500 bytes = 50 GB/month, or 3 TB across 5 years.",
+        "Cache Working Set: By the 80/20 rule, 20% of popular links drive 80% of click traffic. Caching 20% of a day's read traffic in memory requires roughly 30 to 40 GB of Redis RAM."
       ]
     },
     {
       "heading": "3. Back-of-the-Envelope Capacity Calculations",
-      "body": "Using powers-of-ten back-of-the-envelope math (1 day ≈ 86,400 seconds ≈ 10^5 seconds), we size our compute, memory, storage, and network tiers.",
+      "body": "Storage capacity is rarely the constraint in a URL shortener; network bandwidth, connection handling, and memory cache hit ratio drive system performance.",
       "bullets": [
-        "Write QPS: 100M writes / 86,400 sec ≈ 1,160 Writes/sec average; Peak Write QPS (3x) ≈ 3,500 Writes/sec.",
-        "Read QPS: 10B reads / 86,400 sec ≈ 115,740 Reads/sec average; Peak Read QPS (3x) ≈ 350,000 Reads/sec.",
-        "5-Year Storage: 100M URLs/day × 365 days × 5 years = 182.5 Billion URLs. At 1 KB per record (including indexes), raw storage = 182.5 TB. With 3x replication factor across Availability Zones = ~550 TB.",
-        "Redis Cache Memory (80/20 Pareto Rule): Caching 20% of daily active URLs absorbs 80%+ of read traffic. 20% of 100M daily active distinct URLs = 20M hot entries × 1 KB (including Redis dict/ziplist pointers) ≈ 20 GB minimum; to cache 20% of an entire month's active links (600M links × 1 KB) = ~600 GB RAM across a 16-node Redis Cluster.",
-        "Network Bandwidth: Ingress (writes) = 3,500 peak QPS × 1 KB = 3.5 MB/s (28 Mbps). Egress (reads) = 350,000 peak QPS × 1 KB HTTP response headers = 350 MB/s (2.8 Gbps)."
+        "Base62 address space: Using characters [0-9, a-z, A-Z] gives 62 characters. At 7 characters, 62^7 = 3,521,614,606,208 unique URLs (~3.52 trillion).",
+        "Read throughput sizing: 20,000 peak QPS * 500 bytes per redirect response = ~10 MB/s of outbound network bandwidth, which easily fits within standard cloud instances.",
+        "Cache memory sizing: 20% of 330 million daily requests = 66 million unique URLs cached * 500 bytes = 33 GB of RAM for a 90%+ cache hit ratio."
       ],
       "codeSnippet": {
         "title": "URL Shortener Capacity Estimation Worksheet",
@@ -56,13 +52,12 @@
     },
     {
       "heading": "4. API Interface Contracts & Data Domain Models",
-      "body": "Core external REST/gRPC/WebSocket API contracts, request/response payloads, and underlying storage entities with primary keys (PK), foreign keys (FK), secondary/clustering indexes (IDX), and relationship cardinalities.",
+      "body": "Keep the API surface minimal and deterministic. Separate URL creation from public redirection to avoid contention between administrative endpoints and the hot redirect path.",
       "bullets": [
-        "POST /api/v1/urls: Accepts a long URL, optional custom alias, and TTL; returns the Base62 short URL (201 Created).",
-        "GET /{shortCode}: Resolves the short code from Redis/DB and returns HTTP 301 (Permanent) or 302 (Temporary) with Location header.",
-        "GET /api/v1/urls/{shortCode}/stats: Returns aggregated time-series click analytics from ClickHouse."
+        "Write API: `POST /api/v1/urls` takes `{ longUrl, customAlias?, ttlSeconds? }` and returns `{ shortUrl, shortCode, expiresAt }`.",
+        "Read API: `GET /{shortCode}` returns a 301/302 Redirect with a `Location: <longUrl>` header, or a 404/410 status code.",
+        "Schema: Store records in a distributed key-value store (DynamoDB or Cassandra) partitioned by `short_code`, indexing `created_at` for background TTL cleanup."
       ],
-      "erDiagramUrl": "/diagrams/er-design-url-shortener.svg",
       "codeSnippet": {
         "title": "API Contracts & Storage Entity Schemas",
         "code": "// 1. Create Short URL\nPOST /api/v1/urls\nHeaders:\n  Authorization: Bearer <token>\n  Idempotency-Key: 7c9e6679-7425-40de-944b-e07fc1f90ae7\nRequest Body:\n{\n  \"long_url\": \"https://engineering.example.com/distributed-systems/ch1\",\n  \"custom_alias\": \"sys-ch1\",\n  \"expires_at\": \"2031-09-30T00:00:00Z\"\n}\nResponse (201 Created):\n{\n  \"short_code\": \"9xK2pQ1\",\n  \"short_url\": \"https://god.ly/9xK2pQ1\",\n  \"long_url\": \"https://engineering.example.com/distributed-systems/ch1\",\n  \"expires_at\": \"2031-09-30T00:00:00Z\"\n}\n\n// 2. Redirect Endpoint\nGET /{shortCode}\nResponse (302 Found):\n  Location: https://engineering.example.com/distributed-systems/ch1\n  Cache-Control: private, max-age=0, no-cache\n\n// ---------------------------------------------------------------------------\n// Core Storage Entities & Schema Definitions\n// ---------------------------------------------------------------------------\nENTITY users (PostgreSQL / Relational) {\n  [PK ] user_id                BIGINT\n  [IDX] email                  VARCHAR(255)\n        api_key_hash           CHAR(64)\n        tier                   ENUM('FREE','PRO')\n        created_at             TIMESTAMPTZ\n}\n\nENTITY short_urls (DynamoDB / Sharded SQL) {\n  [PK ] short_code             VARCHAR(10)\n  [FK ] user_id                BIGINT\n        long_url               TEXT\n  [IDX] expires_at             TIMESTAMPTZ\n        created_at             TIMESTAMPTZ\n}\n\nENTITY click_events (ClickHouse (Columnar)) {\n  [PK ] event_id               UUID\n  [FK ] short_code             VARCHAR(10)\n  [IDX] clicked_at             DATETIME64\n        country_iso            CHAR(2)\n        user_agent             TEXT\n}\n\n// Relationships: users --(1 : N (owns))--> short_urls --(1 : N (logs clicks))--> click_events"
@@ -70,58 +65,57 @@
     },
     {
       "heading": "5. High-Level Architecture Blueprint & Component Topology",
-      "body": "We separate the Write Path (URL creation) and Read Path (Redirection) into independently scalable microservices so a sudden 10x spike in viral link clicks never starves URL creation.",
+      "body": "We decouple the Write Path (ID generation and persistence) from the Read Path (cached redirection) so viral traffic spikes on existing links never degrade link creation.",
       "bullets": [
-        "Edge CDN & API Gateway: Terminates TLS, blocks malicious IPs, enforces per-IP rate limits, and caches 301 redirects directly at Cloudflare/CloudFront PoPs.",
-        "Write Service & Ticket Server (ZooKeeper/etcd or Snowflake): Allocates collision-free 64-bit numeric IDs and converts them to Base62 without querying the database first.",
-        "Read (Redirect) Service with 2-Tier Cache: Uses an in-process L1 Caffeine cache (10,000 hottest celebrity links with 5s TTL) plus a distributed L2 Redis Cluster (600 GB RAM) to serve 99% of reads without touching disk.",
-        "Async Analytics Pipeline: The Redirect Service pushes click events non-blockingly to Kafka, which Flink aggregates into ClickHouse for real-time dashboards."
+        "Edge CDN: Caches permanent 301 redirects close to users, answering repeated viral clicks without hitting your origin cluster.",
+        "ID Allocator (etcd / ZooKeeper): Leases non-overlapping numeric ID blocks (e.g., 100,000 IDs at a time) to application server instances in memory.",
+        "Redirect Service: Stateless service querying local Caffeine L1 cache and Redis L2 cluster. If a key misses, it reads DynamoDB and populates the cache.",
+        "Asynchronous Analytics: Emits click metadata to Kafka; a streaming worker (Flink or Spark) aggregates hourly metrics into ClickHouse."
       ],
       "diagramImageUrl": "/diagrams/design-url-shortener.jpg",
       "asciiDiagram": "+----------------------------------------------------------------------------------------+\n|                                     GLOBAL CLIENTS                                     |\n+-------------------+------------------------------------------------+-------------------+\n                    | Write: POST /api/v1/urls                       | Read: GET /{code}\n                    v                                                v\n+---------------------------------------+        +---------------------------------------+\n|         API Gateway (Envoy)           |        |     Global Edge CDN (Cloudflare)      |\n|   Auth, Quota Check, URL Validation   |        |  Serves cached 301s at Edge (<5ms)    |\n+-------------------+-------------------+        +-------------------+-------------------+\n                    |                                                | Cache Miss / 302\n                    v                                                v\n+---------------------------------------+        +---------------------------------------+\n|       Write Service Fleet             |        |     Redirect Service Fleet            |\n|                                       |        |  +---------------------------------+  |\n|  1. Fetch next 64-bit ID from         |        |  | L1 In-Memory Cache (Caffeine)   |  |\n|     Snowflake / Local Range Buffer    |        |  | Top 10k viral links (TTL = 5s)  |  |\n|  2. Encode ID -> 7-char Base62        |        |  +---------------------------------+  |\n|  3. Write to DB + Warm Redis          |        |  | Bloom Filter (Invalid Code Fltr)|  |\n+---------+-------------------+---------+        +---------+-------------------+---------+\n          |                   |                            |                   |\n          v                   |                            |                   | Async Event\n+-------------------+         |                            |                   v\n| ZooKeeper / etcd  |         |                            |        +--------------------+\n| (ID Range Leases: |         |                            |        |   Apache Kafka     |\n|  e.g. [1M - 1.1M])|         |                            |        | (click-events-tpc) |\n+-------------------+         |                            |        +----------+---------+\n                              |                            |                   |\n                              v                            v                   v\n                    +------------------------------------------------+  +----------------+\n                    |           Redis Cluster (L2 Cache)             |  |  Apache Flink  |\n                    |        600 GB RAM, Hash Slot Sharding          |  | Stream Aggreg. |\n                    +-----------------------+------------------------+  +--------+-------+\n                                            |                                    |\n                                            v                                    v\n                    +------------------------------------------------+  +----------------+\n                    |      Apache Cassandra / AWS DynamoDB           |  |   ClickHouse   |\n                    |  Partition Key: short_code (550 TB across AZs) |  |  Analytics DB  |\n                    +------------------------------------------------+  +----------------+"
     },
     {
       "heading": "6. Deep-Dive Execution Flows & Core Logic",
-      "body": "We examine the two defining engineering flows: collision-free short URL creation via distributed range leasing and high-throughput redirection via multi-tier caching and Bloom filter protection.",
+      "body": "The central engineering problem in a URL shortener is generating collision-free short codes without taking database row locks on every write.",
       "bullets": [
-        "Collision-Free Short URL Creation (Range Allocator + Feistel Scramble + Base62): Rather than hashing the URL with MD5/SHA256 (which suffers from birthday-paradox collisions when truncated to 7 chars and requires expensive DB uniqueness checks), each Write Service node leases a block of 100,000 sequential 64-bit integers from etcd/ZooKeeper in memory. Incrementing an `AtomicLong` takes 2 nanoseconds and guarantees 0% collision. To prevent competitors from scraping sequential URLs, the ID is scrambled via a bijective Feistel XOR permutation before Base62 encoding.",
-        "Multi-Tier Redirection Path (L1 Caffeine -> L2 Redis -> Bloom Filter -> Cassandra): A redirect request (`GET /{shortCode}`) checks the local L1 Caffeine cache (0.2ms), then the distributed L2 Redis cluster (1.5ms). To prevent malicious bots from overwhelming the database with queries for non-existent codes (Cache Penetration), a Redis Bloom Filter evaluates existence before any disk lookup. On a verified key, Cassandra returns the original long URL, which is asynchronously populated back into L1 and L2 caches while recording click events via Kafka."
+        "Why hashing fails: Taking MD5/SHA-256 of `longUrl` and truncating to 7 characters produces birthday-paradox hash collisions as the database grows, requiring check-and-retry database loops.",
+        "Range-based counters: An etcd or ZooKeeper cluster maintains a global monotonic counter. Each app server grabs a range (e.g., Server A gets 1,000,000–1,999,999). When a write arrives, Server A increments its local memory counter and converts the integer directly to Base62. Zero network calls, zero collisions.",
+        "Handling custom aliases: If a user specifies a custom alias, bypass the range counter and perform a conditional `INSERT ... IF NOT EXISTS` against the database to guarantee uniqueness."
       ],
-      "flowDiagramUrl": "/diagrams/flow-design-url-shortener.svg",
       "diagramImageUrl": "/diagrams/flow-design-url-shortener.svg"
     },
     {
       "heading": "7. Production Hardening, Fault Tolerance & Resilience",
-      "body": "To harden the system from a textbook architecture into a globally resilient production service, we address security, hot keys, and multi-region failover.",
+      "body": "Protecting the redirect path against cold starts, cache avalanches, and malicious links is what separates toy projects from production infrastructure.",
       "bullets": [
-        "Malicious Link & Phishing Prevention: Integrate Google Safe Browsing API and PhishTank checks synchronously (using local bloom filter snapshots updated every 15 minutes) and asynchronously on the write path to auto-disable phishing or malware links.",
-        "Celebrity Hot-Key Mitigation: If a link tweeted by a celebrity receives 200,000 QPS, a single Redis shard could saturate its network NIC. The L1 in-memory Caffeine cache (5-second TTL) in each Redirect Service pod absorbs 99.9% of single-key spikes before they hit Redis.",
-        "Multi-Region Active-Active Reads & Writes: Deploy Write and Redirect services across `us-east-1`, `eu-west-1`, and `ap-southeast-1`. Assign disjoint ID ranges per region (or region bits in Snowflake) and replicate mappings globally via DynamoDB Global Tables or multi-DC Cassandra (`NetworkTopologyStrategy`).",
-        "Graceful Expiration & Tombstone Compaction: Rather than running expensive batch `DELETE` jobs that create tombstones in LSM-tree databases, leverage native Cassandra/DynamoDB item-level TTLs so expired links are purged automatically during routine SSTable compaction."
+        "Bloom filters for nonexistent links: Attackers scanning random 7-character URLs can cause a cache-penetration storm against the primary database. Place a Bloom filter in front of the database to discard 99% of invalid keys instantly.",
+        "Cache stampede mitigation: Use Singleflight request coalescing in application memory so 10,000 concurrent requests for an expired viral link trigger only one database read.",
+        "Async click ingestion: Never execute click logging synchronously in the redirect handler. Write click events to a non-blocking in-memory ring buffer that flushes to Kafka asynchronously."
       ]
     }
   ],
   "tradeOffs": [
     {
-      "option": "Base62 Encoding of Sequential/Snowflake ID",
-      "pros": "Zero collision probability; no database read needed before write; predictable fixed 7-char length.",
-      "cons": "Requires a distributed range coordinator (etcd/ZooKeeper) or clock synchronization (Snowflake); sequential IDs must be scrambled to prevent enumeration.",
-      "bestFor": "High-throughput production URL shorteners (Bitly, TinyURL) where write latency and zero collisions are paramount."
+      "option": "Base62 Range Counter (etcd / ZooKeeper)",
+      "pros": "Guarantees zero collisions; no database read before write; deterministic 7-character length.",
+      "cons": "Requires managing a consensus cluster; sequential numbers can be guessed unless randomized via a bit-shuffling feistel cipher.",
+      "bestFor": "High-throughput enterprise shorteners (Bitly, TinyURL) requiring high write efficiency."
     },
     {
-      "option": "Truncated Cryptographic Hash (First 7 chars of MD5/SHA-256)",
-      "pros": "Stateless generation; identical long URLs can naturally deduplicate to the same short code.",
-      "cons": "High birthday-paradox collision rate as DB fills up; requires check-then-set DB round-trips or appending random salts on collision.",
-      "bestFor": "Small-scale internal link deduplicators where identical URLs must map to the exact same alias."
+      "option": "Truncated Hash (MD5 / SHA-256 with Salt)",
+      "pros": "Stateless; identical URLs naturally map to the same short code without central coordination.",
+      "cons": "Requires check-then-set database round-trips to detect collisions; write latency degrades as database fills.",
+      "bestFor": "Low-scale internal link shorteners where identical links must be deduplicated automatically."
     },
     {
-      "option": "HTTP 301 (Permanent) vs. HTTP 302 (Temporary) Redirect",
-      "pros": "301 offloads repeat clicks to browser & CDN caches (lowest latency & server cost); 302 forces every click through the Redirect Service.",
-      "cons": "301 blinds server-side click analytics for repeat visitors and prevents updating the destination URL once cached by browsers.",
-      "bestFor": "Use 301 for static, unmonetized links; use 302 (default for Bitly) when click analytics or dynamic link retargeting are required."
+      "option": "HTTP 301 (Permanent) vs HTTP 302 (Temporary) Redirects",
+      "pros": "301 allows browser and CDN edge caching, delivering sub-5ms redirects with zero server load.",
+      "cons": "301 prevents the origin from capturing click analytics on subsequent visits and makes URL target changes difficult.",
+      "bestFor": "Use 301 for static promotional links; use 302 when detailed click attribution or retargeting is required."
     }
   ],
-  "interviewTip": "Never propose `SELECT MAX(id) + 1` or plain UUIDv4 truncation without discussing collisions. Immediately walk the interviewer through Base62 math (`62^7 = 3.52 trillion`), explain how a ZooKeeper/etcd range allocator leases blocks of 100,000 IDs to each app server in memory, and proactively contrast HTTP 301 vs. 302 for analytics vs. caching.",
+  "interviewTip": "Do not suggest MD5 truncation without discussing the birthday paradox. Walk the interviewer through Base62 range leases: explain how etcd allocates blocks of 100,000 IDs to app servers in memory, eliminating write-path database contention, and contrast HTTP 301 vs 302.",
   "diagramImageUrl": "/diagrams/design-url-shortener.jpg",
   "jsonUrl": "/api/subtopics/must-practice-designs/design-url-shortener.json",
   "flowDiagramUrl": "/diagrams/flow-design-url-shortener.svg"

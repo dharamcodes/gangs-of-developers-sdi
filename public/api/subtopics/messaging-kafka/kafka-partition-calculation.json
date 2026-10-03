@@ -1,57 +1,56 @@
 {
   "id": "kafka-partition-calculation",
   "topicId": "messaging-kafka",
-  "topicTitle": "Messaging / Kafka",
+  "topicTitle": "Messaging & Kafka",
   "topicNumber": 7,
   "subtopicNumber": "7.12",
   "title": "Kafka Partition Calculation",
-  "subtitle": "Quantitative formulas and broker limits for sizing topic partitions in system design interviews.",
-  "readingTime": "5 min read",
-  "difficulty": "Staff+",
+  "subtitle": "Quantitative formulas and broker limits for sizing topic partitions in production and interviews.",
+  "readingTime": "8 min read",
+  "difficulty": "Advanced",
   "keyTakeaways": [
-    "Partition count is determined by the maximum of required producer write parallelism and consumer read parallelism: $P = \\max(T / W_p, T / R_c)$.",
-    "Consumer throughput per partition ($R_c$) is typically the true bottleneck due to downstream database or RPC latency.",
-    "Excessive partitions increase broker memory overhead, file descriptors, and controller leader-election recovery time."
+    "Partition count is determined by throughput bounds: `Partitions = max(Target Throughput / Producer Throughput, Target Throughput / Consumer Throughput)`.",
+    "Because an individual consumer instance can process at most one partition's throughput, consumer processing velocity is almost always the limiting factor.",
+    "Over-partitioning introduces severe broker penalties: memory buffer overhead, open file descriptor exhaustion, and longer leader election failovers."
   ],
-  "architectureDiagram": "Target Peak Throughput (T = 100 MB/s)\n       |\n       +---> Producer Capacity per Partition (Wp = 25 MB/s) ---> T / Wp = 4 Partitions\n       |\n       +---> Consumer Capacity per Partition (Rc = 5 MB/s)  ---> T / Rc = 20 Partitions\n                                                                       |\n                                                                       v\n                                              Chosen Partitions = max(4, 20) x 1.5 Headroom = 30 Partitions",
+  "architectureDiagram": "PARTITION SIZING CALCULATION WORKFLOW\nRequirement: Target Peak Throughput = 100 MB/sec\n\n1. Single Producer Node Throughput = ~25 MB/sec\n   Producers needed: 100 MB/sec ÷ 25 MB/sec = 4 Partitions\n\n2. Single Consumer Pod Throughput (Database writes) = ~5 MB/sec\n   Consumers needed: 100 MB/sec ÷ 5 MB/sec = 20 Partitions\n\nSizing Verdict: Partitions = max(4, 20) = 20 Partitions minimum!\n(Size to 24 partitions for headroom and clean 3/6-broker divisibility)",
   "sections": [
     {
-      "heading": "The Throughput Sizing Formula",
-      "body": "In system design interviews, picking a random number of partitions looks arbitrary. Instead, compute the partition count systematically from peak throughput ($T$), single-partition producer write throughput ($W_p$), and single-consumer-thread read throughput ($R_c$). Because a single partition's sequential log can easily absorb $10\\text{--}50\\text{ MB/s}$ on the producer side, the calculation is almost always dominated by how fast a single consumer instance can process and persist records ($R_c$).",
+      "heading": "The Quantitative Throughput Sizing Formula",
+      "body": "Guessing partition counts in production leads to either under-provisioned bottlenecks or over-partitioned cluster instability. Use the standard sizing formula: `NumPartitions = max(Tp / P, Tp / C)`, where `Tp` is the target peak throughput, `P` is single-partition producer throughput, and `C` is single-partition consumer throughput.",
       "bullets": [
-        "**Step 1 (Peak Throughput $T$)**: Multiply peak messages/sec by average compressed message size (e.g., $50,000\\text{ msg/s} \\times 2\\text{ KB} = 100\\text{ MB/s}$).",
-        "**Step 2 (Consumer Rate $R_c$)**: If one consumer thread takes $10\\text{ ms}$ to process a batch of $50$ records ($5,000\\text{ msg/s} = 10\\text{ MB/s}$), then $T / R_c = 100 / 10 = 10$ partitions minimum.",
-        "**Step 3 (Broker Alignment & Growth)**: Round up to a multiple of the broker count (e.g., 6 brokers $\\rightarrow$ 12 or 24 partitions) to ensure even leader distribution and headroom for $2\\times$ traffic growth."
+        "Producer Throughput (`P`): Writing sequentially to a partition typically achieves 20 to 50 MB/sec per partition.",
+        "Consumer Throughput (`C`): Reading and executing database mutations or external RPCs is almost always the bottleneck, typically capping at 2 to 10 MB/sec per consumer thread.",
+        "Divisibility Rule: Always round partition counts to a multiple of your broker count (e.g., for a 6-broker cluster, choose 12, 18, or 24 partitions) so partitions distribute with perfect symmetry."
       ],
       "codeSnippet": {
-        "title": "Back-of-the-Envelope Partition Sizing Calculator",
-        "code": "function calculatePartitions(params: {\n  peakMsgsPerSec: number;\n  avgMsgBytes: number;\n  consumerBatchSize: number;\n  consumerBatchLatencyMs: number;\n  brokerCount: number;\n  growthFactor?: number;\n}): number {\n  const consumerMsgsPerSec = (params.consumerBatchSize / params.consumerBatchLatencyMs) * 1000;\n  const rawPartitions = Math.ceil(\n    (params.peakMsgsPerSec / consumerMsgsPerSec) * (params.growthFactor ?? 1.5)\n  );\n  // Align to a clean multiple of brokerCount for balanced leader distribution\n  return Math.ceil(rawPartitions / params.brokerCount) * params.brokerCount;\n}"
+        "title": "Production Partition Sizing Calculator Script in TypeScript",
+        "code": "export function calculatePartitionCount(\n  peakMbPerSec: number,\n  producerMbPerSec = 30,\n  consumerMbPerSec = 5,\n  brokerCount = 6\n): number {\n  const neededForProducers = Math.ceil(peakMbPerSec / producerMbPerSec);\n  const neededForConsumers = Math.ceil(peakMbPerSec / consumerMbPerSec);\n  const rawPartitions = Math.max(neededForProducers, neededForConsumers);\n\n  // Round up to nearest multiple of broker count for even distribution\n  const balancedPartitions = Math.ceil(rawPartitions / brokerCount) * brokerCount;\n  return Math.max(balancedPartitions, brokerCount);\n}\n\n// Example: 100 MB/sec throughput with 5 MB/sec consumer rate on 6 brokers\n// Returns: 24 Partitions (4 partitions per broker)"
       }
     },
     {
-      "heading": "Why Not Create 10,000 Partitions per Topic?",
-      "body": "If partitions increase parallelism, why not give every topic 1,000 partitions just in case? Each partition replica carries tangible operational overhead on the cluster.",
+      "heading": "Why You Should Not Create 10,000 Partitions per Topic",
+      "body": "Engineers often ask: 'Why not just create 1,000 partitions upfront so we never have to re-partition?' Over-partitioning degrades broker stability in three critical ways.",
       "bullets": [
-        "**Controller Failover Latency**: When a broker crashes cleanly or uncleanly, the KRaft/Controller must elect a new leader for every partition led by that broker (~1–2ms per partition in ZooKeeper, much faster in KRaft, but still bounded across thousands of partitions).",
-        "**Producer Memory Fragmentation**: Producers maintain a separate batch buffer per active partition (`batch.size` = 16KB–64KB). 1,000 partitions means 1,000 smaller batches, reducing compression ratios and exhausting `buffer.memory`.",
-        "**File Descriptors & Page Cache**: Every partition segment requires open `.log`, `.index`, and `.timeindex` file handles on the broker OS."
+        "Open File Descriptors: Each partition maintains multiple segment files (data log, offset index, timestamp index). 1,000 partitions require thousands of open OS file handles per broker.",
+        "Producer Memory Buffering: Producers allocate batch buffers per partition. 1,000 partitions inflate producer client RAM usage, causing garbage collection stalls.",
+        "Leader Election Latency: When a broker crashes, the cluster controller must elect new leaders for every partition that broker was leading. Having 10,000 partitions on a downed broker stretches failover time from milliseconds to tens of seconds."
       ]
     }
   ],
   "tradeOffs": [
     {
-      "option": "Conservative Partition Count (12–30 per Topic)",
-      "pros": "High producer batching compression, minimal broker metadata overhead, fast failover elections.",
-      "cons": "Caps maximum horizontal scale-out of any single consumer group to 12–30 pods.",
-      "bestFor": "95% of standard domain microservice topics handling < 20,000 msgs/sec."
+      "option": "Right-Sized Partitions (e.g., 12 to 24 partitions)",
+      "pros": "Perfect balance of parallel consumer throughput; fast broker failover; compact memory footprint.",
+      "cons": "Requires increasing partition count and triggering consumer rebalances if traffic expands 10x.",
+      "bestFor": "Standard production microservice event streaming."
     },
     {
-      "option": "High Partition Count (100–500+ per Topic)",
-      "pros": "Allows massive consumer group fleets to process high-latency workloads in parallel.",
-      "cons": "Higher end-to-end replication overhead, larger client memory footprint, and slower rebalances.",
-      "bestFor": "Firehose telemetry topics, clickstreams, or heavy ML feature pipelines (> 100,000 msgs/sec)."
+      "option": "Excessive Partitions (e.g., 500+ partitions)",
+      "pros": "Maximum theoretical consumer concurrency headroom without needing future topic alterations.",
+      "cons": "Slower broker reboot times; higher client memory allocation; risks cluster-wide controller stalls.",
+      "bestFor": "Hyperscale analytics ingestion on massive multi-hundred-broker clusters."
     }
   ],
-  "interviewTip": "Show your math explicitly during the interview: 'At 50k events/sec and 2,500 events/sec per consumer worker, we need 20 partitions minimum; across a 6-broker cluster, I'll provision **30 or 36 partitions** for balanced leaders and 1.5x headroom.'",
-  "jsonUrl": "/api/subtopics/messaging-kafka/kafka-partition-calculation.json"
+  "interviewTip": "When sizing Kafka partitions in a system design interview, walk through the math out loud: 'If our peak ingestion throughput is 100 MB/sec, and each consumer worker processes 5 MB/sec due to database write constraints, we need at least `100 / 5 = 20` partitions. Across our 6-broker cluster, we will provision 24 partitions so each broker hosts exactly 4 partitions.'"
 }

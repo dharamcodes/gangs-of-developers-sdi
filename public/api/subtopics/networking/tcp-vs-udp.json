@@ -3,55 +3,55 @@
   "topicId": "networking",
   "topicTitle": "Networking",
   "topicNumber": 2,
-  "subtopicNumber": "2.2",
+  "subtopicNumber": "2.3",
   "title": "TCP vs UDP",
-  "subtitle": "Comparing connection-oriented reliable byte streams (3-way handshake, congestion control) against connectionless low-overhead datagrams.",
+  "subtitle": "Comparing connection-oriented reliable byte streams (handshakes, congestion control) against connectionless datagrams.",
   "readingTime": "7 min read",
   "difficulty": "Foundational",
   "keyTakeaways": [
-    "TCP guarantees reliable, ordered, error-checked delivery via a 3-way handshake, sequence numbers, ACKs, retransmissions, and congestion control.",
-    "UDP is a connectionless 'fire-and-forget' datagram protocol with an 8-byte header, zero handshake RTT, and no Transport-Layer Head-of-Line (HoL) blocking.",
-    "For real-time media (WebRTC, VoIP, FPS gaming), a retransmitted late TCP packet is worse than a dropped UDP packet because stalls destroy live interactivity."
+    "TCP guarantees ordered, reliable byte streams via three-way handshakes, sequence numbers, and ACKs, but incurs latency and head-of-line blocking under packet loss.",
+    "UDP is connectionless and stateless with a tiny 8-byte header; it provides zero reliability guarantees out of the box, making it ideal when low latency outweighs packet loss.",
+    "Modern protocols increasingly use UDP as a substrate for specialized user-space reliability engines, such as QUIC (HTTP/3) and WebRTC."
   ],
-  "architectureDiagram": "TCP (Reliable, Ordered Stream - 20B+ Header)     UDP (Unreliable Datagram - 8B Header)\n[Client]                     [Server]            [Client]                     [Server]\n   |--- 1. SYN (seq=x) -------->|                   |--- Datagram 1 (Audio) ---->|\n   |<-- 2. SYN-ACK (seq=y,x+1) -|   (1 Full RTT     |--- Datagram 2 (Audio) --X (Dropped!)\n   |--- 3. ACK (y+1) ---------->|    Before Data)   |--- Datagram 3 (Audio) ---->|\n   |=== Reliable Data Stream ===|                   (App immediately plays Datagram 3;\n   (If Packet #2 drops, Packet #3                    no waiting for Datagram 2 retransmit!)\n    is held in kernel buffer!)",
+  "architectureDiagram": "TCP 3-WAY HANDSHAKE (Reliable, In-Order, 1.5 RTT Setup)\nClient --- SYN (Seq=X) ----------> Server\nClient <-- SYN-ACK (Seq=Y, Ack=X+1) Server\nClient --- ACK (Ack=Y+1) --------> Server (Data flow begins)\n\nUDP TRANSMISSION (Fire-and-Forget, 0 RTT Setup, 8-Byte Header)\nClient --- Datagram 1 -----------> Server\nClient --- Datagram 2 -----------> Server (No ACKs, No Retries, Packets may drop/reorder)",
   "sections": [
     {
-      "heading": "Inside TCP: Handshakes, Flow Control, and Congestion Control",
-      "body": "Transmission Control Protocol (TCP) creates a virtual full-duplex pipe between two sockets. Before sending a single byte of application payload, TCP requires a 3-way handshake (`SYN`, `SYN-ACK`, `ACK`), costing 1 full Round-Trip Time (RTT). During transmission, TCP numbers every byte, requires receiver acknowledgments (`ACK`), and enforces both **Flow Control** (via the receiver's advertised sliding window so a fast sender doesn't overwhelm a slow receiver) and **Congestion Control** (slow start, CUBIC, or Google BBR to avoid collapsing intermediate internet routers).",
+      "heading": "Inside TCP: Reliability, Flow Control, and Congestion Control",
+      "body": "TCP treats application data as a continuous, ordered stream of bytes. To guarantee delivery across lossy networks, TCP employs sequence numbers, cumulative acknowledgments (ACKs), and retransmission timers. However, reliability requires feedback loops: flow control (the receiver's sliding window) prevents the sender from overflowing receiver memory, while congestion control (slow start, AIMD) dynamically throttles transmission to prevent network router buffer exhaustion.",
       "bullets": [
-        "TCP Head-of-Line (HoL) Blocking: Because TCP guarantees strict byte ordering, if packet #4 is lost on the wire, packets #5, #6, and #7 sit locked inside the OS kernel buffer until #4 is retransmitted.",
-        "Nagle's Algorithm vs `TCP_NODELAY`: Nagle buffers small writes to coalesce packets; latency-sensitive apps set `TCP_NODELAY` to flush immediately.",
-        "Keep-Alive Connections: Reusing long-lived TCP connections avoids paying the 3-way handshake + slow-start penalty on every request."
+        "Three-Way Handshake: SYN -> SYN-ACK -> ACK establishes sequence numbers and window sizes, adding 1 RTT before payload data can be sent.",
+        "Sliding Window (Flow Control): The receiver advertises its available buffer space (`win`); the sender cannot transmit beyond this boundary.",
+        "Congestion Control (CUBIC/BBR): BBR (Bottleneck Bandwidth and RTT) models network pipe capacity directly, avoiding the packet-loss-induced throughput collapses common in older loss-based algorithms."
       ],
       "codeSnippet": {
-        "title": "Tuning Low-Latency TCP Socket Options in Node/TypeScript",
-        "code": "import net from \"node:net\";\n\nconst socket = net.createConnection({ host: \"10.0.1.45\", port: 6379 }, () => {\n  // Disable Nagle's algorithm: flush small packets immediately without 40ms buffering\n  socket.setNoDelay(true);\n\n  // Enable OS-level TCP keep-alive probes to detect dead peers and prevent NAT drops\n  socket.setKeepAlive(true, 30_000);\n});"
+        "title": "Network Protocol Selection Matrix in Code",
+        "code": "type ProtocolRequirement = \"STRICT_ORDERING\" | \"LOW_LATENCY_UNBOUNDED\" | \"STREAMING_AUDIO_VIDEO\";\n\nexport function selectTransportProtocol(req: ProtocolRequirement): \"TCP\" | \"UDP\" {\n  switch (req) {\n    case \"STRICT_ORDERING\":\n      // Financial transactions, REST APIs, database queries, file transfers\n      return \"TCP\";\n    case \"LOW_LATENCY_UNBOUNDED\":\n      // DNS queries, NTP time sync, multiplayer game player coordinates\n      return \"UDP\";\n    case \"STREAMING_AUDIO_VIDEO\":\n      // Live WebRTC calls where an old dropped video frame is useless\n      return \"UDP\";\n  }\n}"
       }
     },
     {
-      "heading": "Inside UDP: Speed, Simplicity, and Custom Application Reliability",
-      "body": "User Datagram Protocol (UDP) adds almost nothing on top of IP except source/destination ports and a checksum, just an 8-byte header compared to TCP's 20–60 bytes. There is no handshake, no connection state in the OS kernel, and no automatic retransmission. If your application needs reliability without TCP's rigid single-stream ordering, you can build selective reliability on top of UDP in user space, which is the exact foundation of QUIC (HTTP/3) and WebRTC.",
+      "heading": "Inside UDP: Datagrams, Speed, and User-Space Reliability",
+      "body": "UDP strips away all state. It sends discrete datagrams without a connection handshake, sequence numbers, or delivery confirmations. Because UDP does not hold bytes in order, packet loss causes zero head-of-line blocking. While plain UDP is used for lightweight request-response protocols like DNS, modern engineering increasingly uses UDP as a blank canvas to build custom reliability mechanisms in application code, avoiding kernel TCP constraints.",
       "bullets": [
-        "Zero Handshake Latency: Data flows on the very first packet.",
-        "No HoL Blocking Across Independent Frames: A dropped video delta frame doesn't block an incoming audio packet or player position update.",
-        "Multicast / Broadcast Support: UDP supports broadcasting packets to multiple peers, whereas TCP is strictly 1-to-1 unicast."
+        "Minimal Overhead: An 8-byte header (source port, dest port, length, checksum) compared to TCP's 20-60 byte header.",
+        "No Head-of-Line Blocking: If packet 3 drops, the application immediately processes packets 4 and 5 without waiting for packet 3 to retransmit.",
+        "WebRTC and QUIC: Real-time protocols that leverage UDP to implement custom congestion control, selective retransmission, and forward error correction."
       ]
     }
   ],
   "tradeOffs": [
     {
-      "option": "TCP (Transmission Control Protocol)",
-      "pros": "Guaranteed delivery and strict ordering out-of-the-box, battle-tested congestion control (BBR/CUBIC), universally traverses firewalls.",
-      "cons": "1-RTT handshake overhead, Transport-Layer Head-of-Line blocking stalls entire connection on a single lost packet, heavier kernel state.",
-      "bestFor": "REST/gRPC APIs, database connections (Postgres/Redis), file transfers, web pages (HTTP/1.1 & HTTP/2), and chat messages."
+      "option": "Transmission Control Protocol (TCP)",
+      "pros": "Guarantees zero data loss and strict byte ordering; automatic congestion management prevents network collapse.",
+      "cons": "Handshake latency on connection setup; packet drops stall all subsequent data; higher CPU overhead in operating system kernel.",
+      "bestFor": "Database connections, file downloads, financial transactions, and standard HTTP/1.1 or HTTP/2 web traffic."
     },
     {
-      "option": "UDP (User Datagram Protocol)",
-      "pros": "Zero connection setup delay, minimal 8-byte packet header, no HoL blocking, app controls what to drop vs retransmit.",
-      "cons": "Packets can arrive out of order, duplicated, or vanish silently; some corporate firewalls block raw UDP ports.",
-      "bestFor": "Live video/voice calls (WebRTC/Zoom), multiplayer real-time games, DNS lookups, and HTTP/3 (QUIC)."
+      "option": "User Datagram Protocol (UDP)",
+      "pros": "Zero connection latency; minimal protocol overhead; dropped packets do not block subsequent frames.",
+      "cons": "Packets can arrive out of order, duplicate, or vanish silently; application must handle security and congestion control if needed.",
+      "bestFor": "DNS resolution, live voice/video conferencing (WebRTC), competitive gaming coordinates, and QUIC (HTTP/3)."
     }
   ],
-  "interviewTip": "When designing Zoom, Discord, or an online game, explicitly contrast control plane vs media plane: 'We use TCP (HTTPS/WebSockets) for authentication, room signaling, and text chat where reliability is mandatory, and UDP (WebRTC/SRTP) for live audio/video streams where low latency beats 100% packet delivery.'",
+  "interviewTip": "In real-time multiplayer gaming or VoIP discussions, explain why UDP beats TCP: 'In voice streaming, if packet 12 drops, retransmitting it 100ms later is useless because the speaker has already moved on. Dropping the audio frame with UDP is far better than pausing playback for 150ms with TCP.'",
   "jsonUrl": "/api/subtopics/networking/tcp-vs-udp.json"
 }

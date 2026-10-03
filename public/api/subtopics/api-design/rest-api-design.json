@@ -5,52 +5,53 @@
   "topicNumber": 3,
   "subtopicNumber": "3.1",
   "title": "REST API Design",
-  "subtitle": "Resource-oriented noun hierarchies, HTTP verb semantics, RFC 7807 error envelopes, filtering, and handling non-CRUD actions cleanly.",
-  "readingTime": "7 min read",
+  "subtitle": "Resource-oriented noun hierarchies, HTTP method semantics, RFC 7807 error envelopes, and modeling non-CRUD actions.",
+  "readingTime": "8 min read",
   "difficulty": "Foundational",
   "keyTakeaways": [
-    "Model URLs around plural resource **nouns** (`/v1/orders/{id}/items`), never RPC verbs (`/v1/createNewOrder`), and let HTTP methods (`GET`, `POST`, `PATCH`, `DELETE`) express the action.",
-    "Standardize error responses across all microservices using a machine-parsable envelope (RFC 7807 Problem Details) with stable error codes, request trace IDs, and field-level validation details.",
-    "When a business action doesn't map cleanly to CRUD (e.g., transferring funds or cancelling an order), model the action as a **sub-resource noun** (`POST /v1/orders/{id}/cancellation` or `POST /v1/transfers`)."
+    "RESTful APIs structure URIs around plural nouns (`/v1/orders`), mapping actions to standard HTTP verbs rather than embedding verbs in endpoints (`/createOrder`).",
+    "Non-CRUD actions (such as order cancellation or checkout) are cleanly modeled as state machine transitions or dedicated sub-resources (`POST /orders/{id}/cancellation`).",
+    "Long-running operations should return `202 Accepted` immediately with a `Location: /jobs/{id}` status URL and `Retry-After` header to avoid holding open client connections."
   ],
-  "architectureDiagram": "RESOURCE HIERARCHY & HTTP VERB MATRIX\n+-------------------------------------------------------------------------+\n| Collection: /v1/projects/{projectId}/deployments                        |\n+-------------------------------------------------------------------------+\n| GET    /v1/projects/p_1/deployments       -> List deployments (200 OK)  |\n| POST   /v1/projects/p_1/deployments       -> Create deployment (201/202)|\n| GET    /v1/projects/p_1/deployments/d_9   -> Fetch single (200 OK)      |\n| PATCH  /v1/projects/p_1/deployments/d_9   -> Partial update (200 OK)    |\n| DELETE /v1/projects/p_1/deployments/d_9   -> Delete resource (204)      |\n| POST   /v1/projects/p_1/deployments/d_9/rollback -> Action sub-resource |\n+-------------------------------------------------------------------------+",
+  "architectureDiagram": "RESTFUL RESOURCE HIERARCHY & ASYNC POLLING PATTERN\nCRUD Operations on Collections:\n  GET    /api/v1/orders              -> List orders (200 OK)\n  POST   /api/v1/orders              -> Create order (201 Created + Location header)\n  GET    /api/v1/orders/{orderId}    -> Fetch single order (200 OK / 404 Not Found)\n  DELETE /api/v1/orders/{orderId}    -> Cancel/Delete order (204 No Content)\n\nLong-Running Asynchronous Processing:\n  POST /api/v1/video-exports         -> 202 Accepted (Location: /api/v1/jobs/j_99)\n  GET  /api/v1/jobs/j_99             -> 200 OK (Status: \"PROCESSING\", Progress: 45%)\n  GET  /api/v1/jobs/j_99             -> 303 See Other (Location: /api/v1/downloads/v_99)",
   "sections": [
     {
       "heading": "Resource Modeling, Nesting Depth, and Non-CRUD Actions",
-      "body": "Representational State Transfer (REST), defined by Roy Fielding, treats every domain concept as an addressable **Resource** manipulated through standard HTTP verbs. Good REST APIs are predictable: once an engineer learns how `/v1/users` works, they immediately know how `/v1/invoices` works. Keep URL nesting to at most 2 levels (`/v1/organizations/{orgId}/members`); if you need deeper access, allow querying the child resource directly by its globally unique prefixed ID (`/v1/members/mem_892a`).",
+      "body": "A clean REST API models business entities as resources identified by nouns, using HTTP verbs to convey intent. A common mistake is deep URL nesting like `/orgs/{id}/departments/{id}/teams/{id}/members/{id}`, which tightly couples endpoint URLs to internal database foreign key schemas and creates brittle client integrations. In production, nest resources at most one level deep (`/teams/{teamId}/members`); everything else should be queryable by top-level identifiers (`/members/{memberId}`).",
       "bullets": [
-        "Opaque Prefixed IDs (Stripe Pattern): Use prefixed K-sortable IDs like `ord_01HQ8...` or `usr_01HQ8...` instead of sequential integers (`1, 2, 3`) to prevent ID enumeration attacks and make logs self-describing.",
-        "`PUT` vs `PATCH`: `PUT` replaces the entire resource representation (missing fields are nulled), whereas `PATCH` applies a partial update to only the provided fields.",
-        "Query Filtering & Sorting: Use query parameters for collection slicing (`GET /v1/orders?status=SHIPPED&sort=-created_at&fields=id,total_cents`)."
+        "Plural Nouns: Use `/v1/users` and `/v1/accounts`, avoiding RPC-style verbs like `/getUser` or `/deleteAccount`.",
+        "Nesting Depth Limit: Keep hierarchy shallow. Use `/orders/{orderId}/items`, but fetch individual line items directly at `/items/{itemId}`.",
+        "Non-CRUD State Transitions: When an action doesn't fit standard PUT/PATCH (e.g., executing a checkout or approving a transfer), treat the action as a sub-resource: `POST /orders/{id}/payments` or `POST /transfers/{id}/approval`."
       ],
       "codeSnippet": {
-        "title": "Production REST Response & RFC 7807 Error Envelope Contract",
-        "code": "// 1. Standardized Collection Response Envelope\nexport interface ListResponse<T> {\n  data: T[];\n  pagination: {\n    next_cursor: string | null;\n    has_more: boolean;\n  };\n  meta: { request_id: string };\n}\n\n// 2. RFC 7807 Problem Details Error Response (HTTP 422 Unprocessable Entity)\nexport const validationErrorExample = {\n  type: \"https://api.example.com/errors/validation-failed\",\n  title: \"Request Validation Failed\",\n  status: 422,\n  code: \"INVALID_FIELD_VALUE\",\n  detail: \"One or more fields in the request payload failed validation.\",\n  request_id: \"req_01HV9X2K8P\",\n  errors: [\n    { field: \"amount_cents\", reason: \"Must be a positive integer >= 50\" },\n  ],\n};"
+        "title": "RFC 7807 Standardized Problem Details Error Payload",
+        "code": "// Content-Type: application/problem+json\n{\n  \"type\": \"https://api.example.com/errors/insufficient-funds\",\n  \"title\": \"Insufficient Account Balance\",\n  \"status\": 422,\n  \"detail\": \"Transfer of $500.00 exceeds current available balance of $124.50.\",\n  \"instance\": \"/api/v1/transfers/tx_99812\",\n  \"invalid_params\": [\n    {\n      \"name\": \"amount\",\n      \"reason\": \"Amount exceeds limit by $375.50\"\n    }\n  ]\n}"
       }
     },
     {
-      "heading": "Long-Running Asynchronous Operations in REST",
-      "body": "When a `POST` or `DELETE` operation takes longer than ~500ms (e.g., provisioning a database cluster or exporting a 10GB archive), do not hold the HTTP connection open. Return `HTTP 202 Accepted` immediately with a `Location: /v1/operations/op_772` header pointing to an **Operation Resource** that the client can poll (with a `Retry-After: 5` header) or subscribe to via webhook until `status === 'SUCCEEDED'`.",
+      "heading": "Handling Long-Running Asynchronous Operations",
+      "body": "HTTP is designed for fast request-response exchanges. When an endpoint triggers a heavy operation like generating a monthly PDF invoice or training a machine learning model, holding the client's HTTP connection open for 45 seconds causes proxy timeouts (504s), connection resets, and client retries that crush backend workers. REST handles this via the `202 Accepted` pattern.",
       "bullets": [
-        "Bulk Operations: Avoid N+1 client round-trips by offering batch endpoints (`POST /v1/messages:batchDelete`) that return per-item status arrays (`207 Multi-Status`).",
-        "Consistent Timestamps & Money: Always use ISO-8601 UTC strings (`2026-03-15T14:30:00Z`) for time and integer smallest-currency units (`amount_cents: 1999` + `currency: 'USD'`) to avoid IEEE 754 floating-point bugs."
+        "Admission & 202 Accepted: Validate inputs, enqueue the background job, and immediately return HTTP 202 with a `Location: /jobs/{jobId}` header.",
+        "Status Polling: The client polls `/jobs/{jobId}`. While running, the server returns 200 with metadata (`{\"status\": \"in_progress\", \"progress\": 65}`) and a `Retry-After: 5` header.",
+        "Completion & Redirection: When finished, the status endpoint returns an HTTP 303 See Other pointing directly to the generated resource (`Location: /invoices/inv_102.pdf`)."
       ]
     }
   ],
   "tradeOffs": [
     {
-      "option": "Pure RESTful Resource API",
-      "pros": "Leverages native HTTP caching, status codes, and CDN semantics; predictable uniform interface; zero custom client tooling required.",
-      "cons": "Can cause over-fetching (returning 50 fields when mobile needs 3) or under-fetching (requiring multiple round-trips for nested graphs).",
-      "bestFor": "Public platform APIs, microservice domain boundaries, and standard CRUD/resource-oriented SaaS products."
+      "option": "Synchronous REST Execution",
+      "pros": "Simpler client integration; client receives final output in one round trip; zero background queue infrastructure required.",
+      "cons": "Vulnerable to client and proxy timeouts on slow operations; exhausts server worker threads during traffic spikes.",
+      "bestFor": "Simple CRUD operations completing in under 200ms (reading profile, updating address, inserting record)."
     },
     {
-      "option": "GraphQL / BFF Aggregation Layer",
-      "pros": "Clients fetch exact fields across multiple resources in a single round-trip; eliminates mobile over-fetching.",
-      "cons": "Breaks standard HTTP URL caching (all queries use `POST /graphql`), vulnerable to expensive nested N+1 query DoS without query depth limiters.",
-      "bestFor": "Complex UI dashboards and mobile apps aggregating data from 10+ microservices via a Backend-for-Frontend (BFF)."
+      "option": "Asynchronous 202 Accepted + Polling",
+      "pros": "Protects API servers from timeouts; decouples work submission from worker fleet execution; absorbs massive traffic spikes.",
+      "cons": "Requires clients to manage polling loops or WebSockets; requires persistent job storage to track state.",
+      "bestFor": "Video processing, large CSV data exports, report generation, and third-party webhook verification."
     }
   ],
-  "interviewTip": "When writing API signatures on the whiteboard, never use floating-point numbers for money (`price: 19.99`). Always write `amount_cents: 1999` and `currency: 'USD'`. Calling this out earns instant credibility.",
+  "interviewTip": "When designing an API that processes long-running workflows, describe the exact HTTP handoff: 'The API will return a 202 Accepted with a Location header pointing to the job status endpoint and a Retry-After header. Once processing completes, the job endpoint returns a 303 See Other redirecting to the completed resource.'",
   "jsonUrl": "/api/subtopics/api-design/rest-api-design.json"
 }
