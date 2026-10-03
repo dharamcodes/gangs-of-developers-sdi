@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import {
   Box,
   CircularProgress,
@@ -32,14 +32,101 @@ import type {
 } from "../types/handbook";
 
 const SIDEBAR_WIDTH = 340;
+const THEME_STORAGE_KEY = "god_handbook_theme_mode";
+const FONT_SCALE_STORAGE_KEY = "god_handbook_font_scale";
+const FULL_WIDTH_STORAGE_KEY = "god_handbook_full_width";
+const SIDEBAR_OPEN_STORAGE_KEY = "god_handbook_sidebar_open";
+const LAST_SUBTOPIC_STORAGE_KEY = "god_handbook_last_subtopic";
+
+const storageListeners = new Set<() => void>();
+
+function subscribeStorage(callback: () => void) {
+  storageListeners.add(callback);
+  if (typeof window !== "undefined") {
+    window.addEventListener("storage", callback);
+  }
+  return () => {
+    storageListeners.delete(callback);
+    if (typeof window !== "undefined") {
+      window.removeEventListener("storage", callback);
+    }
+  };
+}
+
+function notifyStorage() {
+  storageListeners.forEach((cb) => cb());
+}
+
+function getThemeSnapshot(): "light" | "dark" {
+  if (typeof window === "undefined") return "light";
+  try {
+    const saved = localStorage.getItem(THEME_STORAGE_KEY);
+    if (saved === "light" || saved === "dark") return saved;
+    return window.matchMedia("(prefers-color-scheme: dark)").matches
+      ? "dark"
+      : "light";
+  } catch {
+    return "light";
+  }
+}
+
+function getFontScaleSnapshot(): "normal" | "large" | "xlarge" {
+  if (typeof window === "undefined") return "normal";
+  try {
+    const saved = localStorage.getItem(FONT_SCALE_STORAGE_KEY);
+    if (saved === "normal" || saved === "large" || saved === "xlarge")
+      return saved;
+    return "normal";
+  } catch {
+    return "normal";
+  }
+}
+
+function getFullWidthSnapshot(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return localStorage.getItem(FULL_WIDTH_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function getDesktopSidebarSnapshot(): boolean {
+  if (typeof window === "undefined") return true;
+  try {
+    const saved = localStorage.getItem(SIDEBAR_OPEN_STORAGE_KEY);
+    return saved !== null ? saved === "true" : true;
+  } catch {
+    return true;
+  }
+}
+
+const getServerTheme = () => "light" as const;
+const getServerFontScale = () => "normal" as const;
+const getServerFullWidth = () => false;
+const getServerDesktopSidebar = () => true;
 
 export default function HandbookReader() {
-  const [mode, setMode] = useState<"light" | "dark">("light");
-  const [fontScale, setFontScale] = useState<"normal" | "large" | "xlarge">(
-    "normal"
+  const mode = useSyncExternalStore(
+    subscribeStorage,
+    getThemeSnapshot,
+    getServerTheme
   );
-  const [isFullWidth, setIsFullWidth] = useState<boolean>(false);
-  const [desktopSidebarOpen, setDesktopSidebarOpen] = useState<boolean>(true);
+  const fontScale = useSyncExternalStore(
+    subscribeStorage,
+    getFontScaleSnapshot,
+    getServerFontScale
+  );
+  const isFullWidth = useSyncExternalStore(
+    subscribeStorage,
+    getFullWidthSnapshot,
+    getServerFullWidth
+  );
+  const desktopSidebarOpen = useSyncExternalStore(
+    subscribeStorage,
+    getDesktopSidebarSnapshot,
+    getServerDesktopSidebar
+  );
   const [indexData, setIndexData] = useState<HandbookIndexResponse | null>(
     null
   );
@@ -95,7 +182,7 @@ export default function HandbookReader() {
     [mode]
   );
 
-  // Load master index.json and initial subtopic JSON on mount
+  // Load master index.json and resolve active subtopic (URL params -> localStorage -> first subtopic)
   useEffect(() => {
     let active = true;
     async function init() {
@@ -105,16 +192,68 @@ export default function HandbookReader() {
       setExpandedTopics(
         Object.fromEntries(idx.topics.map((t) => [t.id, true]))
       );
-      const firstTopic = idx.topics[0];
-      const firstSub = firstTopic?.subtopics[0];
-      if (firstTopic && firstSub) {
+
+      // Check URL parameters first: ?topic=...&subtopic=...
+      let initialTopicId: string | null = null;
+      let initialSubtopicId: string | null = null;
+
+      if (typeof window !== "undefined") {
+        const params = new URLSearchParams(window.location.search);
+        initialTopicId = params.get("topic");
+        initialSubtopicId = params.get("subtopic");
+
+        // If not in query, check hash e.g. #subtopic-id
+        if (!initialSubtopicId && window.location.hash) {
+          const cleanHash = window.location.hash.replace(/^#/, "");
+          if (cleanHash) {
+            initialSubtopicId = cleanHash;
+          }
+        }
+
+        // If neither, check localStorage for last read chapter
+        if (!initialSubtopicId) {
+          try {
+            const saved = localStorage.getItem(LAST_SUBTOPIC_STORAGE_KEY);
+            if (saved) {
+              const parsed = JSON.parse(saved);
+              if (parsed?.subtopicId) {
+                initialSubtopicId = parsed.subtopicId;
+                initialTopicId = parsed.topicId;
+              }
+            }
+          } catch {
+            // Ignore parse errors
+          }
+        }
+      }
+
+      // Resolve topic & subtopic in index
+      let targetTopic = initialTopicId
+        ? idx.topics.find((t) => t.id === initialTopicId)
+        : null;
+      let targetSub = initialSubtopicId
+        ? targetTopic?.subtopics.find((s) => s.id === initialSubtopicId) ||
+          idx.topics.flatMap((t) => t.subtopics).find((s) => s.id === initialSubtopicId)
+        : null;
+
+      if (targetSub && !targetTopic) {
+        targetTopic = idx.topics.find((t) => t.id === targetSub!.topicId) || null;
+      }
+
+      // Fallback to first chapter
+      if (!targetTopic || !targetSub) {
+        targetTopic = idx.topics[0];
+        targetSub = targetTopic?.subtopics[0];
+      }
+
+      if (targetTopic && targetSub) {
         setLoadingSubtopic(true);
-        const detail = await fetchSubtopicData(firstTopic.id, firstSub.id);
+        const detail = await fetchSubtopicData(targetTopic.id, targetSub.id);
         if (active) {
           setActiveSubtopicDetail(detail);
           setLoadingSubtopic(false);
         }
-        void fetchTopicData(firstTopic.id);
+        void fetchTopicData(targetTopic.id);
       }
     }
     void init();
@@ -177,50 +316,121 @@ export default function HandbookReader() {
       ? allSubtopicsFlat[activeIndex + 1]
       : null;
 
+  // Background pre-fetch adjacent subtopics for zero-delay navigation
+  useEffect(() => {
+    if (!activeSubtopicDetail) return;
+    if (nextSubtopic) {
+      void fetchSubtopicData(nextSubtopic.topicId, nextSubtopic.id);
+    }
+    if (prevSubtopic) {
+      void fetchSubtopicData(prevSubtopic.topicId, prevSubtopic.id);
+    }
+  }, [activeSubtopicDetail, nextSubtopic, prevSubtopic]);
+
   const requestSequenceRef = React.useRef<number>(0);
 
-  const handleSelectSubtopic = async (subtopicId: string, topicId: string) => {
-    setExpandedTopics((prev) => ({ ...prev, [topicId]: true }));
-    setMobileOpen(false);
-    setLoadingSubtopic(true);
-    const requestId = ++requestSequenceRef.current;
-    try {
-      const detail = await fetchSubtopicData(topicId, subtopicId);
-      if (requestId === requestSequenceRef.current) {
-        setActiveSubtopicDetail(detail);
-      }
-      void fetchTopicData(topicId);
-      if (typeof window !== "undefined") {
-        window.scrollTo({ top: 0, behavior: "smooth" });
-      }
-    } finally {
-      if (requestId === requestSequenceRef.current) {
-        setLoadingSubtopic(false);
-      }
-    }
-  };
+  const handleSelectSubtopic = React.useCallback(
+    async (subtopicId: string, topicId: string) => {
+      setExpandedTopics((prev) => ({ ...prev, [topicId]: true }));
+      setMobileOpen(false);
+      setLoadingSubtopic(true);
 
-  const handleToggleTopic = (topicId: string) => {
+      // Persist chapter in localStorage and update URL search query
+      try {
+        localStorage.setItem(
+          LAST_SUBTOPIC_STORAGE_KEY,
+          JSON.stringify({ topicId, subtopicId })
+        );
+        if (typeof window !== "undefined") {
+          const url = new URL(window.location.href);
+          url.searchParams.set("topic", topicId);
+          url.searchParams.set("subtopic", subtopicId);
+          window.history.replaceState(null, "", url.toString());
+        }
+      } catch {
+        // Ignore storage errors
+      }
+
+      const requestId = ++requestSequenceRef.current;
+      try {
+        const detail = await fetchSubtopicData(topicId, subtopicId);
+        if (requestId === requestSequenceRef.current) {
+          setActiveSubtopicDetail(detail);
+        }
+        void fetchTopicData(topicId);
+        if (typeof window !== "undefined") {
+          window.scrollTo({ top: 0, behavior: "smooth" });
+        }
+      } finally {
+        if (requestId === requestSequenceRef.current) {
+          setLoadingSubtopic(false);
+        }
+      }
+    },
+    []
+  );
+
+  const handleToggleTopic = React.useCallback((topicId: string) => {
     setExpandedTopics((prev) => ({
       ...prev,
       [topicId]: !prev[topicId],
     }));
-  };
+  }, []);
 
-  const handleExpandAll = (expand: boolean) => {
-    if (!indexData) return;
-    setExpandedTopics(
-      Object.fromEntries(indexData.topics.map((group) => [group.id, expand]))
-    );
-  };
+  const handleExpandAll = React.useCallback(
+    (expand: boolean) => {
+      if (!indexData) return;
+      setExpandedTopics(
+        Object.fromEntries(indexData.topics.map((group) => [group.id, expand]))
+      );
+    },
+    [indexData]
+  );
 
-  const handleCycleFontScale = () => {
-    setFontScale((prev) =>
-      prev === "normal" ? "large" : prev === "large" ? "xlarge" : "normal"
-    );
-  };
+  const handleCycleFontScale = React.useCallback(() => {
+    const current = getFontScaleSnapshot();
+    const next =
+      current === "normal" ? "large" : current === "large" ? "xlarge" : "normal";
+    try {
+      localStorage.setItem(FONT_SCALE_STORAGE_KEY, next);
+      notifyStorage();
+    } catch {}
+  }, []);
 
-  const handleScrollToSection = (elementId: string) => {
+  const handleToggleThemeMode = React.useCallback(() => {
+    const current = getThemeSnapshot();
+    const next = current === "light" ? "dark" : "light";
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, next);
+      if (typeof document !== "undefined") {
+        document.documentElement.setAttribute("data-theme", next);
+        document.documentElement.style.colorScheme = next;
+        document.documentElement.style.backgroundColor =
+          next === "dark" ? "#070b14" : "#f4f1ea";
+      }
+      notifyStorage();
+    } catch {}
+  }, []);
+
+  const handleToggleFullWidth = React.useCallback(() => {
+    const current = getFullWidthSnapshot();
+    const next = !current;
+    try {
+      localStorage.setItem(FULL_WIDTH_STORAGE_KEY, String(next));
+      notifyStorage();
+    } catch {}
+  }, []);
+
+  const handleToggleDesktopSidebar = React.useCallback(() => {
+    const current = getDesktopSidebarSnapshot();
+    const next = !current;
+    try {
+      localStorage.setItem(SIDEBAR_OPEN_STORAGE_KEY, String(next));
+      notifyStorage();
+    } catch {}
+  }, []);
+
+  const handleScrollToSection = React.useCallback((elementId: string) => {
     if (typeof document !== "undefined") {
       const el = document.getElementById(elementId);
       if (el) {
@@ -228,7 +438,7 @@ export default function HandbookReader() {
         setActiveSectionId(elementId);
       }
     }
-  };
+  }, []);
 
   useEffect(() => {
     if (!activeSubtopicDetail || typeof window === "undefined") return;
@@ -302,6 +512,7 @@ export default function HandbookReader() {
         <HeaderBar
           ui={indexData.ui}
           mode={mode}
+          currentNav="home"
           activeSubtopic={activeSubtopicDetail}
           activeIndex={activeIndex}
           totalSubtopics={allSubtopicsFlat.length}
@@ -309,14 +520,10 @@ export default function HandbookReader() {
           isFullWidth={isFullWidth}
           fontScale={fontScale}
           onToggleMobileMenu={() => setMobileOpen(!mobileOpen)}
-          onToggleDesktopSidebar={() =>
-            setDesktopSidebarOpen((prev) => !prev)
-          }
-          onToggleFullWidth={() => setIsFullWidth((prev) => !prev)}
+          onToggleDesktopSidebar={handleToggleDesktopSidebar}
+          onToggleFullWidth={handleToggleFullWidth}
           onCycleFontScale={handleCycleFontScale}
-          onToggleThemeMode={() =>
-            setMode((prev) => (prev === "light" ? "dark" : "light"))
-          }
+          onToggleThemeMode={handleToggleThemeMode}
         />
 
         <Box sx={{ display: "flex", flex: 1 }}>

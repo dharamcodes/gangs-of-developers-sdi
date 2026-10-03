@@ -16,12 +16,26 @@
   "architectureDiagram": "                 +-----------------------------+\n   Writes -----> |   Primary DB (Leader)       |\n                 |   [Appends to WAL/Binlog]   |\n                 +-----------------------------+\n                    /                       \\\n  Sync WAL Stream  / (ACK before commit)     \\  Async WAL Stream\n  (RPO = 0)       v                           v (Lag: ~10-100ms)\n     +-------------------------+   +-------------------------+\n     | Sync Standby Replica    |   | Async Read Replica      |\n     | (Failover Candidate)    |   | (Serves Read Traffic)   |\n     +-------------------------+   +-------------------------+",
   "sections": [
     {
-      "heading": "Physical vs Logical Replication Formats",
-      "body": "Database engines replicate state changes using two primary log formats. Physical (block/WAL) replication ships exact byte-for-byte disk page modifications, making replicas identical clones of the primary. Logical (row-based binlog) replication streams higher-level row mutations (`INSERT`, `UPDATE` before/after images), enabling cross-version upgrades and Change Data Capture (CDC) pipelines.",
+      "heading": "1. Architectural Fundamentals & Core Mechanics",
+      "body": "Replication is a foundational architectural concept in distributed systems. Single-leader, multi-leader, and leaderless database replication topologies, WAL shipping, and failover mechanics. Fundamentally, Database engines replicate state changes using two primary log formats. Physical (block/WAL) replication ships exact byte-for-byte disk page modifications, making replicas identical clones of the primary. Logical (row-based binlog) replication streams higher-level row mutations (`INSERT`, `UPDATE` before/after images), enabling cross-version upgrades and Change Data Capture (CDC) pipelines.",
       "bullets": [
+        "**Core Architectural Principle**: Single-Leader (Primary-Replica) replication routes all writes to the primary node and streams WAL/binlog changes to replicas.",
+        "**Problem Space & Invariants**: Synchronous replication guarantees zero data loss (RPO = 0) on primary failure at the cost of higher write latency; asynchronous replication risks losing in-flight writes (RPO > 0).",
+        "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
+      ],
+      "asciiDiagram": "                 +-----------------------------+\n   Writes -----> |   Primary DB (Leader)       |\n                 |   [Appends to WAL/Binlog]   |\n                 +-----------------------------+\n                    /                       \\\n  Sync WAL Stream  / (ACK before commit)     \\  Async WAL Stream\n  (RPO = 0)       v                           v (Lag: ~10-100ms)\n     +-------------------------+   +-------------------------+\n     | Sync Standby Replica    |   | Async Read Replica      |\n     | (Failover Candidate)    |   | (Serves Read Traffic)   |\n     +-------------------------+   +-------------------------+",
+      "diagramImageUrl": "/diagrams/arch-db-replication.svg"
+    },
+    {
+      "heading": "2. Architectural Patterns & Implementation Topologies",
+      "body": "In production distributed systems, replication manifests across several distinct architectural classifications, operational modes, and implementation strategies:",
+      "bullets": [
+        "**Synchronous / Semi-Synchronous Replication**: Focuses on guarantees zero data loss (rpo = 0) upon primary crash; strong read consistency on standby. Best suited for Payments, user accounts, and multi-AZ high-availability primaries within the same region..",
+        "**Asynchronous Replication**: Focuses on primary write latency is completely decoupled from replica network spikes or replica outages. Best suited for Cross-region disaster recovery replicas and read-scaling replicas..",
         "Statement-Based Replication: Ships raw SQL strings; broken by non-deterministic functions like `NOW()` or `UUID()`.",
         "Write-Ahead Log (Physical) Shipping: Fast and low overhead, but tightly coupled to the exact OS architecture and database major version.",
-        "Logical Replication / Row-Based Binlog: Powers Debezium CDC streams into Kafka, Elasticsearch, and data warehouses."
+        "Split-Brain: Two nodes both believe they are the active primary and accept conflicting writes; prevented via STONITH (fencing tokens) and consensus leases (etcd/ZooKeeper).",
+        "Multi-Leader Replication: Used in multi-region active-active setups; requires conflict resolution (Last-Write-Wins, CRDTs, or custom merge logic)."
       ],
       "codeSnippet": {
         "title": "PostgreSQL Semi-Synchronous Quorum Replication Config",
@@ -29,12 +43,31 @@
       }
     },
     {
-      "heading": "Failover Hazards & Split-Brain Mitigation",
-      "body": "When a primary node stops responding to heartbeats, an orchestrator (e.g., Patroni, Orchestrator, AWS RDS Multi-AZ) promotes a standby replica to primary. If replication was asynchronous, the old primary may have acknowledged writes that never reached the new primary—causing silent data loss and primary-key collisions if the old primary rejoins.",
+      "heading": "3. Production Strengths: Where & How to Apply",
+      "body": "Adopting appropriate design patterns around replication unlocks critical performance, scalability, and operational advantages for modern backend platforms:",
       "bullets": [
-        "Split-Brain: Two nodes both believe they are the active primary and accept conflicting writes; prevented via STONITH (fencing tokens) and consensus leases (etcd/ZooKeeper).",
-        "Multi-Leader Replication: Used in multi-region active-active setups; requires conflict resolution (Last-Write-Wins, CRDTs, or custom merge logic).",
-        "Recovery Point Objective (RPO) vs Recovery Time Objective (RTO): Sync replication targets RPO = 0; automated failover targets RTO < 30 seconds."
+        "**Where to Use — High-Impact Scenarios**: Optimal for Payments, user accounts, and multi-AZ high-availability primaries within the same region. and environments requiring Guarantees zero data loss (RPO = 0) upon primary crash; strong read consistency on standby..",
+        "**Where to Use — High-Throughput Scenarios**: Recommended for Cross-region disaster recovery replicas and read-scaling replicas. where Primary write latency is completely decoupled from replica network spikes or replica outages..",
+        "**How to Use — Engineering Implementation**: When a primary node stops responding to heartbeats, an orchestrator (e.g., Patroni, Orchestrator, AWS RDS Multi-AZ) promotes a standby replica to primary. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
+        "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
+      ]
+    },
+    {
+      "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
+      "body": "While essential for scalable engineering, replication introduces substantial architectural trade-offs, operational failure modes, and anti-patterns if applied inappropriately:",
+      "bullets": [
+        "**Where to Avoid — Trade-Off Bottlenecks**: Avoid when constraints impose write latency increases by the network round-trip time (rtt) to the synchronous replica.",
+        "**Where to Avoid — Complexity Ceiling**: Avoid premature optimization when recent committed writes may be lost if the primary crashes before shipping its wal.",
+        "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
+        "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
+      ]
+    },
+    {
+      "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
+      "body": "Mastering replication is a defining trait of Staff-level distributed systems engineers. Navigating the delicate balance between performance, reliability, and simplicity ensures architectures scale sustainably without introducing unmanageable operational friction.",
+      "bullets": [
+        "**Staff+ Golden Rule**: Semi-synchronous replication waits for at least one in-sync standby to acknowledge WAL receipt before committing, balancing durability and latency.",
+        "**Staff+ Interview Playbook**: Recommend Semi-Synchronous replication across 3 Availability Zones (1 Primary + 2 Standbys, where at least 1 standby must ACK WAL flush) as the gold standard for production OLTP databases."
       ]
     }
   ],
@@ -53,5 +86,6 @@
     }
   ],
   "interviewTip": "Recommend Semi-Synchronous replication across 3 Availability Zones (1 Primary + 2 Standbys, where at least 1 standby must ACK WAL flush) as the gold standard for production OLTP databases.",
-  "jsonUrl": "/api/subtopics/database/db-replication.json"
+  "jsonUrl": "/api/subtopics/database/db-replication.json",
+  "diagramImageUrl": "/diagrams/arch-db-replication.svg"
 }

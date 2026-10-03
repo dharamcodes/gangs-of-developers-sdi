@@ -33,6 +33,7 @@ import CheckIcon from "@mui/icons-material/Check";
 import ZoomOutMapIcon from "@mui/icons-material/ZoomOutMap";
 import CloseIcon from "@mui/icons-material/Close";
 import SchemaOutlinedIcon from "@mui/icons-material/SchemaOutlined";
+import AltRouteOutlinedIcon from "@mui/icons-material/AltRouteOutlined";
 import AutoAwesomeOutlinedIcon from "@mui/icons-material/AutoAwesomeOutlined";
 import BookmarkBorderIcon from "@mui/icons-material/BookmarkBorder";
 import BookmarkIcon from "@mui/icons-material/Bookmark";
@@ -348,6 +349,7 @@ export default function SubtopicContentView({
   onSelectSubtopic,
 }: SubtopicContentViewProps) {
   const [erZoomUrl, setErZoomUrl] = useState<string | null>(null);
+  const [flowZoomUrl, setFlowZoomUrl] = useState<string | null>(null);
   const [bookmarked, setBookmarked] = useState<boolean>(false);
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
   const [showBackToTop, setShowBackToTop] = useState<boolean>(false);
@@ -881,14 +883,17 @@ export default function SubtopicContentView({
                           justifyContent: "space-between",
                           px: 2.5,
                           py: 1.25,
-                          bgcolor: "#0f172a",
-                          color: "#f8fafc",
-                          borderBottom: "1px solid rgba(255,255,255,0.08)",
+                          bgcolor: mode === "light" ? "#f8fafc" : "#0f172a",
+                          color: mode === "light" ? "#0f172a" : "#f8fafc",
+                          borderBottom:
+                            mode === "light"
+                              ? "1px solid #e2e8f0"
+                              : "1px solid rgba(255,255,255,0.08)",
                         }}
                       >
                         <Stack direction="row" spacing={1.25} sx={{ alignItems: "center" }}>
                           <SchemaOutlinedIcon
-                            sx={{ color: "#38bdf8", fontSize: 20 }}
+                            sx={{ color: mode === "light" ? "#0284c7" : "#38bdf8", fontSize: 20 }}
                           />
                           <Typography
                             variant="subtitle2"
@@ -903,11 +908,19 @@ export default function SubtopicContentView({
                             size="small"
                             onClick={() => setErZoomUrl(section.erDiagramUrl ?? null)}
                             sx={{
-                              color: "#e2e8f0",
-                              border: "1px solid rgba(255,255,255,0.2)",
+                              color: mode === "light" ? "#0f172a" : "#e2e8f0",
+                              border:
+                                mode === "light"
+                                  ? "1px solid #cbd5e1"
+                                  : "1px solid rgba(255,255,255,0.2)",
                               borderRadius: 1.5,
                               p: 0.5,
-                              "&:hover": { bgcolor: "rgba(255,255,255,0.1)" },
+                              "&:hover": {
+                                bgcolor:
+                                  mode === "light"
+                                    ? "rgba(15, 23, 42, 0.05)"
+                                    : "rgba(255,255,255,0.1)",
+                              },
                             }}
                           >
                             <ZoomOutMapIcon fontSize="small" />
@@ -929,6 +942,8 @@ export default function SubtopicContentView({
                           component="img"
                           src={section.erDiagramUrl}
                           alt={`${subtopic.subtopicNumber} ${subtopic.title} ER Diagram`}
+                          loading="lazy"
+                          decoding="async"
                           sx={{
                             width: "100%",
                             minWidth: { xs: 580, sm: "100%" },
@@ -941,17 +956,113 @@ export default function SubtopicContentView({
                   </Box>
                 )}
 
-                {/* System Architecture Diagram (Section 5) */}
-                {section.diagramImageUrl && (
+                {/* System Architecture Diagram (renders strictly when visual diagram image exists and not a flow diagram) */}
+                {Boolean(section.diagramImageUrl) && !section.flowDiagramUrl && (
                   <Box sx={{ my: 3.5 }}>
                     <ArchitectureDiagramCard
                       ui={ui}
+                      mode={mode}
                       diagramImageUrl={section.diagramImageUrl}
                       asciiDiagram={
-                        section.asciiDiagram || subtopic.architectureDiagram
+                        section.asciiDiagram || subtopic.architectureDiagram || ""
                       }
                       altText={`${subtopic.subtopicNumber} ${subtopic.title}`}
                     />
+                  </Box>
+                )}
+
+                {/* Deep-Dive Request Flow Diagram (Section 6) */}
+                {Boolean(section.flowDiagramUrl) && (
+                  <Box sx={{ my: 3.5 }}>
+                    <Paper
+                      variant="outlined"
+                      sx={{
+                        borderRadius: 3,
+                        overflow: "hidden",
+                        borderColor: "divider",
+                        boxShadow:
+                          mode === "light"
+                            ? "0 4px 20px -4px rgba(15, 23, 42, 0.06)"
+                            : "0 8px 24px -6px rgba(15, 23, 42, 0.25)",
+                      }}
+                    >
+                      <Stack
+                        direction="row"
+                        sx={{
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          px: 2.5,
+                          py: 1.25,
+                          bgcolor: mode === "light" ? "#f8fafc" : "#0f172a",
+                          color: mode === "light" ? "#0f172a" : "#f8fafc",
+                          borderBottom:
+                            mode === "light"
+                              ? "1px solid #e2e8f0"
+                              : "1px solid rgba(255,255,255,0.08)",
+                        }}
+                      >
+                        <Stack direction="row" spacing={1.25} sx={{ alignItems: "center" }}>
+                          <AltRouteOutlinedIcon
+                            sx={{ color: mode === "light" ? "#16a34a" : "#4ade80", fontSize: 20 }}
+                          />
+                          <Typography
+                            variant="subtitle2"
+                            sx={{ fontWeight: 750, letterSpacing: "0.01em" }}
+                          >
+                            Figure: Deep-Dive Request Flow &amp; Execution Pipeline
+                          </Typography>
+                        </Stack>
+
+                        <Tooltip title="Fullscreen Zoom">
+                          <IconButton
+                            size="small"
+                            onClick={() => setFlowZoomUrl(section.flowDiagramUrl ?? null)}
+                            sx={{
+                              color: mode === "light" ? "#0f172a" : "#e2e8f0",
+                              border:
+                                mode === "light"
+                                  ? "1px solid #cbd5e1"
+                                  : "1px solid rgba(255,255,255,0.2)",
+                              borderRadius: 1.5,
+                              p: 0.5,
+                              "&:hover": {
+                                bgcolor:
+                                  mode === "light"
+                                    ? "rgba(15, 23, 42, 0.05)"
+                                    : "rgba(255,255,255,0.1)",
+                              },
+                            }}
+                          >
+                            <ZoomOutMapIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      </Stack>
+
+                      <Box
+                        onClick={() => setFlowZoomUrl(section.flowDiagramUrl ?? null)}
+                        sx={{
+                          p: { xs: 1.5, sm: 3 },
+                          bgcolor: "#ffffff",
+                          overflowX: "auto",
+                          cursor: "zoom-in",
+                          WebkitOverflowScrolling: "touch",
+                        }}
+                      >
+                        <Box
+                          component="img"
+                          src={section.flowDiagramUrl}
+                          alt={`${subtopic.subtopicNumber} ${subtopic.title} Request Flow Diagram`}
+                          loading="lazy"
+                          decoding="async"
+                          sx={{
+                            width: "100%",
+                            minWidth: { xs: 580, sm: "100%" },
+                            height: "auto",
+                            display: "block",
+                          }}
+                        />
+                      </Box>
+                    </Paper>
                   </Box>
                 )}
 
@@ -1373,6 +1484,54 @@ export default function SubtopicContentView({
             <Box
               component="img"
               src={erZoomUrl}
+              alt={`${subtopic.subtopicNumber} ${subtopic.title}`}
+              sx={{
+                width: "100%",
+                height: "auto",
+                display: "block",
+              }}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Fullscreen Lightbox Dialog for Flow Diagram */}
+      <Dialog
+        open={Boolean(flowZoomUrl)}
+        onClose={() => setFlowZoomUrl(null)}
+        maxWidth="xl"
+        fullWidth
+      >
+        <Stack
+          direction="row"
+          sx={{
+            alignItems: "center",
+            justifyContent: "space-between",
+            px: 2.5,
+            py: 1.5,
+            bgcolor: mode === "light" ? "#f8fafc" : "#0f172a",
+            color: mode === "light" ? "#0f172a" : "#ffffff",
+            borderBottom:
+              mode === "light"
+                ? "1px solid #e2e8f0"
+                : "1px solid rgba(255,255,255,0.1)",
+          }}
+        >
+          <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>
+            {subtopic.subtopicNumber} {subtopic.title} — Deep-Dive Execution Flow Blueprint
+          </Typography>
+          <IconButton
+            onClick={() => setFlowZoomUrl(null)}
+            sx={{ color: mode === "light" ? "#0f172a" : "#ffffff" }}
+          >
+            <CloseIcon />
+          </IconButton>
+        </Stack>
+        <DialogContent sx={{ bgcolor: "#ffffff", p: { xs: 1.5, sm: 3 } }}>
+          {flowZoomUrl && (
+            <Box
+              component="img"
+              src={flowZoomUrl}
               alt={`${subtopic.subtopicNumber} ${subtopic.title}`}
               sx={{
                 width: "100%",
