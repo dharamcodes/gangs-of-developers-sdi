@@ -10,31 +10,18 @@
   "difficulty": "Intermediate",
   "keyTakeaways": [
     "Never provision for average QPS: calculate Daily Average -> Peak Diurnal Factor (2x-4x) -> Flash Event Multiplier (2x-5x) -> N-1 AZ Failover Headroom (+50%).",
-    "Separate Storage Capacity (TB), Storage IOPS (random 4KB reads/writes), and Network/Disk Throughput (MB/s sequential scans): any one of the three can be the binding limit.",
+    "Separate Storage Capacity (TB), Storage IOPS (random 4KB reads/writes), and Network/Disk Throughput (MB/s sequential scans), any one of the three can be the binding limit.",
     "Validate mathematical capacity models empirically via Production Shadowing or Controlled Load Tests (Squeeze Testing) that intentionally push single pods to their breaking point to establish true unit capacity."
   ],
-  "architectureDiagram": "100M DAU x 20 req/day = 2.0 Billion req/day\n         |\n         |  (/ 86,400 sec/day ~ 10^5)\n         v\n  [ Average RPS: ~23,000 RPS ]\n         |\n         |  (x 3.0 Peak Diurnal / Evening Factor)\n         v\n  [ Normal Peak: ~70,000 RPS ]\n         |\n         |  (x 1.5 N-1 AZ Loss Headroom + 1.25 Safety Buffer)\n         v\n  [ Provisioned Target Capacity: ~131,250 RPS ]\n         |\n         +---> Compute: 131,250 RPS / 1,500 RPS per 4-vCPU Pod = 88 Pods\n         +---> Network: 131,250 RPS x 4 KB payload = 525 MB/s (4.2 Gbps)\n         +---> Storage: 10% Write (13k WPS) x 1 KB x 86400s = 1.12 TB/day",
+  "architectureDiagram": "  100M DAU x 20 req/day = 2.0 Billion req/day\n         |\n         |  (/ 86,400 sec/day ~ 10^5)\n         v\n  [ Average RPS: ~23,000 RPS ]\n         |\n         |  (x 3.0 Peak Diurnal / Evening Factor)\n         v\n  [ Normal Peak: ~70,000 RPS ]\n         |\n         |  (x 1.5 N-1 AZ Loss Headroom + 1.25 Safety Buffer)\n         v\n  [ Provisioned Target Capacity: ~131,250 RPS ]\n         |\n         +---> Compute: 131,250 RPS / 1,500 RPS per 4-vCPU Pod = 88 Pods\n         +---> Network: 131,250 RPS x 4 KB payload = 525 MB/s (4.2 Gbps)\n         +---> Storage: 10% Write (13k WPS) x 1 KB x 86400s = 1.12 TB/day",
   "sections": [
     {
-      "heading": "1. Architectural Fundamentals & Core Mechanics",
+      "heading": "Back-of-the-Envelope Estimation & Peak Headroom Math",
       "body": "Capacity planning translates product metrics (DAU, retention, media size) into concrete hardware primitives (vCPUs, RAM working-set size, SSD IOPS, and NIC bandwidth). Using powers-of-two approximations and standard constants keeps mental math fast and accurate.",
       "bullets": [
-        "**Core Architectural Principle**: Never provision for average QPS: calculate Daily Average -> Peak Diurnal Factor (2x-4x) -> Flash Event Multiplier (2x-5x) -> N-1 AZ Failover Headroom (+50%).",
-        "**Problem Space & Invariants**: Separate Storage Capacity (TB), Storage IOPS (random 4KB reads/writes), and Network/Disk Throughput (MB/s sequential scans): any one of the three can be the binding limit.",
-        "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-      ],
-      "asciiDiagram": "100M DAU x 20 req/day = 2.0 Billion req/day\n         |\n         |  (/ 86,400 sec/day ~ 10^5)\n         v\n  [ Average RPS: ~23,000 RPS ]\n         |\n         |  (x 3.0 Peak Diurnal / Evening Factor)\n         v\n  [ Normal Peak: ~70,000 RPS ]\n         |\n         |  (x 1.5 N-1 AZ Loss Headroom + 1.25 Safety Buffer)\n         v\n  [ Provisioned Target Capacity: ~131,250 RPS ]\n         |\n         +---> Compute: 131,250 RPS / 1,500 RPS per 4-vCPU Pod = 88 Pods\n         +---> Network: 131,250 RPS x 4 KB payload = 525 MB/s (4.2 Gbps)\n         +---> Storage: 10% Write (13k WPS) x 1 KB x 86400s = 1.12 TB/day"
-    },
-    {
-      "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "Distributed architectures apply specific implementation patterns and topologies for Capacity Planning:",
-      "bullets": [
-        "**Static N+1 Peak Provisioning**: Provides guaranteed instant capacity for flash spikes and az failures; zero auto-scaling cold-start risk. Best suited for Stateful storage clusters (Cassandra, Kafka, Redis), core auth, and latency-critical Tier-0 gateways.",
-        "**Dynamic Elastic Sizing with Spot/Preemptible Pools**: Provides reduces compute spend by 50-70% by matching instance count tightly to hourly demand curves. Best suited for Stateless worker tiers, async media transcoding, CI/CD runners, and ML batch pipelines.",
         "Time & Traffic Constants: $1\\text{ day} = 86,400\\text{s} \\approx 10^5\\text{s}$. Therefore, $100\\text{M requests/day} \\approx 1,000\\text{ RPS average}$. $1\\text{ year} \\approx 3.15 \\times 10^7\\text{s}$.",
-        "Working-Set RAM Sizing (The 20% Rule): You do not need to fit 100 TB of historical rows into Redis/DB Buffer Pool: only the hot active working set (typically the last 24-72 hours or top 15-20% of entities by Pareto distribution).",
-        "Replication & Index Amplification: A single logical user write of 1 KB to a database with 4 secondary B-Tree indexes and 3x replication factor generates $1 \\times (1 + 4) \\times 3 = 15$ physical disk I/O operations!",
-        "IOPS vs Bandwidth Ceiling: A cloud EBS gp3 volume might have plenty of free terabytes, but if it is provisioned for 3,000 IOPS, a burst of 8,000 random 4KB point-reads/sec will throttle disk latency from 1ms to 50ms+."
+        "Working-Set RAM Sizing (The 20% Rule): You do not need to fit 100 TB of historical rows into Redis/DB Buffer Pool, only the hot active working set (typically the last 24-72 hours or top 15-20% of entities by Pareto distribution).",
+        "Squeeze Testing for Unit Capacity: To find how many pods are needed for 100k RPS, isolate a single production pod and ramp shadow traffic until p99 latency breaches SLO (e.g., at 1,800 RPS/pod, 70% CPU). Then divide target peak RPS by the empirically proven safe per-pod limit."
       ],
       "codeSnippet": {
         "title": "Complete System Capacity Sizing Model (Compute, RAM, Storage, Bandwidth)",
@@ -42,31 +29,12 @@
       }
     },
     {
-      "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Production deployments apply Capacity Planning across targeted operational scenarios:",
+      "heading": "Storage IOPS vs Throughput & Replication Amplification",
+      "body": "A common capacity planning mistake is calculating raw disk space (`1 TB/day * 365 = 365 TB/year`) while ignoring **IOPS limits** and **Write Amplification**.",
       "bullets": [
-        "**Where to Use: High-Impact Scenarios**: Optimal for Stateful storage clusters (Cassandra, Kafka, Redis), core auth, and latency-critical Tier-0 gateways, suited for environments requiring Guaranteed instant capacity for flash spikes and AZ failures; zero auto-scaling cold-start risk.",
-        "**Where to Use: High-Throughput Scenarios**: Recommended for Stateless worker tiers, async media transcoding, CI/CD runners, and ML batch pipelines, where Reduces compute spend by 50-70% by matching instance count tightly to hourly demand curves.",
-        "**How to Use: Engineering Implementation**: A common capacity planning mistake is calculating raw disk space (`1 TB/day * 365 = 365 TB/year`) while ignoring **IOPS limits** and **Write Amplification**. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-        "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-      ]
-    },
-    {
-      "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "Improper implementation of Capacity Planning introduces operational bottlenecks and failure modes:",
-      "bullets": [
-        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: cluster runs at 20-35% average utilization during off-peak hours, increasing baseline compute cost.",
-        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: vulnerable to simultaneous spot instance reclamation and auto-scaling lag during vertical spikes.",
-        "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-        "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-      ]
-    },
-    {
-      "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Technical guidelines and evaluation criteria for Capacity Planning:",
-      "bullets": [
-        "**Staff+ Golden Rule**: Validate mathematical capacity models empirically via Production Shadowing or Controlled Load Tests (Squeeze Testing) that intentionally push single pods to their breaking point to establish true unit capacity.",
-        "**Staff+ Interview Playbook**: Structure your interview capacity math into 4 crisp lines: (1) Traffic (Avg & Peak RPS), (2) Bandwidth (Ingress/Egress MB/s), (3) Memory (Hot working set in Redis), and (4) Storage (Daily growth x Replication factor x Retention years): then actively use those numbers to pick your sharding strategy!"
+        "Replication & Index Amplification: A single logical user write of 1 KB to a database with 4 secondary B-Tree indexes and 3x replication factor generates $1 \\times (1 + 4) \\times 3 = 15$ physical disk I/O operations!",
+        "IOPS vs Bandwidth Ceiling: A cloud EBS gp3 volume might have plenty of free terabytes, but if it is provisioned for 3,000 IOPS, a burst of 8,000 random 4KB point-reads/sec will throttle disk latency from 1ms to 50ms+.",
+        "Network Bandwidth Saturation: At 50,000 RPS returning a 50 KB JSON response, outbound egress is $2.5\\text{ GB/s} = 20\\text{ Gbps}$, exceeding the 10 Gbps NIC limit of standard cloud instance types unless payload compression (Zstd/Brotli) or pagination is applied."
       ]
     }
   ],

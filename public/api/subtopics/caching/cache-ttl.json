@@ -10,31 +10,18 @@
   "difficulty": "Foundational",
   "keyTakeaways": [
     "Every cached key should have an explicit Time-To-Live (TTL) as a safety net to bound maximum staleness even if active invalidation fails.",
-    "Synchronized TTLs (e.g., setting 10,000 keys with `EX 3600` during a batch job) cause a Cache Avalanche when all keys expire at the exact same second: always add random jitter.",
+    "Synchronized TTLs (e.g., setting 10,000 keys with `EX 3600` during a batch job) cause a Cache Avalanche when all keys expire at the exact same second, always add random jitter.",
     "Caches reclaim expired keys using a combination of Passive Expiry (on read access) and Active Expiry (probabilistic background sampling)."
   ],
   "architectureDiagram": "WITHOUT JITTER (Cache Avalanche at t=3600s)    WITH RANDOM JITTER (TTL = 3600s + rand(0..600s))\nDB Load ^                                      DB Load ^\n        |          ||                                  |\n        |          ||  <-- 50k keys expire             |        . - ~ ~ - .\n        |          ||      simultaneously!             |    . '             ' .\n        +----------++---------> Time                   +-------------------------> Time\n                 3600s                                       3600s         4200s",
   "sections": [
     {
-      "heading": "1. Architectural Fundamentals & Core Mechanics",
+      "heading": "How Caches Expire Keys Internally (Passive vs Active)",
       "body": "If a Redis instance holds 50 million keys with TTLs, running a timer thread for every key would consume massive CPU. Instead, Redis combines two lightweight strategies: Passive Expiration and Active Probabilistic Expiration.",
       "bullets": [
-        "**Core Architectural Principle**: Every cached key should have an explicit Time-To-Live (TTL) as a safety net to bound maximum staleness even if active invalidation fails.",
-        "**Problem Space & Invariants**: Synchronized TTLs (e.g., setting 10,000 keys with `EX 3600` during a batch job) cause a Cache Avalanche when all keys expire at the exact same second: always add random jitter.",
-        "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-      ],
-      "asciiDiagram": "WITHOUT JITTER (Cache Avalanche at t=3600s)    WITH RANDOM JITTER (TTL = 3600s + rand(0..600s))\nDB Load ^                                      DB Load ^\n        |          ||                                  |\n        |          ||  <-- 50k keys expire             |        . - ~ ~ - .\n        |          ||      simultaneously!             |    . '             ' .\n        +----------++---------> Time                   +-------------------------> Time\n                 3600s                                       3600s         4200s"
-    },
-    {
-      "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "Distributed architectures apply specific implementation patterns and topologies for TTL:",
-      "bullets": [
-        "**Short TTL (e.g., 5–30 seconds)**: Provides minimizes staleness window without requiring complex event-driven cache invalidation. Best suited for High-traffic endpoints where slight staleness is acceptable (e.g., trending lists, live scores).",
-        "**Long TTL + Event-Driven Invalidation + Soft TTL**: Provides maximizes cache hit ratio (>99%) and serves zero-latency reads via stale-while-revalidate. Best suited for Product catalogs, user profiles, and configuration settings.",
         "Passive (Lazy) Expiration: When a client executes `GET key`, Redis checks if the key's expiration timestamp has passed. If expired, it deletes the key immediately and returns `nil`. Caveat: keys that are never read again would sit in RAM forever without active expiry.",
         "Active Probabilistic Sampling: 10 times per second, Redis samples 20 random keys from the set of keys with an associated TTL. It deletes any expired keys found. If >25% of the 20 sampled keys were expired, it repeats the loop immediately.",
-        "Mandatory TTL Jitter: Always compute `ttl = base_ttl + random(0, jitter_window)` on every `SET` operation to spread expirations uniformly over time.",
-        "Tiered TTLs by Volatility: Static reference data = 24h; user profile = 1h; dynamic feed counts = 30s."
+        "Stale-While-Revalidate (Soft TTL vs Hard TTL): Store both a logical 'soft expiry' timestamp inside the JSON payload (e.g., 5 mins) and a physical Redis TTL ('hard expiry', e.g., 60 mins). When a reader sees the soft TTL has passed, it immediately returns the slightly stale cached value while triggering a single background async refresh."
       ],
       "codeSnippet": {
         "title": "Jittered TTL & Soft-TTL (Stale-While-Revalidate) Pattern",
@@ -42,31 +29,12 @@
       }
     },
     {
-      "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Production deployments apply TTL across targeted operational scenarios:",
+      "heading": "Preventing Cache Avalanche via TTL Jitter",
+      "body": "A Cache Avalanche occurs when a large batch of keys is populated at the same moment (for example, after a deployment, cron job, or regional failover) with an identical static TTL like `3600` seconds. Exactly one hour later, all keys vanish simultaneously, funneling 100% of read traffic onto the database.",
       "bullets": [
-        "**Where to Use: High-Impact Scenarios**: Optimal for High-traffic endpoints where slight staleness is acceptable (e.g., trending lists, live scores), suited for environments requiring Minimizes staleness window without requiring complex event-driven cache invalidation.",
-        "**Where to Use: High-Throughput Scenarios**: Recommended for Product catalogs, user profiles, and configuration settings, where Maximizes cache hit ratio (>99%) and serves zero-latency reads via Stale-While-Revalidate.",
-        "**How to Use: Engineering Implementation**: A Cache Avalanche occurs when a large batch of keys is populated at the same moment (for example, after a deployment, cron job, or regional failover) with an identical static TTL like `3600` seconds. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-        "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-      ]
-    },
-    {
-      "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "Improper implementation of TTL introduces operational bottlenecks and failure modes:",
-      "bullets": [
-        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: lower cache hit ratio for long-tail items; higher baseline read load on the database.",
-        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: requires reliable invalidation pipelines (cdc or pub/sub) to clear changed items.",
-        "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-        "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-      ]
-    },
-    {
-      "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Technical guidelines and evaluation criteria for TTL:",
-      "bullets": [
-        "**Staff+ Golden Rule**: Caches reclaim expired keys using a combination of Passive Expiry (on read access) and Active Expiry (probabilistic background sampling).",
-        "**Staff+ Interview Playbook**: Mentioning 'Soft TTL + Hard TTL (Stale-While-Revalidate)' and 'TTL Jitter to prevent Cache Avalanche' is an easy way to stand out when discussing caching layers."
+        "Mandatory TTL Jitter: Always compute `ttl = base_ttl + random(0, jitter_window)` on every `SET` operation to spread expirations uniformly over time.",
+        "Tiered TTLs by Volatility: Static reference data = 24h; user profile = 1h; dynamic feed counts = 30s.",
+        "Mass Expiry CPU Spike: Even in Redis, expiring millions of large keys at the exact same second can block the single-threaded event loop during active expiry; enable `lazyfree-lazy-expire yes` so memory deallocation happens on a background bio thread."
       ]
     }
   ],

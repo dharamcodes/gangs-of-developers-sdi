@@ -11,30 +11,17 @@
   "keyTakeaways": [
     "Relational (SQL) databases enforce schemas on write, support expressive joins, and provide strong ACID transactions out of the box.",
     "NoSQL databases (Key-Value, Document, Wide-Column, Graph) optimize for specific access patterns, horizontal partitionability, and flexible schemas.",
-    "Modern architectures employ polyglot persistence: using PostgreSQL for core ledger/transactional state and DynamoDB/Cassandra for high-throughput telemetry or session state."
+    "Modern architectures employ polyglot persistence, using PostgreSQL for core ledger/transactional state and DynamoDB/Cassandra for high-throughput telemetry or session state."
   ],
   "architectureDiagram": "+--------------------------------------------------------------------+\n|                    POLYGLOT PERSISTENCE LAYER                      |\n+--------------------------------------------------------------------+\n         |                                         |\n         v (Relational / ACID)                     v (High-Scale / Key-Access)\n+-------------------------------+         +-------------------------------+\n|   PostgreSQL / MySQL (SQL)    |         |  DynamoDB / Cassandra (NoSQL) |\n|-------------------------------|         |-------------------------------|\n| - Normalized Tables (3NF)     |         | - Partition Key + Sort Key    |\n| - B+ Tree Storage Engine      |         | - LSM-Tree / Hash Storage     |\n| - Multi-Table Joins & Foreign |         | - Denormalized Single-Table   |\n|   Key Constraints             |         |   Aggregates                  |\n+-------------------------------+         +-------------------------------+",
   "sections": [
     {
-      "heading": "1. Architectural Fundamentals & Core Mechanics",
+      "heading": "Storage Engines & Data Modeling Philosophy",
       "body": "In SQL databases, data is normalized into third normal form (3NF) to eliminate redundancy and maintain referential integrity. You model the domain entities first and write arbitrary ad-hoc queries later. In NoSQL systems like DynamoDB or Apache Cassandra, you must know your exact query access patterns upfront and model data around partition keys and sort keys, often duplicating data across items to serve reads in a single network hop without joins.",
       "bullets": [
-        "**Core Architectural Principle**: Relational (SQL) databases enforce schemas on write, support expressive joins, and provide strong ACID transactions out of the box.",
-        "**Problem Space & Invariants**: NoSQL databases (Key-Value, Document, Wide-Column, Graph) optimize for specific access patterns, horizontal partitionability, and flexible schemas.",
-        "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-      ],
-      "asciiDiagram": "+--------------------------------------------------------------------+\n|                    POLYGLOT PERSISTENCE LAYER                      |\n+--------------------------------------------------------------------+\n         |                                         |\n         v (Relational / ACID)                     v (High-Scale / Key-Access)\n+-------------------------------+         +-------------------------------+\n|   PostgreSQL / MySQL (SQL)    |         |  DynamoDB / Cassandra (NoSQL) |\n|-------------------------------|         |-------------------------------|\n| - Normalized Tables (3NF)     |         | - Partition Key + Sort Key    |\n| - B+ Tree Storage Engine      |         | - LSM-Tree / Hash Storage     |\n| - Multi-Table Joins & Foreign |         | - Denormalized Single-Table   |\n|   Key Constraints             |         |   Aggregates                  |\n+-------------------------------+         +-------------------------------+"
-    },
-    {
-      "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "Distributed architectures apply specific implementation patterns and topologies for SQL vs NoSQL:",
-      "bullets": [
-        "**Relational RDBMS (PostgreSQL / MySQL)**: Provides strict acid guarantees, expressive sql joins, strong constraints, mature tooling. Best suited for Financial ledgers, billing, inventory, and domains with evolving query patterns.",
-        "**Distributed NoSQL (DynamoDB / Cassandra)**: Provides seamless horizontal partitioning, predictable latency at petabyte scale, high write throughput. Best suited for IoT telemetry, chat message history, user activity feeds, and high-scale shopping carts.",
         "Document Stores (MongoDB): Store JSON/BSON documents; ideal when an entity and its nested children are fetched together.",
         "Wide-Column Stores (Cassandra, Bigtable):LSM-tree backed; optimized for massive write throughput and time-series range scans.",
-        "Schema Evolution: SQL `ALTER TABLE` on billion-row tables requires careful online DDL tools (e.g., `gh-ost`), whereas NoSQL enforces schema-on-read in application code.",
-        "Secondary Indexes: Global secondary indexes in NoSQL are usually updated asynchronously, meaning index reads are eventually consistent."
+        "Key-Value Stores (DynamoDB, Redis): O(1) hash lookup by primary key with predictable single-digit millisecond latency."
       ],
       "codeSnippet": {
         "title": "SQL Normalized Join vs NoSQL Single-Table Design",
@@ -42,31 +29,12 @@
       }
     },
     {
-      "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Production deployments apply SQL vs NoSQL across targeted operational scenarios:",
+      "heading": "Scaling Characteristics & Consistency Boundaries",
+      "body": "Traditional RDBMS engines were designed for single-node vertical scaling with shared-disk memory architectures. While NewSQL systems (CockroachDB, Google Spanner) add distributed consensus over relational SQL, they incur cross-node coordination latency. Native NoSQL systems shard automatically via consistent hashing, trading multi-key serializability for linear horizontal write scalability.",
       "bullets": [
-        "**Where to Use: High-Impact Scenarios**: Optimal for Financial ledgers, billing, inventory, and domains with evolving query patterns, suited for environments requiring Strict ACID guarantees, expressive SQL joins, strong constraints, mature tooling.",
-        "**Where to Use: High-Throughput Scenarios**: Recommended for IoT telemetry, chat message history, user activity feeds, and high-scale shopping carts, where Seamless horizontal partitioning, predictable latency at petabyte scale, high write throughput.",
-        "**How to Use: Engineering Implementation**: Traditional RDBMS engines were designed for single-node vertical scaling with shared-disk memory architectures. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-        "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-      ]
-    },
-    {
-      "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "Improper implementation of SQL vs NoSQL introduces operational bottlenecks and failure modes:",
-      "bullets": [
-        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: horizontal write scaling (sharding) requires manual application routing or middleware.",
-        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: no native joins, rigid access patterns, eventual consistency pitfalls on secondary indexes.",
-        "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-        "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-      ]
-    },
-    {
-      "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Technical guidelines and evaluation criteria for SQL vs NoSQL:",
-      "bullets": [
-        "**Staff+ Golden Rule**: Modern architectures employ polyglot persistence: using PostgreSQL for core ledger/transactional state and DynamoDB/Cassandra for high-throughput telemetry or session state.",
-        "**Staff+ Interview Playbook**: Never justify NoSQL in an interview simply by saying 'we have a lot of data.' PostgreSQL easily handles terabytes of data. Justify NoSQL by pointing to specific write throughput requirements (e.g., 200k writes/sec) or strictly key-value/partitioned access patterns."
+        "Schema Evolution: SQL `ALTER TABLE` on billion-row tables requires careful online DDL tools (e.g., `gh-ost`), whereas NoSQL enforces schema-on-read in application code.",
+        "Secondary Indexes: Global secondary indexes in NoSQL are usually updated asynchronously, meaning index reads are eventually consistent.",
+        "Impedance Mismatch: Document databases map directly to in-memory object graphs, avoiding complex ORM hydration."
       ]
     }
   ],

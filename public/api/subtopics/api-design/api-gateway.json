@@ -16,58 +16,26 @@
   "architectureDiagram": "[ iOS / Android ]      [ Web SPA ]         [ 3rd Party Devs ]\n                           |                      /\n         v                  v                     v\n+----------------------------------------------------------------+\n|                  EDGE API GATEWAY (Envoy / Kong)               |\n|  [1. TLS Termination] -> [2. WAF / DDoS] -> [3. Rate Limiter]  |\n|  [4. JWT Signature Auth] -> [5. Protocol Translation JSON->gRPC]|\n+----------------------------------------------------------------+\n         |                         |                      |\n         v                         v                      v\n  [ Mobile BFF ]            [ Order Svc ]          [ Search Svc ]",
   "sections": [
     {
-      "heading": "1. Architectural Fundamentals & Core Mechanics",
+      "heading": "The 6 Core Responsibilities of an API Gateway",
       "body": "Without an API Gateway, every single client app (iOS, Android, Web) would need to know the hostnames of 50 internal microservices, and every single microservice team would have to re-implement TLS termination, OAuth JWT validation, IP rate limiting, CORS headers, and access logging across 5 different programming languages. An API Gateway (such as Kong, AWS API Gateway, Envoy, or Apigee) consolidates these cross-cutting edge concerns into a hardened, horizontally scaled proxy tier.",
       "bullets": [
-        "**Core Architectural Principle**: An API Gateway is the single L7 entry point for external clients, offloading cross-cutting concerns (AuthN, Rate Limiting, WAF, TLS, Observability) from internal microservices.",
-        "**Problem Space & Invariants**: The **Backend-for-Frontend (BFF)** pattern deploys tailored gateway layers per client type (Mobile BFF vs Web BFF vs Public API) to optimize payload shapes and aggregation.",
-        "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-      ],
-      "asciiDiagram": "[ iOS / Android ]      [ Web SPA ]         [ 3rd Party Devs ]\n                           |                      /\n         v                  v                     v\n+----------------------------------------------------------------+\n|                  EDGE API GATEWAY (Envoy / Kong)               |\n|  [1. TLS Termination] -> [2. WAF / DDoS] -> [3. Rate Limiter]  |\n|  [4. JWT Signature Auth] -> [5. Protocol Translation JSON->gRPC]|\n+----------------------------------------------------------------+\n         |                         |                      |\n         v                         v                      v\n  [ Mobile BFF ]            [ Order Svc ]          [ Search Svc ]",
-      "diagramImageUrl": "/diagrams/arch-api-gateway.svg"
-    },
-    {
-      "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "Distributed architectures apply specific implementation patterns and topologies for API Gateway:",
-      "bullets": [
-        "**Single Centralized API Gateway (Kong / Envoy / AWS API GW)**: Provides uniform security, rate limiting, tls, and observability across the entire company; simple single domain (`api.company.com`) for clients. Best suited for Cross-cutting edge security, routing, rate limiting, and public developer APIs.",
-        "**Edge Gateway + Client-Specific BFFs (Mobile BFF, Web BFF)**: Provides frontend and mobile teams iterate autonomously on payload aggregation; reduces chatty mobile round-trips over cellular networks. Best suited for Organizations with distinct Web, iOS/Android, TV, and Public API experiences consuming a large microservice fleet.",
         "1. Authentication Offload: Validates the client's JWT signature (using cached JWKS public keys) at the edge and forwards verified internal identity headers (`X-User-Id`, `X-Tenant-Id`) or an internal token to upstream services.",
         "2. Rate Limiting & Quota Enforcement: Enforces per-tenant and per-IP token buckets before malicious traffic reaches internal compute.",
-        "Mobile BFF: Strips unnecessary fields, merges 4 internal gRPC calls via `Promise.allSettled()`, and formats payloads for mobile UI components.",
-        "Partial Failure Resilience: If the internal Recommendation Service times out during BFF aggregation, the BFF still returns 200 OK with the user's orders and an empty `recommendations: []` fallback array."
+        "3. Dynamic Routing & Canary Releases: Routes `/v1/orders` to the Order Service and shifts 5% of traffic to `orders-v2` canary pods.",
+        "4. Protocol Translation: Accepts external HTTP/JSON or GraphQL and transcodes it into high-speed internal gRPC calls."
       ],
       "codeSnippet": {
         "title": "API Gateway Edge Pipeline Execution Order",
         "code": "export async function apiGatewayPipeline(req: IncomingHttpRequest): Promise<HttpResponse> {\n  const traceId = req.headers[\"x-request-id\"] ?? crypto.randomUUID();\n\n  // 1. IP & WAF Check (Cheapest check first!)\n  if (wafBlockedIpSet.has(req.clientIp)) return { status: 403, body: \"Forbidden\" };\n\n  // 2. Authentication (Verify RS256/EdDSA JWT locally using cached public key - 0 DB calls!)\n  const claims = verifyJwtLocally(req.headers[\"authorization\"], cachedJwksPublicKeys);\n  if (!claims) return { status: 401, body: \"Unauthorized\" };\n\n  // 3. Per-Tenant Distributed Rate Limit\n  const allowed = await checkTokenBucket(claims.sub, claims.tier);\n  if (!allowed) return { status: 429, body: \"Too Many Requests\" };\n\n  // 4. Route & Forward with verified identity context + Distributed Trace Header\n  return forwardToUpstreamService(req, {\n    \"x-trace-id\": traceId,\n    \"x-authenticated-user-id\": claims.sub,\n    \"x-tenant-scopes\": claims.scopes.join(\",\"),\n  });\n}"
-      }
+      },
+      "diagramImageUrl": "/diagrams/arch-api-gateway.svg"
     },
     {
-      "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Production deployments apply API Gateway across targeted operational scenarios:",
+      "heading": "The Backend-for-Frontend (BFF) Pattern",
+      "body": "A mobile app on a 3G connection wants a single compact endpoint (`GET /mobile/home-screen`) that aggregates user profile, unread notification count, and top 5 feed items in 2KB. Meanwhile, a desktop web dashboard wants rich 50-field tables. Instead of bloating one generic gateway, teams build specialized **Backend-for-Frontend (BFF)** services owned by the respective frontend/mobile teams, sitting just behind the edge routing gateway.",
       "bullets": [
-        "**Where to Use: High-Impact Scenarios**: Optimal for Cross-cutting edge security, routing, rate limiting, and public developer APIs, suited for environments requiring Uniform security, rate limiting, TLS, and observability across the entire company; simple single domain (`api.company.com`) for clients.",
-        "**Where to Use: High-Throughput Scenarios**: Recommended for Organizations with distinct Web, iOS/Android, TV, and Public API experiences consuming a large microservice fleet, where Frontend and mobile teams iterate autonomously on payload aggregation; reduces chatty mobile round-trips over cellular networks.",
-        "**How to Use: Engineering Implementation**: A mobile app on a 3G connection wants a single compact endpoint (`GET /mobile/home-screen`) that aggregates user profile, unread notification count, and top 5 feed items in 2KB. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-        "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-      ]
-    },
-    {
-      "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "Improper implementation of API Gateway introduces operational bottlenecks and failure modes:",
-      "bullets": [
-        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: adds an extra network hop (~1-2ms); can become a deployment bottleneck if teams put custom business logic or complex transformations inside it.",
-        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: some duplication of aggregation code across web bff and mobile bff; more deployables to monitor.",
-        "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-        "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-      ]
-    },
-    {
-      "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Technical guidelines and evaluation criteria for API Gateway:",
-      "bullets": [
-        "**Staff+ Golden Rule**: Never put heavy business logic or synchronous cross-service orchestration loops inside a monolithic shared API Gateway, or it becomes an organizational bottleneck and SPOF.",
-        "**Staff+ Interview Playbook**: When placing an API Gateway in your architecture diagram, explicitly list the **exact order of operations** it performs: (1) TLS Termination -> (2) IP/WAF Filter -> (3) JWT Auth Validation -> (4) Rate Limiting -> (5) L7 Routing."
+        "Mobile BFF: Strips unnecessary fields, merges 4 internal gRPC calls via `Promise.allSettled()`, and formats payloads for mobile UI components.",
+        "Partial Failure Resilience: If the internal Recommendation Service times out during BFF aggregation, the BFF still returns 200 OK with the user's orders and an empty `recommendations: []` fallback array."
       ]
     }
   ],

@@ -10,31 +10,18 @@
   "difficulty": "Intermediate",
   "keyTakeaways": [
     "Active-Passive funnels all writes through a single Primary node/region while replicating state to one or more Standby nodes, preserving strict ACID serializability without multi-master write conflicts.",
-    "Split-brain: where an isolated old primary continues accepting writes after a standby is promoted: is the most dangerous failure mode and must be prevented using Quorum Leases and Monotonic Fencing Tokens.",
+    "Split-brain, where an isolated old primary continues accepting writes after a standby is promoted, is the most dangerous failure mode and must be prevented using Quorum Leases and Monotonic Fencing Tokens.",
     "Passive standbys suffer from 'cold cache' and 'untested path' risks; regular automated failover game-days and read-traffic shadowing are mandatory to prove RTO targets."
   ],
-  "architectureDiagram": "[ Consensus / Lease Coordinator ]\n                     (Issues Fencing Token: Epoch #42)\n                        /                         \\\n       (Lease Expired) /                           \\ (Promoted: Epoch #43)\n                      v                             v\n           +-------------------+           +-------------------+\n           | Old Primary (A)   |  WAL Log  | New Primary (B)   |\n           | (Stale Epoch #42) | --X-----> | (Active Epoch #43)|\n           +---------+---------+           +---------+---------+\n                     |                               |\n      Write(Epoch 42)|                               | Write(Epoch 43)\n                     v                               v\n           +---------------------------------------------------+\n           | Shared Storage / Downstream Consumer              |\n           | Max Seen Epoch = 43 -> REJECTS Epoch #42 (Fenced) |\n           +---------------------------------------------------+",
+  "architectureDiagram": "                     [ Consensus / Lease Coordinator ]\n                     (Issues Fencing Token: Epoch #42)\n                        /                         \\\n       (Lease Expired) /                           \\ (Promoted: Epoch #43)\n                      v                             v\n           +-------------------+           +-------------------+\n           | Old Primary (A)   |  WAL Log  | New Primary (B)   |\n           | (Stale Epoch #42) | --X-----> | (Active Epoch #43)|\n           +---------+---------+           +---------+---------+\n                     |                               |\n      Write(Epoch 42)|                               | Write(Epoch 43)\n                     v                               v\n           +---------------------------------------------------+\n           | Shared Storage / Downstream Consumer              |\n           | Max Seen Epoch = 43 -> REJECTS Epoch #42 (Fenced) |\n           +---------------------------------------------------+",
   "sections": [
     {
-      "heading": "1. Architectural Fundamentals & Core Mechanics",
+      "heading": "Primary-Standby Replication & The Split-Brain Hazard",
       "body": "In an Active-Passive architecture, a single authoritative Primary orders all state mutations and streams a Write-Ahead Log (WAL) or binlog to Passive Standby instances. While passive nodes may serve read-only queries, all writes are serialized through the primary.",
       "bullets": [
-        "**Core Architectural Principle**: Active-Passive funnels all writes through a single Primary node/region while replicating state to one or more Standby nodes, preserving strict ACID serializability without multi-master write conflicts.",
-        "**Problem Space & Invariants**: Split-brain: where an isolated old primary continues accepting writes after a standby is promoted: is the most dangerous failure mode and must be prevented using Quorum Leases and Monotonic Fencing Tokens.",
-        "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-      ],
-      "asciiDiagram": "[ Consensus / Lease Coordinator ]\n                     (Issues Fencing Token: Epoch #42)\n                        /                         \\\n       (Lease Expired) /                           \\ (Promoted: Epoch #43)\n                      v                             v\n           +-------------------+           +-------------------+\n           | Old Primary (A)   |  WAL Log  | New Primary (B)   |\n           | (Stale Epoch #42) | --X-----> | (Active Epoch #43)|\n           +---------+---------+           +---------+---------+\n                     |                               |\n      Write(Epoch 42)|                               | Write(Epoch 43)\n                     v                               v\n           +---------------------------------------------------+\n           | Shared Storage / Downstream Consumer              |\n           | Max Seen Epoch = 43 -> REJECTS Epoch #42 (Fenced) |\n           +---------------------------------------------------+"
-    },
-    {
-      "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "Distributed architectures apply specific implementation patterns and topologies for Active-Passive:",
-      "bullets": [
-        "**Hot Standby (Fully Scaled & Warmed)**: Provides failover completes in seconds to a few minutes; standby immediately sustains 100% peak load. Best suited for Relational databases (Postgres/MySQL), financial ledgers, and Tier-1 stateful services.",
-        "**Warm / Cold Standby (Scaled Down Until Failover)**: Provides saves 60-80% on secondary compute infrastructure costs during normal operations. Best suited for Tier-2/Tier-3 enterprise apps, internal workflows, and non-realtime reporting systems.",
         "Synchronous vs Asynchronous Standby: Synchronous standbys guarantee zero data loss (RPO = 0) at the cost of write latency; asynchronous standbys (common across WAN regions) decouple primary latency but risk losing in-flight transactions on crash.",
         "Anatomy of Split-Brain: If a network partition isolates the Primary from the health checker (or the Primary pauses for a 15-second JVM GC), the orchestrator promotes the Standby. If the old Primary wakes up and still processes client writes, two nodes corrupt state simultaneously.",
-        "Flapping vs Fast Failover: Setting health-check timeouts too aggressively (e.g., 1 second) causes false-positive failovers ('flapping') during minor network jitter, whereas conservative timeouts (60 seconds) lengthen downtime.",
-        "DNS Caching Pitfalls: Relying on DNS record updates for failover is unreliable because corporate resolvers and JVM HTTP clients often ignore 60s TTLs. Prefer Anycast VIPs, proxy routing (PgBouncer/ProxySQL), or smart client SDKs that probe cluster topology."
+        "STONITH & Fencing Tokens: True safety requires monotonically increasing epoch numbers (`fencing_token`) issued by a Raft/Paxos coordinator. Storage engines and downstream consumers reject any write carrying an epoch lower than the highest seen epoch."
       ],
       "codeSnippet": {
         "title": "Storage Fencing Check to Prevent Split-Brain Corruption",
@@ -42,31 +29,12 @@
       }
     },
     {
-      "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Production deployments apply Active-Passive across targeted operational scenarios:",
+      "heading": "Failover Detection Tuning, DNS TTLs, and Cold-Start Traps",
+      "body": "The total failover time (RTO) in Active-Passive is the sum of Failure Detection Time + Standby Catch-up/Promotion Time + Client Traffic Re-routing Time.",
       "bullets": [
-        "**Where to Use: High-Impact Scenarios**: Optimal for Relational databases (Postgres/MySQL), financial ledgers, and Tier-1 stateful services, suited for environments requiring Failover completes in seconds to a few minutes; standby immediately sustains 100% peak load.",
-        "**Where to Use: High-Throughput Scenarios**: Recommended for Tier-2/Tier-3 enterprise apps, internal workflows, and non-realtime reporting systems, where Saves 60-80% on secondary compute infrastructure costs during normal operations.",
-        "**How to Use: Engineering Implementation**: The total failover time (RTO) in Active-Passive is the sum of Failure Detection Time + Standby Catch-up/Promotion Time + Client Traffic Re-routing Time. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-        "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-      ]
-    },
-    {
-      "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "Improper implementation of Active-Passive introduces operational bottlenecks and failure modes:",
-      "bullets": [
-        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: doubles compute and memory licensing costs for hardware sitting mostly idle (or serving only reads).",
-        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: rto extends to 15-60+ minutes while cloud auto-scaling provisions nodes and warms caches.",
-        "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-        "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-      ]
-    },
-    {
-      "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Technical guidelines and evaluation criteria for Active-Passive:",
-      "bullets": [
-        "**Staff+ Golden Rule**: Passive standbys suffer from 'cold cache' and 'untested path' risks; regular automated failover game-days and read-traffic shadowing are mandatory to prove RTO targets.",
-        "**Staff+ Interview Playbook**: Never say 'we just use a heartbeat to detect primary failure and promote the replica' without mentioning **Fencing Tokens** or **Quorum Leases** to prevent split-brain when the old primary only suffered an asymmetric network partition."
+        "Flapping vs Fast Failover: Setting health-check timeouts too aggressively (e.g., 1 second) causes false-positive failovers ('flapping') during minor network jitter, whereas conservative timeouts (60 seconds) lengthen downtime.",
+        "DNS Caching Pitfalls: Relying on DNS record updates for failover is unreliable because corporate resolvers and JVM HTTP clients often ignore 60s TTLs. Prefer Anycast VIPs, proxy routing (PgBouncer/ProxySQL), or smart client SDKs that probe cluster topology.",
+        "Cold Buffer Pool Degradation: A passive database standby whose RAM buffer pool is not warm with the working set will suffer 10x disk I/O latency spikes the moment production traffic switches over."
       ]
     }
   ],

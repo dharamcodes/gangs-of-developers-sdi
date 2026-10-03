@@ -16,25 +16,12 @@
   "architectureDiagram": "Producer Pipelining WITHOUT Idempotence:\nBatch 1 (Seq 1) ----[Network Timeout / Retry]----> Appended 2nd (OUT OF ORDER!)\nBatch 2 (Seq 2) ----[Succeeds Immediately]-------> Appended 1st\n\nProducer Pipelining WITH enable.idempotence=true:\nBatch 1 (PID:9, Seq:0) ---[Timeout / Retry]------> Appended as Seq 0 (STRICT ORDER!)\nBatch 2 (PID:9, Seq:1) ---[Rejected until Seq 0]-> Appended as Seq 1",
   "sections": [
     {
-      "heading": "1. Architectural Fundamentals & Core Mechanics",
+      "heading": "Partition-Level Ordering & Idempotent Producers",
       "body": "Maintaining strict event ordering across a distributed log requires coordination at three layers: routing, producer transport, and consumer execution. First, causally related events (e.g., `AccountCreated`, `BalanceCredited`, `BalanceDebited`) must share the same partition key so they land in the same partition. Second, on the producer side, if `max.in.flight.requests.per.connection` is greater than 1 and Batch 1 fails transiently while Batch 2 succeeds, retrying Batch 1 would normally append it after Batch 2. Enabling `enable.idempotence=true` assigns a Producer ID (PID) and monotonic Sequence Numbers to each batch, allowing the broker to reject out-of-order batches and deduplicate retries.",
       "bullets": [
-        "**Core Architectural Principle**: Kafka guarantees total ordering ONLY within a single partition, never across multiple partitions of a topic.",
-        "**Problem Space & Invariants**: Without `enable.idempotence=true`, pipelined producer retries (`max.in.flight.requests.per.connection > 1`) can reorder batches on transient network failures.",
-        "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-      ],
-      "asciiDiagram": "Producer Pipelining WITHOUT Idempotence:\nBatch 1 (Seq 1) ----[Network Timeout / Retry]----> Appended 2nd (OUT OF ORDER!)\nBatch 2 (Seq 2) ----[Succeeds Immediately]-------> Appended 1st\n\nProducer Pipelining WITH enable.idempotence=true:\nBatch 1 (PID:9, Seq:0) ---[Timeout / Retry]------> Appended as Seq 0 (STRICT ORDER!)\nBatch 2 (PID:9, Seq:1) ---[Rejected until Seq 0]-> Appended as Seq 1"
-    },
-    {
-      "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "Distributed architectures apply specific implementation patterns and topologies for Ordering:",
-      "bullets": [
-        "**Single-Threaded Per-Partition Consumption**: Provides trivial to reason about; preserves exact partition log order with zero in-memory coordination. Best suited for Low-latency local processing or Kafka Streams topologies with sufficient partition count.",
-        "**Key-Hashed Worker Pool Inside Consumer**: Provides achieves high concurrency per partition while strictly preserving order for any single message key. Best suited for I/O-heavy consumers (calling external REST APIs or DBs) where partition count cannot be easily increased.",
         "Idempotent producers preserve strict ordering with up to 5 in-flight requests per broker connection.",
         "Cross-partition global ordering is impossible at scale without collapsing the topic to 1 partition or using a downstream windowed sort.",
-        "To parallelize processing within a single partition without losing order, route records to keyed in-memory worker queues (`hash(key) % numWorkerThreads`).",
-        "If strict per-key ordering is mandatory during failures, block on the partition or track 'blocked keys' in a state store and divert subsequent events for the same key to the retry stream."
+        "Clock skew makes client-side timestamps unreliable for strict ordering; rely on log offsets within a partition for causal sequence."
       ],
       "codeSnippet": {
         "title": "Idempotent Producer Configuration for Strict Per-Key Ordering",
@@ -42,31 +29,12 @@
       }
     },
     {
-      "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Production deployments apply Ordering across targeted operational scenarios:",
+      "heading": "Preserving Ordering on the Consumer Side",
+      "body": "Even if records sit in perfect order inside a partition, consumers frequently break ordering accidentally. If a consumer fetches a batch of 500 records from Partition 0 and dispatches them concurrently to an uncoordinated worker thread pool (`Promise.all`), fast tasks will finish before slow tasks for the same key. Similarly, if a failed message is sent to an asynchronous retry topic while the consumer continues reading the main partition, subsequent updates for that entity will overtake the failed event.",
       "bullets": [
-        "**Where to Use: High-Impact Scenarios**: Optimal for Low-latency local processing or Kafka Streams topologies with sufficient partition count, suited for environments requiring Trivial to reason about; preserves exact partition log order with zero in-memory coordination.",
-        "**Where to Use: High-Throughput Scenarios**: Recommended for I/O-heavy consumers (calling external REST APIs or DBs) where partition count cannot be easily increased, where Achieves high concurrency per partition while strictly preserving order for any single message key.",
-        "**How to Use: Engineering Implementation**: Even if records sit in perfect order inside a partition, consumers frequently break ordering accidentally. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-        "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-      ]
-    },
-    {
-      "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "Improper implementation of Ordering introduces operational bottlenecks and failure modes:",
-      "bullets": [
-        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: throughput per partition is bottlenecked by synchronous downstream i/o latency.",
-        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: complicates offset committing because offsets complete out-of-order across different keys.",
-        "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-        "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-      ]
-    },
-    {
-      "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Technical guidelines and evaluation criteria for Ordering:",
-      "bullets": [
-        "**Staff+ Golden Rule**: Multi-threaded consumption within a single partition breaks ordering unless threads are partitioned by key in memory.",
-        "**Staff+ Interview Playbook**: Always mention `enable.idempotence=true` (along with `max.in.flight.requests.per.connection <= 5` and `acks=all`) when asked how to prevent message reordering and duplication during network blips."
+        "To parallelize processing within a single partition without losing order, route records to keyed in-memory worker queues (`hash(key) % numWorkerThreads`).",
+        "If strict per-key ordering is mandatory during failures, block on the partition or track 'blocked keys' in a state store and divert subsequent events for the same key to the retry stream.",
+        "Use sequential version numbers (`entity_version`) in the payload so the downstream DB can reject stale out-of-order writes via optimistic concurrency (`WHERE version = incoming_version - 1`)."
       ]
     }
   ],

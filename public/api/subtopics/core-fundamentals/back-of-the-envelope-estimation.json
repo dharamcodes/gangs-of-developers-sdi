@@ -9,32 +9,19 @@
   "readingTime": "8 min read",
   "difficulty": "Foundational",
   "keyTakeaways": [
-    "There are ~86,400 seconds in a day: always round to `100,000 (10^5)` seconds/day for mental math, and multiply average QPS by `2x–3x` for peak QPS.",
+    "There are ~86,400 seconds in a day, always round to `100,000 (10^5)` seconds/day for mental math, and multiply average QPS by `2x–3x` for peak QPS.",
     "Memorize latency orders of magnitude: L1/RAM is nanoseconds, SSD is ~100 microseconds, Intra-DC network is ~0.5 milliseconds, Cross-Continent is ~150 milliseconds.",
     "The goal of estimation is not arithmetic perfection; it is proving whether your data fits in a single node's RAM (64GB) or requires sharding across 50 nodes."
   ],
   "architectureDiagram": "LATENCY HIERARCHY (Orders of Magnitude)\n[ CPU / L1-L2 Cache ]  ~ 1 - 5 ns         (Instant)\n[ Main Memory (RAM) ]  ~ 100 ns           (0.1 us)\n[ NVMe SSD Random Read]~ 100 us           (0.1 ms)\n[ Same-AZ Network RTT ]~ 500 us           (0.5 ms)\n[ Cross-US Network RTT]~ 70,000 us        (70 ms)\n[ Global Packet RTT   ]~ 150,000 us       (150 ms)\n\nDAILY VOLUME -> QPS SHORTCUT\n100M requests/day  ÷  100,000 sec/day  =  1,000 Avg QPS  (Peak ~ 2,500 QPS)",
   "sections": [
     {
-      "heading": "1. Architectural Fundamentals & Core Mechanics",
+      "heading": "Golden Constants and Shortcuts for Mental Math",
       "body": "During a system design interview, spending 8 minutes doing long division wastes precious architecture time. Instead, convert every number into scientific notation (`10^N`) and use standardized approximations. Every estimation should answer three architectural questions: (1) What is our read/write QPS? (2) How much storage do we accumulate over 5 years? (3) How much cache memory and network bandwidth do we need?",
       "bullets": [
-        "**Core Architectural Principle**: There are ~86,400 seconds in a day: always round to `100,000 (10^5)` seconds/day for mental math, and multiply average QPS by `2x–3x` for peak QPS.",
-        "**Problem Space & Invariants**: Memorize latency orders of magnitude: L1/RAM is nanoseconds, SSD is ~100 microseconds, Intra-DC network is ~0.5 milliseconds, Cross-Continent is ~150 milliseconds.",
-        "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-      ],
-      "asciiDiagram": "LATENCY HIERARCHY (Orders of Magnitude)\n[ CPU / L1-L2 Cache ]  ~ 1 - 5 ns         (Instant)\n[ Main Memory (RAM) ]  ~ 100 ns           (0.1 us)\n[ NVMe SSD Random Read]~ 100 us           (0.1 ms)\n[ Same-AZ Network RTT ]~ 500 us           (0.5 ms)\n[ Cross-US Network RTT]~ 70,000 us        (70 ms)\n[ Global Packet RTT   ]~ 150,000 us       (150 ms)\n\nDAILY VOLUME -> QPS SHORTCUT\n100M requests/day  ÷  100,000 sec/day  =  1,000 Avg QPS  (Peak ~ 2,500 QPS)"
-    },
-    {
-      "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "Distributed architectures apply specific implementation patterns and topologies for Back-of-the-Envelope Estimation:",
-      "bullets": [
-        "**Upfront Full Capacity Estimation (Before Drawing)**: Provides establishes global scale constraints early, prevents designing a toy architecture for a planetary problem. Best suited for Storage-heavy or bandwidth-heavy prompts (YouTube, Dropbox, Twitter Feed, Web Crawler, Metrics System).",
-        "**Just-in-Time (JIT) Scoped Estimation (During Deep Dive)**: Provides saves time upfront, calculates numbers only where needed to justify sharding or caching a specific bottleneck. Best suited for Workflow-heavy or state-machine prompts (Uber Ride Matching, Payment System, Ticketmaster, Rate Limiter).",
         "Time Shortcuts: `1 day ≈ 10^5 seconds` (86,400) | `1 month ≈ 2.5 × 10^6 seconds` | `1 year ≈ 3 × 10^7 seconds`.",
         "Volume Powers of 10: `10^3 = 1 KB` | `10^6 = 1 MB` | `10^9 = 1 GB` | `10^12 = 1 TB` | `10^15 = 1 PB`.",
-        "If Hot Working Set = 40 GB -> 'This fits inside a single 64GB Redis cluster shard; we don't need complex cache sharding.'",
-        "If Write QPS = 80,000/sec -> 'A single Postgres leader caps out around 15k writes/sec, so we MUST shard by `user_id` across at least 8 shards or use Cassandra.'"
+        "Single Node Rule-of-Thumb: 1 Redis node = ~100k QPS | 1 SQL Primary = ~10k write QPS / 30k read QPS | 1 App Server = ~5k-10k QPS."
       ],
       "codeSnippet": {
         "title": "Worked Example: Capacity Estimation for a URL Shortener (100M DAU)",
@@ -42,31 +29,12 @@
       }
     },
     {
-      "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Production deployments apply Back-of-the-Envelope Estimation across targeted operational scenarios:",
+      "heading": "Tying Numbers Directly to Design Decisions",
+      "body": "Interviewers hate 'disconnected math', calculating 3.2 TB of storage and then never mentioning it again. Every single number you compute must immediately justify an architectural component choice.",
       "bullets": [
-        "**Where to Use: High-Impact Scenarios**: Optimal for Storage-heavy or bandwidth-heavy prompts (YouTube, Dropbox, Twitter Feed, Web Crawler, Metrics System), suited for environments requiring Establishes global scale constraints early, prevents designing a toy architecture for a planetary problem.",
-        "**Where to Use: High-Throughput Scenarios**: Recommended for Workflow-heavy or state-machine prompts (Uber Ride Matching, Payment System, Ticketmaster, Rate Limiter), where Saves time upfront, calculates numbers only where needed to justify sharding or caching a specific bottleneck.",
-        "**How to Use: Engineering Implementation**: Interviewers hate 'disconnected math': calculating 3.2 TB of storage and then never mentioning it again. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-        "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-      ]
-    },
-    {
-      "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "Improper implementation of Back-of-the-Envelope Estimation introduces operational bottlenecks and failure modes:",
-      "bullets": [
-        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: can eat up 5-7 minutes of interview time on arithmetic before any boxes are drawn.",
-        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: risk of realizing halfway through the design that your chosen database cannot handle the write qps.",
-        "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-        "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-      ]
-    },
-    {
-      "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Technical guidelines and evaluation criteria for Back-of-the-Envelope Estimation:",
-      "bullets": [
-        "**Staff+ Golden Rule**: The goal of estimation is not arithmetic perfection; it is proving whether your data fits in a single node's RAM (64GB) or requires sharding across 50 nodes.",
-        "**Staff+ Interview Playbook**: Always state your rounding assumptions out loud ('I'll approximate 86,400 seconds/day as 100,000 to keep the math clean') and end your estimation with a 1-sentence architectural verdict."
+        "If Hot Working Set = 40 GB -> 'This fits inside a single 64GB Redis cluster shard; we don't need complex cache sharding.'",
+        "If Write QPS = 80,000/sec -> 'A single Postgres leader caps out around 15k writes/sec, so we MUST shard by `user_id` across at least 8 shards or use Cassandra.'",
+        "If Media Ingress = 5 GB/sec -> 'Our API servers shouldn't proxy 40 Gbps of raw video bytes; clients must upload directly to S3 via Presigned URLs.'"
       ]
     }
   ],

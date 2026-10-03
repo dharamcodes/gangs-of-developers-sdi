@@ -13,61 +13,29 @@
     "Requires a minimum request volume threshold (`minimumNumberOfCalls`) in the sliding window before tripping to avoid false positives at low QPS.",
     "Failing fast in `OPEN` state protects caller thread pools and relieves load on the struggling downstream service."
   ],
-  "architectureDiagram": "[ Failure Rate >= 50% (over min 20 calls) ]\n          +---------------------------------------------------------+\n          |                                                         v\n+--------------------+                                    +--------------------+\n|       CLOSED       |                                    |        OPEN        |\n| (Calls pass thru)  |                                    | (Fail fast / Cache)|\n+--------------------+                                    +--------------------+\n          ^                                                         |\n          |       +--------------------+                            |\n          +-------|     HALF-OPEN      | <--------------------------+\n    [ N Probes    | (Allow N trial reqs|      [ Wait Duration Elapsed (e.g. 15s) ]\n      Succeed ]   |  Fail -> back OPEN)|\n                  +--------------------+",
+  "architectureDiagram": "                  [ Failure Rate >= 50% (over min 20 calls) ]\n          +---------------------------------------------------------+\n          |                                                         v\n+--------------------+                                    +--------------------+\n|       CLOSED       |                                    |        OPEN        |\n| (Calls pass thru)  |                                    | (Fail fast / Cache)|\n+--------------------+                                    +--------------------+\n          ^                                                         |\n          |       +--------------------+                            |\n          +-------|     HALF-OPEN      | <--------------------------+\n    [ N Probes    | (Allow N trial reqs|      [ Wait Duration Elapsed (e.g. 15s) ]\n      Succeed ]   |  Fail -> back OPEN)|\n                  +--------------------+",
   "sections": [
     {
-      "heading": "1. Architectural Fundamentals & Core Mechanics",
+      "heading": "State Machine Mechanics (`CLOSED`, `OPEN`, `HALF-OPEN`)",
       "body": "When a downstream service is completely down or experiencing severe latency degradation, continuing to send requests, even with a 1-second timeout, ties up caller threads for 1 full second per request and bombards the recovering service. Modeled after electrical breakers, a **Circuit Breaker** monitors a sliding window of recent outcomes (errors and slow calls). When the failure or slow-call rate breaches a threshold, the breaker trips to `OPEN` and rejects all calls in sub-microsecond time without touching the network.",
       "bullets": [
-        "**Core Architectural Principle**: A Circuit Breaker wraps outbound calls in a three-state machine: `CLOSED` (normal), `OPEN` (short-circuit fail fast), and `HALF-OPEN` (trial probes).",
-        "**Problem Space & Invariants**: Requires a minimum request volume threshold (`minimumNumberOfCalls`) in the sliding window before tripping to avoid false positives at low QPS.",
-        "**System Boundary**: Operates across client network dispatch, gateway queuing, thread execution pools, and persistent storage I/O."
-      ],
-      "diagramImageUrl": "/diagrams/arch-circuit-breaker.svg",
-      "asciiDiagram": "[ Failure Rate >= 50% (over min 20 calls) ]\n          +---------------------------------------------------------+\n          |                                                         v\n+--------------------+                                    +--------------------+\n|       CLOSED       |                                    |        OPEN        |\n| (Calls pass thru)  |                                    | (Fail fast / Cache)|\n+--------------------+                                    +--------------------+\n          ^                                                         |\n          |       +--------------------+                            |\n          +-------|     HALF-OPEN      | <--------------------------+\n    [ N Probes    | (Allow N trial reqs|      [ Wait Duration Elapsed (e.g. 15s) ]\n      Succeed ]   |  Fail -> back OPEN)|\n                  +--------------------+"
-    },
-    {
-      "heading": "2. Architectural Patterns & Implementation Topologies",
-      "body": "Distributed architectures apply specific implementation patterns and topologies for Circuit Breaker:",
-      "bullets": [
-        "**Local Per-Pod In-Memory Circuit Breaker (Resilience4j / Envoy)**: Provides zero external coordination latency; resilient even if redis/control plane is down. Best suited for 99% of production microservice deployments and service mesh sidecars.",
-        "**Distributed Shared Circuit Breaker (Redis-Backed)**: Provides instantaneous fleet-wide protection once aggregate failure threshold is crossed. Best suited for Protecting strict external third-party API quotas across hundreds of ephemeral serverless workers.",
         "**CLOSED**: Requests flow normally. A ring buffer or sliding time window tracks error rate and slow-call rate.",
         "**OPEN**: All calls immediately throw `CircuitBreakerOpenError` or invoke a fallback (e.g., stale cache). A cooldown timer (`waitDurationInOpenState`) runs.",
-        "Scope circuit breakers per `(service, endpoint_group)` or per downstream shard/AZ rather than globally.",
-        "Track **Slow Call Rate** (e.g., calls taking > 800ms) in addition to exceptions so gray failures trip the breaker before timeouts pile up."
+        "**HALF-OPEN**: Once cooldown expires, the breaker allows a tiny fixed number of probe requests (e.g., 5 calls). If they succeed, it transitions to `CLOSED`; if any fail, it snaps immediately back to `OPEN`."
       ],
       "codeSnippet": {
         "title": "Sliding Window Circuit Breaker State Machine",
         "code": "class CircuitBreaker {\n  private state: \"CLOSED\" | \"OPEN\" | \"HALF_OPEN\" = \"CLOSED\";\n  private openedAt = 0;\n  private failures = 0;\n  private total = 0;\n\n  async execute<T>(fn: () => Promise<T>, fallback: () => T): Promise<T> {\n    if (this.state === \"OPEN\") {\n      if (Date.now() - this.openedAt > 15_000) this.state = \"HALF_OPEN\";\n      else return fallback();\n    }\n    try {\n      const result = await fn();\n      if (this.state === \"HALF_OPEN\") this.reset();\n      return result;\n    } catch (err) {\n      this.recordFailure();\n      return fallback();\n    }\n  }\n  private recordFailure() {\n    this.failures++; this.total++;\n    if (this.state === \"HALF_OPEN\" || (this.total >= 20 && this.failures / this.total >= 0.5)) {\n      this.state = \"OPEN\"; this.openedAt = Date.now();\n    }\n  }\n  private reset() { this.state = \"CLOSED\"; this.failures = 0; this.total = 0; }\n}"
-      }
+      },
+      "diagramImageUrl": "/diagrams/arch-circuit-breaker.svg"
     },
     {
-      "heading": "3. Production Strengths: Where & How to Apply",
-      "body": "Production deployments apply Circuit Breaker across targeted operational scenarios:",
+      "heading": "Granularity & Sliding Window Tuning",
+      "body": "A poorly scoped circuit breaker can cause wider outages than the bug it tries to contain. If a client uses a single circuit breaker per downstream hostname, and one specific API endpoint (`/reports/heavy`) starts timing out, tripping the breaker will block fast, healthy endpoints (`/auth/verify`) on the same host. Similarly, if a multi-tenant service fails for a single corrupt tenant, tripping a global breaker causes an outage for all tenants.",
       "bullets": [
-        "**Where to Use: High-Impact Scenarios**: Optimal for 99% of production microservice deployments and service mesh sidecars, suited for environments requiring Zero external coordination latency; resilient even if Redis/control plane is down.",
-        "**Where to Use: High-Throughput Scenarios**: Recommended for Protecting strict external third-party API quotas across hundreds of ephemeral serverless workers, where Instantaneous fleet-wide protection once aggregate failure threshold is crossed.",
-        "**How to Use: Engineering Implementation**: A poorly scoped circuit breaker can cause wider outages than the bug it tries to contain. Always establish explicit thresholds, measurement baselines, and automated monitoring.",
-        "**Architectural Leverage**: Provides predictable resource boundaries, bounds blast radius, and optimizes cost per transaction."
-      ]
-    },
-    {
-      "heading": "4. Failure Modes & Trade-Offs: When to Avoid",
-      "body": "Improper implementation of Circuit Breaker introduces operational bottlenecks and failure modes:",
-      "bullets": [
-        "**Where to Avoid: Trade-Off Bottlenecks**: Avoid when constraints cannot tolerate: each of n caller pods must independently experience failures before opening its local breaker.",
-        "**Where to Avoid: Complexity Ceiling**: Avoid when operational requirements do not justify: adds network hop to every rpc call and creates a single point of failure on the redis cluster.",
-        "**Catastrophic Failure Modes**: Uncalibrated parameters can trigger queue exhaustion, thread starvation, cascading retry storms, and tail latency amplification.",
-        "**Operational Overhead**: Requires continuous observability (p95/p99 latency tracking, saturation alerts, and distributed tracing across hop boundaries)."
-      ]
-    },
-    {
-      "heading": "5. Staff+ Engineering Verdict & Interview Playbook",
-      "body": "Technical guidelines and evaluation criteria for Circuit Breaker:",
-      "bullets": [
-        "**Staff+ Golden Rule**: Failing fast in `OPEN` state protects caller thread pools and relieves load on the struggling downstream service.",
-        "**Staff+ Interview Playbook**: Explain how **Timeouts**, **Retries**, and **Circuit Breakers** compose together: each individual attempt has a **Timeout**, failed attempts are **Retried** with jittered backoff, and the **Circuit Breaker** wraps the calls so when the downstream is down, neither timeouts nor retries run."
+        "Scope circuit breakers per `(service, endpoint_group)` or per downstream shard/AZ rather than globally.",
+        "Track **Slow Call Rate** (e.g., calls taking > 800ms) in addition to exceptions so gray failures trip the breaker before timeouts pile up.",
+        "Always configure `minimumNumberOfCalls` (e.g., 20 requests in a 10s window) so 1 failure out of 2 off-peak requests doesn't trip a 50% threshold."
       ]
     }
   ],
