@@ -1,1272 +1,2571 @@
- 
+/* eslint-disable @typescript-eslint/no-require-imports */
 
 const BEHAVIORAL_PATTERNS = {
-  id: "behavioral-patterns",
-  topicNumber: 3,
-  title: "3. Behavioral Patterns",
-  description: "Algorithms, communication, and assignment of responsibilities between objects: Chain of Responsibility, Command, Interpreter, Iterator, Mediator, Memento, Observer, State, Strategy, Template Method, and Visitor.",
-  subtopics: [
+  "id": "behavioral-patterns",
+  "topicNumber": 3,
+  "title": "3. Behavioral Patterns",
+  "description": "Algorithms, communication, and assignment of responsibilities between objects: Strategy, Observer, Command, Template Method, Iterator, State, Chain of Responsibility, Mediator, Memento, Visitor, and Interpreter.",
+  "subtopics": [
     {
-      id: "chain-of-responsibility",
-      subtopicNumber: "3.1",
-      title: "Chain of Responsibility Pattern",
-      subtitle: "Passes requests along a chain of handlers; upon receiving a request, each handler decides either to process it or pass it to the next handler.",
-      readingTime: "7 min read",
-      difficulty: "Foundational",
-      accent: "#38bdf8",
-      keyTakeaways: [
+      "id": "strategy",
+      "subtopicNumber": "3.1",
+      "title": "Strategy Pattern",
+      "subtitle": "Defines a family of algorithms, encapsulates each one, and makes them interchangeable at runtime.",
+      "readingTime": "8 min read",
+      "difficulty": "Foundational",
+      "accent": "#38bdf8",
+      "keyTakeaways": [
+        "Replaces giant conditional switch statements with clean object composition, upholding the Open/Closed Principle.",
+        "Allows swapping algorithms (sorting, payment processing, routing, compression) dynamically at runtime based on caller parameters.",
+        "Modern languages can represent stateless strategies cleanly as first-class functions or lambdas."
+      ],
+      "sections": [
+        {
+          "heading": "1. Architectural Intent: Eliminating Conditional Branch Hell via Algorithmic Polymorphism",
+          "body": "When an application needs to execute different variations of an algorithm depending on runtime context (such as calculating shipping fees via FedEx, UPS, or DHL, or charging via Stripe, PayPal, or Crypto), naive implementations rely on sprawling 'switch' or 'if-else' statements. Every new payment provider requires modifying the core billing service, risking regression bugs. The Strategy pattern extracts each algorithm into a standalone class implementing a common interface.",
+          "bullets": [
+            "Open/Closed Principle: Introduce new algorithm strategies without altering existing context or client classes.",
+            "Single Responsibility Principle: Isolates algorithm-specific calculation and dependencies away from the context orchestrator.",
+            "Composition Over Inheritance: Swaps behaviors dynamically at runtime via dependency injection rather than locking behavior into static subclass hierarchies."
+          ]
+        },
+        {
+          "heading": "2. Runtime Strategy Swapping & Execution Lifecycle",
+          "body": "The Context class maintains a private reference to the Strategy interface. When client code invokes a business operation on the Context, the Context simply forwards execution to its configured strategy. The client can swap strategies on the fly (e.g., switching from HighSpeedDelivery to EconomyDelivery when a customer changes their shopping cart options).",
+          "bullets": [
+            "Dynamic Polymorphic Dispatch: The context operates purely against the interface abstraction.",
+            "Strategy Parameterization: The context can pass itself ('this') or specific parameters into the strategy method to supply necessary calculation data.",
+            "Stateless vs Stateful Strategies: Stateless strategies can be shared concurrently across multiple contexts as Singletons or lambdas; stateful strategies require per-context instantiation."
+          ]
+        },
+        {
+          "heading": "3. Failure Modes: State Bleed Across Concurrent Invocations & Lambda Anti-Patterns",
+          "body": "A dangerous bug in multi-threaded environments arises when a developer introduces mutable state into a shared strategy instance. If Strategy A is injected as a singleton into multiple concurrent worker threads and mutates an internal counter or buffer during execute(), threads will corrupt each other's calculations. Strategies must either be completely stateless or thread-confined.",
+          "bullets": [
+            "Shared Mutable State Corruption: Always design strategy classes as immutable or stateless records when sharing across threads.",
+            "Context-Strategy Coupling: If the strategy method requires 20 arguments from the context, or if it queries internal private fields of the context, the boundary is flawed.",
+            "Class Explosion: If algorithms are trivial one-liners, creating dozens of distinct class files adds unnecessary clutter; prefer first-class function references in modern languages."
+          ]
+        },
+        {
+          "heading": "4. Production Blueprint: Enterprise Dynamic Payment & Routing Engine in Java 21",
+          "body": "The following production Java implementation showcases an enterprise Payment Orchestration engine leveraging Strategy with modern switch expressions and thread-safe stateless strategies.",
+          "bullets": [
+            "PaymentStrategy Contract: Clean interface returning immutable payment outcomes.",
+            "PaymentContext: Selects and executes strategies dynamically based on customer payment methods."
+          ],
+          "codeSnippet": {
+            "title": "Production Payment Strategy Engine in Java 21",
+            "code": "public interface PaymentStrategy {\n    PaymentOutcome execute(BigDecimal amount, String currency, String customerId);\n    String getProviderName();\n}\n\npublic record PaymentOutcome(boolean success, String transactionId, String message) {}\n\n// Strategy 1: Credit Card\npublic class StripeCreditCardStrategy implements PaymentStrategy {\n    @Override public PaymentOutcome execute(BigDecimal amount, String currency, String customerId) {\n        System.out.printf(\"[Stripe] Charging %s %s to customer %s%n\", amount, currency, customerId);\n        return new PaymentOutcome(true, \"ch_\" + UUID.randomUUID(), \"Stripe charge approved\");\n    }\n    @Override public String getProviderName() { return \"STRIPE\"; }\n}\n\n// Strategy 2: PayPal\npublic class PayPalWalletStrategy implements PaymentStrategy {\n    @Override public PaymentOutcome execute(BigDecimal amount, String currency, String customerId) {\n        System.out.printf(\"[PayPal] Direct debit of %s %s for %s%n\", amount, currency, customerId);\n        return new PaymentOutcome(true, \"pp_\" + UUID.randomUUID(), \"PayPal debit settled\");\n    }\n    @Override public String getProviderName() { return \"PAYPAL\"; }\n}\n\n// Context Class\npublic class PaymentCheckoutContext {\n    private PaymentStrategy strategy;\n\n    public PaymentCheckoutContext(PaymentStrategy defaultStrategy) {\n        this.strategy = Objects.requireNonNull(defaultStrategy);\n    }\n\n    public void setStrategy(PaymentStrategy strategy) {\n        this.strategy = Objects.requireNonNull(strategy);\n    }\n\n    public PaymentOutcome processCheckout(BigDecimal total, String currency, String customerId) {\n        System.out.println(\"[Checkout] Delegating to: \" + strategy.getProviderName());\n        return strategy.execute(total, currency, customerId);\n    }\n}"
+          }
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Strategy Pattern",
+          "pros": "Eliminates branching logic, enables runtime algorithmic swapping, adheres strictly to Open/Closed.",
+          "cons": "Clients must understand the differences between available strategies to pick the correct one.",
+          "bestFor": "Payment processing, sorting algorithms, compression codecs, discount calculators."
+        },
+        {
+          "option": "Conditional If/Else Statements",
+          "pros": "Trivial to write; all calculation logic visible in one place without multiple files.",
+          "cons": "Violates Open/Closed; high cyclomatic complexity; testing requires large brittle test cases.",
+          "bestFor": "Small scripts with 1-2 unchanging algorithmic variations."
+        },
+        {
+          "option": "Subclassing / Template Method",
+          "pros": "Reuses shared skeleton code through inheritance.",
+          "cons": "Cannot change algorithm dynamically at runtime once the subclass is instantiated.",
+          "bestFor": "Static algorithms that do not need to be swapped during execution."
+        }
+      ],
+      "interviewTip": "In interviews, cite Java's `Comparator.comparing()` and `Collections.sort(list, comparator)` as the canonical standard library example of Strategy. Emphasize that in modern Java and TypeScript, Strategy can often be implemented elegantly using lambdas or functional interfaces rather than heavyweight boilerplate classes.",
+      "ascii": "+-------------------------------------------------------------------------+\n|                         STRATEGY UML CLASS MODEL                        |\n+-------------------------------------------------------------------------+\n   +-----------------------------+               +-----------------------------+\n   |       CheckoutService       |               |        <<interface>>        |\n   |          (Context)          |  has-a ---->  |       PricingStrategy       |\n   +-----------------------------+               +-----------------------------+\n   | - strategy: PricingStrategy |               | + calculate(cents): long    |\n   | + setStrategy(s: Strategy)  |               +--------------^--------------+\n   | + calculateTotal(): long    |                              |\n   +-----------------------------+               +--------------+--------------+\n                                                 |                             |\n                                  +--------------+--------------+     +--------+--------+\n                                  |    VipDiscountStrategy      |     | BlackFridayStrat|\n                                  +-----------------------------+     +-----------------+\n                                  | + calculate(): 20% off      |     | + calculate():  |\n                                  +-----------------------------+     |   50% off       |\n                                                                      +-----------------+",
+      "blockNodes": [
+        {
+          "x": 50,
+          "y": 120,
+          "w": 250,
+          "h": 140,
+          "stereotype": "context",
+          "title": "PaymentService (Context)",
+          "stroke": "#38bdf8",
+          "lines": [
+            "- strategy: PaymentStrategy",
+            "+ setStrategy(s)",
+            "+ process(amount: long)"
+          ],
+          "tag": "Context"
+        },
+        {
+          "x": 550,
+          "y": 110,
+          "w": 260,
+          "h": 140,
+          "stereotype": "interface",
+          "title": "PaymentStrategy",
+          "stroke": "#10b981",
+          "lines": [
+            "+ pay(amountInCents: long): void"
+          ],
+          "tag": "Strategy Interface"
+        },
+        {
+          "x": 420,
+          "y": 320,
+          "w": 220,
+          "h": 130,
+          "stereotype": "concrete-strat",
+          "title": "CreditCardPayment",
+          "stroke": "#f59e0b",
+          "lines": [
+            "+ pay(): authorize Visa/MC"
+          ],
+          "tag": "Strategy A"
+        },
+        {
+          "x": 670,
+          "y": 320,
+          "w": 220,
+          "h": 130,
+          "stereotype": "concrete-strat",
+          "title": "CryptoPayment",
+          "stroke": "#a855f7",
+          "lines": [
+            "+ pay(): verify blockchain"
+          ],
+          "tag": "Strategy B"
+        }
+      ],
+      "blockConns": [
+        {
+          "d": "M 300 170 L 550 170",
+          "lx": 425,
+          "ly": 155,
+          "label": "delegates to"
+        },
+        {
+          "d": "M 530 320 L 630 250",
+          "lx": 570,
+          "ly": 285,
+          "label": "implements"
+        },
+        {
+          "d": "M 780 320 L 710 250",
+          "lx": 755,
+          "ly": 285,
+          "label": "implements"
+        }
+      ],
+      "flowNodes": [
+        {
+          "x": 50,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "1",
+          "title": "User Selects Payment",
+          "stroke": "#38bdf8",
+          "lines": [
+            "User clicks \"Pay with Crypto\"",
+            "Client instantiates CryptoStrategy",
+            "Injected into Context"
+          ]
+        },
+        {
+          "x": 280,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "2",
+          "title": "Service Execution",
+          "stroke": "#10b981",
+          "lines": [
+            "Context calls strategy.pay()",
+            "Context has zero crypto logic",
+            "Pure polymorphic dispatch"
+          ]
+        },
+        {
+          "x": 520,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "3",
+          "title": "Dynamic Switch",
+          "stroke": "#f59e0b",
+          "lines": [
+            "Payment fails / user switches",
+            "Swaps to CreditCardStrategy",
+            "No redeployment or restart"
+          ]
+        },
+        {
+          "x": 760,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "4",
+          "title": "Success Confirmation",
+          "stroke": "#a855f7",
+          "lines": [
+            "Card transaction completes",
+            "Receipt dispatched to caller",
+            "Complete algorithm isolation"
+          ]
+        }
+      ],
+      "flowConns": [
+        {
+          "d": "M 250 200 L 280 200",
+          "lx": 265,
+          "ly": 190,
+          "label": "inject"
+        },
+        {
+          "d": "M 490 200 L 520 200",
+          "lx": 505,
+          "ly": 190,
+          "label": "execute"
+        },
+        {
+          "d": "M 730 200 L 760 200",
+          "lx": 745,
+          "ly": 190,
+          "label": "re-try"
+        }
+      ]
+    },
+    {
+      "id": "observer",
+      "subtopicNumber": "3.2",
+      "title": "Observer Pattern",
+      "subtitle": "Defines a one-to-many dependency between objects so that when one object changes state, all its dependents are notified automatically.",
+      "readingTime": "9 min read",
+      "difficulty": "Foundational",
+      "accent": "#10b981",
+      "keyTakeaways": [
+        "Establishes a publish-subscribe communication contract where subjects notify any number of observer objects upon state changes.",
+        "The subject has zero knowledge of concrete observer implementations, maintaining clean loose coupling.",
+        "Fundamental to GUI event listeners (onClick), distributed Pub/Sub message queues, and Reactive programming streams (RxJava, Project Reactor)."
+      ],
+      "sections": [
+        {
+          "heading": "1. Architectural Intent: Decoupling State Changes from Dependent Notifications (1-to-N)",
+          "body": "In complex systems, when an entity undergoes a significant state transition (e.g. an Order transitions from PENDING to PAID), multiple downstream subsystems must react: the inventory service must reserve stock, the notification service must email the customer, and the analytics pipeline must log the conversion event. Hardcoding calls to these subsystems directly inside the Order entity couples it catastrophically. The Observer pattern establishes a clean 1-to-many publish-subscribe relationship.",
+          "bullets": [
+            "Loose Coupling: The publisher subject maintains a list of abstract Observer interfaces, remaining completely agnostic to who is listening.",
+            "Open/Closed Principle: New subscriber observers can be registered dynamically at runtime without altering the publisher class.",
+            "Broadcast Communication: A single event broadcast automatically fans out to all active subscribers."
+          ]
+        },
+        {
+          "heading": "2. Synchronous vs Asynchronous Dispatch & Event Bus Mechanics",
+          "body": "A critical architectural consideration in Observer implementations is execution concurrency. In naive in-process Observer models, the publisher loops through observers synchronously on the caller's thread: if Observer 3 takes 5 seconds to send an email, the entire checkout request hangs for 5 seconds! Production architectures decouple notification dispatch using background worker pools or asynchronous message channels.",
+          "bullets": [
+            "Synchronous Dispatch: Fastest for in-memory GUI events, but susceptible to cascading thread blockages.",
+            "Asynchronous Event Bus: Offloads observer notifications to a thread pool (ExecutorService) or messaging broker (Kafka/RabbitMQ), returning immediately to the caller.",
+            "Push vs Pull Model: In the Push model, the subject sends detailed event payload DTOs to observers; in the Pull model, it sends only a lightweight notification, and observers query the subject for details."
+          ]
+        },
+        {
+          "heading": "3. Failure Modes: The Lapsed Listener Problem, Memory Leaks & Event Storms",
+          "body": "The 'Lapsed Listener' problem is the #1 source of memory leaks in long-running object-oriented applications. When an observer registers with a long-lived subject, the subject holds a strong reference to the observer. If the observer is discarded by the application but forgets to explicitly call subject.removeObserver(), the Garbage Collector cannot reclaim the observer, resulting in steady heap memory exhaustion.",
+          "bullets": [
+            "Lapsed Listener Memory Leaks: Solved by using WeakReference collections or auto-closable subscriptions.",
+            "Unbounded Notification Order: Observers must never depend on execution order; subject notifications are order-agnostic.",
+            "Cascading Event Storms: If Observer A reacts to an event by mutating Subject B, which triggers an event that mutates Subject A, an infinite notification storm crashes the system."
+          ]
+        },
+        {
+          "heading": "4. Production Blueprint: High-Throughput Thread-Safe Event Broker in Java 21",
+          "body": "The following production Java implementation demonstrates a thread-safe Event Publisher supporting typed events, copy-on-write subscriber safety, and weak-reference leak protection.",
+          "bullets": [
+            "EventObserver Interface: Strongly typed subscriber contract.",
+            "ThreadSafeEventPublisher: Utilizes CopyOnWriteArrayList for lock-free iteration during concurrent publish operations."
+          ],
+          "codeSnippet": {
+            "title": "Production Thread-Safe Observer Broker in Java 21",
+            "code": "public interface OrderEventListener {\n    void onOrderPaid(String orderId, BigDecimal amount);\n}\n\n// Concrete Observer 1: Email Notification Service\npublic class EmailNotificationListener implements OrderEventListener {\n    @Override public void onOrderPaid(String orderId, BigDecimal amount) {\n        System.out.printf(\"[Email Service] Dispatched receipt for order %s ($%s)%n\", orderId, amount);\n    }\n}\n\n// Concrete Observer 2: Warehouse Fulfillment Service\npublic class WarehouseFulfillmentListener implements OrderEventListener {\n    @Override public void onOrderPaid(String orderId, BigDecimal amount) {\n        System.out.printf(\"[Warehouse] Packing order %s for shipping%n\", orderId);\n    }\n}\n\n// Thread-Safe Subject Publisher\npublic class OrderEventPublisher {\n    // CopyOnWriteArrayList ensures thread-safe iteration without locking during publish\n    private final List<OrderEventListener> listeners = new CopyOnWriteArrayList<>();\n\n    public void subscribe(OrderEventListener listener) {\n        listeners.add(Objects.requireNonNull(listener));\n    }\n\n    public void unsubscribe(OrderEventListener listener) {\n        listeners.remove(listener);\n    }\n\n    public void notifyOrderPaid(String orderId, BigDecimal amount) {\n        System.out.println(\"[Publisher] Broadcasting order payment event...\");\n        for (OrderEventListener listener : listeners) {\n            try {\n                listener.onOrderPaid(orderId, amount);\n            } catch (Exception ex) {\n                // Prevent one failing listener from crashing other subscribers\n                System.err.printf(\"[Publisher Error] Listener %s failed: %s%n\", \n                    listener.getClass().getSimpleName(), ex.getMessage());\n            }\n        }\n    }\n}"
+          }
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Observer Pattern (In-Memory)",
+          "pros": "Decouples publisher from subscribers; dynamic subscription lifecycle; instant in-process notification.",
+          "cons": "Can lead to Lapsed Listener memory leaks; synchronous iteration can degrade publisher throughput.",
+          "bestFor": "GUI frameworks, internal domain event dispatchers, reactive data binding."
+        },
+        {
+          "option": "Distributed Event Broker (Kafka / RabbitMQ)",
+          "pros": "Full process isolation, persistent message durability, massive horizontal scale across clusters.",
+          "cons": "Requires external cluster infrastructure, network latency, eventual consistency challenges.",
+          "bestFor": "Microservices communication, high-volume event ingestion, asynchronous background processing."
+        },
+        {
+          "option": "Direct Method Invocation",
+          "pros": "Immediate synchronous execution, trivial to debug, zero indirection.",
+          "cons": "Extreme tight coupling; adding a new subscriber requires editing the core publishing class.",
+          "bestFor": "Point-to-point interactions with strictly one known consumer."
+        }
+      ],
+      "interviewTip": "In interviews, always bring up the 'Lapsed Listener' problem when discussing Observer: 'If a client subscribes to a singleton publisher and fails to unsubscribe when destroyed, the publisher's internal list prevents garbage collection of the client. In production, we guard against this using WeakReferences, RxJava Disposable handles, or AutoCloseable subscription scopes.'",
+      "ascii": "+-------------------------------------------------------------------------+\n|                         OBSERVER UML CLASS MODEL                        |\n+-------------------------------------------------------------------------+\n   +-----------------------------+               +-----------------------------+\n   |        <<interface>>        |               |        <<interface>>        |\n   |           Subject           |  notifies --> |           Observer          |\n   +-----------------------------+               +-----------------------------+\n   | + attach(o: Observer): void |               | + update(event): void       |\n   | + detach(o: Observer): void |               +--------------^--------------+\n   | + notifyObservers(): void   |                              |\n   +--------------^--------------+               +--------------+--------------+\n                  |                              |                             |\n   +--------------+--------------+     +---------+----------+       +----------+---------+\n   |         StockTicker         |     |   MobileAppDisplay |       |   EmailAlertSubscriber |\n   +-----------------------------+     +--------------------+       +--------------------+\n   | - price: BigDecimal         |     | + update(): render |       | + update(): send   |\n   +-----------------------------+     +--------------------+       +--------------------+",
+      "blockNodes": [
+        {
+          "x": 50,
+          "y": 110,
+          "w": 260,
+          "h": 140,
+          "stereotype": "subject",
+          "title": "MarketSubject",
+          "stroke": "#10b981",
+          "lines": [
+            "- observers: List<Observer>",
+            "+ attach(o) / detach(o)",
+            "+ notifyObservers(event)"
+          ],
+          "tag": "Subject"
+        },
+        {
+          "x": 550,
+          "y": 110,
+          "w": 260,
+          "h": 140,
+          "stereotype": "observer",
+          "title": "Observer<T>",
+          "stroke": "#38bdf8",
+          "lines": [
+            "+ onUpdate(event: T): void"
+          ],
+          "tag": "Observer Interface"
+        },
+        {
+          "x": 420,
+          "y": 320,
+          "w": 220,
+          "h": 130,
+          "stereotype": "concrete-obs",
+          "title": "TradingBotObserver",
+          "stroke": "#f59e0b",
+          "lines": [
+            "+ onUpdate(): evaluate RSI",
+            "  -> trigger automated order"
+          ],
+          "tag": "Concrete Obs A"
+        },
+        {
+          "x": 670,
+          "y": 320,
+          "w": 220,
+          "h": 130,
+          "stereotype": "concrete-obs",
+          "title": "PushNotifierObserver",
+          "stroke": "#ef4444",
+          "lines": [
+            "+ onUpdate(): dispatch APNS",
+            "  -> mobile push alert"
+          ],
+          "tag": "Concrete Obs B"
+        }
+      ],
+      "blockConns": [
+        {
+          "d": "M 310 170 L 550 170",
+          "lx": 430,
+          "ly": 155,
+          "label": "notifies"
+        },
+        {
+          "d": "M 530 320 L 630 250",
+          "lx": 570,
+          "ly": 285,
+          "label": "implements"
+        },
+        {
+          "d": "M 780 320 L 710 250",
+          "lx": 755,
+          "ly": 285,
+          "label": "implements"
+        }
+      ],
+      "flowNodes": [
+        {
+          "x": 50,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "1",
+          "title": "Price Change Event",
+          "stroke": "#10b981",
+          "lines": [
+            "Stock price jumps to $195",
+            "StockTicker state mutates",
+            "Calls notifyObservers()"
+          ]
+        },
+        {
+          "x": 280,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "2",
+          "title": "Broadcast Iteration",
+          "stroke": "#38bdf8",
+          "lines": [
+            "Iterates subscriber list",
+            "Calls observer.onUpdate()",
+            "Non-blocking notification"
+          ]
+        },
+        {
+          "x": 520,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "3",
+          "title": "Algorithmic Bot",
+          "stroke": "#f59e0b",
+          "lines": [
+            "Trading bot executes order",
+            "Buys 100 shares in 2ms",
+            "Independent processing"
+          ]
+        },
+        {
+          "x": 760,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "4",
+          "title": "Mobile Notification",
+          "stroke": "#ef4444",
+          "lines": [
+            "Apple Push Notification sent",
+            "User phone vibrates",
+            "Subject completely decoupled"
+          ]
+        }
+      ],
+      "flowConns": [
+        {
+          "d": "M 250 200 L 280 200",
+          "lx": 265,
+          "ly": 190,
+          "label": "publish"
+        },
+        {
+          "d": "M 490 200 L 520 200",
+          "lx": 505,
+          "ly": 190,
+          "label": "dispatch"
+        },
+        {
+          "d": "M 730 200 L 760 200",
+          "lx": 745,
+          "ly": 190,
+          "label": "notify"
+        }
+      ]
+    },
+    {
+      "id": "command",
+      "subtopicNumber": "3.3",
+      "title": "Command Pattern",
+      "subtitle": "Encapsulates a request as an object, thereby letting you parameterize clients with different requests, queue or log requests, and support undoable operations.",
+      "readingTime": "9 min read",
+      "difficulty": "Intermediate",
+      "accent": "#f59e0b",
+      "keyTakeaways": [
+        "Turns method calls and business requests into standalone first-class objects containing all necessary execution parameters.",
+        "Enables multi-level Undo/Redo stacks, scheduled task queues, deferred execution, and distributed Saga rollbacks.",
+        "The foundational design pattern powering Command Query Responsibility Segregation (CQRS) and transactional outbox engines."
+      ],
+      "sections": [
+        {
+          "heading": "1. Architectural Intent: Encapsulating Requests as First-Class Objects",
+          "body": "In standard object-oriented programming, invoking an action requires direct method calls (receiver.doSomething()). However, this binds the invoker tightly to the receiver and executes immediately. When you need to defer execution, queue tasks in background threads, log commands for crash recovery, or provide multi-step Undo/Redo, the action itself must become a first-class citizen: an object that can be stored, serialized, and passed around.",
+          "bullets": [
+            "Encapsulates All Execution Context: A Command object encapsulates the receiver reference, method to call, and parameter arguments.",
+            "Decouples Invoker from Receiver: A UI button or HTTP queue worker executes commands polymorphically without knowing what business operations they perform.",
+            "Enables Schedulers & Queues: Commands can be pushed into thread-safe priority queues and executed at a later time by worker pools."
+          ]
+        },
+        {
+          "heading": "2. Macro Commands, Invocation Decoupling & Multi-Level Undo Stacks",
+          "body": "Because commands are objects, they can be stacked, grouped, and reversed. A MacroCommand (Composite Command) holds a list of sub-commands and executes them sequentially as a batch transaction. For Undo operations, the Command interface defines both execute() and undo(). An Invoker maintains an undo stack: after executing a command, it pushes it onto the stack; when the user hits Ctrl+Z, the invoker pops the last command and calls undo().",
+          "bullets": [
+            "Atomic Inverse Operations: Each command knows how to revert its own specific mutation.",
+            "State Snapshotting: Commands can capture previous receiver state before executing to guarantee flawless undo restoration.",
+            "Asynchronous Execution: Commands can be persisted to disk (WAL) and replayed upon system crash recovery."
+          ]
+        },
+        {
+          "heading": "3. Failure Modes: Memory Exhaustion in Undo Stacks & Distributed Saga Rollbacks",
+          "body": "While simple in theory, Command implementations face critical failure modes at enterprise scale. If an undo stack stores commands indefinitely without a maximum depth limit (e.g., max 100 entries), heap memory will quickly blow up. In distributed microservice systems, commands that cross network boundaries cannot be simply undone via in-memory stacks; they require Compensating Transactions within a Saga orchestrator.",
+          "bullets": [
+            "Unbounded Undo Memory Leaks: Always enforce a bounded ring-buffer (CircularFifoQueue) on undo stacks.",
+            "Non-Reversible Actions: Irreversible external side-effects (e.g. sending a physical SMS or charging a non-refundable credit card) cannot be strictly undone; they require semantic compensation.",
+            "Class Proliferation: Creating a dedicated class for every single minor user action can result in hundreds of boilerplate command classes unless lambda commands are used."
+          ]
+        },
+        {
+          "heading": "4. Production Blueprint: Enterprise Transactional Ledger with Undo/Redo in Java 21",
+          "body": "The following production Java implementation demonstrates an enterprise Banking Ledger with undoable commands, bounded history stacks, and idempotent execution.",
+          "bullets": [
+            "TransactionCommand Interface: Defines both execute() and undo() contracts.",
+            "LedgerManager Invoker: Manages bounded undo and redo stacks with thread-safe collections."
+          ],
+          "codeSnippet": {
+            "title": "Production Transactional Command Ledger in Java 21",
+            "code": "public interface TransactionCommand {\n    void execute();\n    void undo();\n    String getDescription();\n}\n\n// Receiver Object\npublic class BankAccount {\n    private final String accountId;\n    private long balanceCents;\n\n    public BankAccount(String accountId, long initialBalanceCents) {\n        this.accountId = accountId;\n        this.balanceCents = initialBalanceCents;\n    }\n\n    public void credit(long cents) { balanceCents += cents; }\n    public void debit(long cents) { balanceCents -= cents; }\n    public long getBalanceCents() { return balanceCents; }\n}\n\n// Concrete Command: Deposit\npublic class DepositCommand implements TransactionCommand {\n    private final BankAccount account;\n    private final long amountCents;\n\n    public DepositCommand(BankAccount account, long amountCents) {\n        this.account = account;\n        this.amountCents = amountCents;\n    }\n\n    @Override public void execute() { account.credit(amountCents); }\n    @Override public void undo() { account.debit(amountCents); }\n    @Override public String getDescription() { return \"Deposit $\" + (amountCents / 100.0); }\n}\n\n// Invoker with Bounded Undo Stack\npublic class TransactionLedgerInvoker {\n    private final Deque<TransactionCommand> undoStack = new ArrayDeque<>();\n    private final Deque<TransactionCommand> redoStack = new ArrayDeque<>();\n    private final int maxHistory = 50;\n\n    public void executeCommand(TransactionCommand command) {\n        command.execute();\n        if (undoStack.size() >= maxHistory) {\n            undoStack.removeLast(); // Evict oldest\n        }\n        undoStack.push(command);\n        redoStack.clear(); // Clear redo on new action\n    }\n\n    public void undo() {\n        if (!undoStack.isEmpty()) {\n            TransactionCommand cmd = undoStack.pop();\n            cmd.undo();\n            redoStack.push(cmd);\n        }\n    }\n}"
+          }
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Command Pattern",
+          "pros": "Enables multi-level undo, asynchronous task queues, transaction replay, and decoupling.",
+          "cons": "Creates dozens of individual command classes for every minor operation in the system.",
+          "bestFor": "Text editors (undo/redo), CQRS distributed architectures, job schedulers, transactional sagas."
+        },
+        {
+          "option": "Direct Method Invocations",
+          "pros": "Immediate execution, minimal classes, direct stack traces.",
+          "cons": "Cannot defer execution; impossible to implement undo without complex ad-hoc state tracking.",
+          "bestFor": "Simple read-only lookups and stateless calculation services."
+        },
+        {
+          "option": "Memento Pattern",
+          "pros": "Captures full state snapshots rather than operational inverse commands.",
+          "cons": "Devours memory when domain objects are large and complex.",
+          "bestFor": "Restoring complex nested states where calculating inverse commands is mathematically intractable."
+        }
+      ],
+      "interviewTip": "In distributed architecture interviews, connect the Command pattern directly to Command Query Responsibility Segregation (CQRS) and the Saga pattern. Explain: 'In distributed systems, a Command represents an intent to change state. When commands execute across microservices, we cannot do in-memory undo; instead, the Saga orchestrator dispatches compensating commands to reverse previous operations.'",
+      "ascii": "+-------------------------------------------------------------------------+\n|                          COMMAND UML CLASS MODEL                        |\n+-------------------------------------------------------------------------+\n   +------------------+                   +-----------------------------+\n   |  Invoker (UI)    |  holds ---->      |        <<interface>>        |\n   +------------------+                   |           Command           |\n   | - onCommand: Cmd |                   +-----------------------------+\n   | + click(): void  |                   | + execute(): void           |\n   +------------------+                   | + undo(): void              |\n                                          +--------------^--------------+\n                                                         |\n                                          +--------------+--------------+\n                                          |        ConcreteCommand      |\n                                          +-----------------------------+\n                                          | - receiver: Database        |\n                                          | - backupState: Snapshot     |\n                                          | + execute(): receiver.op()  |\n                                          | + undo(): receiver.restore()|\n                                          +-----------------------------+",
+      "blockNodes": [
+        {
+          "x": 50,
+          "y": 120,
+          "w": 220,
+          "h": 140,
+          "stereotype": "invoker",
+          "title": "CommandInvoker",
+          "stroke": "#a855f7",
+          "lines": [
+            "- history: Deque<Command>",
+            "+ executeCommand(cmd)",
+            "+ undoLast()"
+          ],
+          "tag": "Invoker"
+        },
+        {
+          "x": 380,
+          "y": 100,
+          "w": 250,
+          "h": 140,
+          "stereotype": "interface",
+          "title": "Command",
+          "stroke": "#10b981",
+          "lines": [
+            "+ execute(): void",
+            "+ undo(): void"
+          ],
+          "tag": "Command Interface"
+        },
+        {
+          "x": 380,
+          "y": 310,
+          "w": 250,
+          "h": 140,
+          "stereotype": "concrete",
+          "title": "InsertRowCommand",
+          "stroke": "#38bdf8",
+          "lines": [
+            "- db: DatabaseReceiver",
+            "- rowId: UUID",
+            "+ execute(): db.insert()",
+            "+ undo(): db.delete()"
+          ],
+          "tag": "ConcreteCommand"
+        },
+        {
+          "x": 740,
+          "y": 200,
+          "w": 220,
+          "h": 140,
+          "stereotype": "receiver",
+          "title": "Database (Receiver)",
+          "stroke": "#f59e0b",
+          "lines": [
+            "+ insertRow(data)",
+            "+ deleteRow(id)"
+          ],
+          "tag": "Receiver"
+        }
+      ],
+      "blockConns": [
+        {
+          "d": "M 270 170 L 380 170",
+          "lx": 325,
+          "ly": 155,
+          "label": "invokes"
+        },
+        {
+          "d": "M 505 310 L 505 240",
+          "lx": 505,
+          "ly": 275,
+          "label": "implements"
+        },
+        {
+          "d": "M 630 380 L 740 280",
+          "lx": 690,
+          "ly": 340,
+          "label": "operates on"
+        }
+      ],
+      "flowNodes": [
+        {
+          "x": 50,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "1",
+          "title": "Command Construction",
+          "stroke": "#a855f7",
+          "lines": [
+            "User edits bank balance",
+            "Transfers $500",
+            "TransferFundsCommand created"
+          ]
+        },
+        {
+          "x": 280,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "2",
+          "title": "Invoker Queue & Execute",
+          "stroke": "#10b981",
+          "lines": [
+            "Pushed to transactional queue",
+            "invoker.execute() called",
+            "cmd.execute() alters state"
+          ]
+        },
+        {
+          "x": 520,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "3",
+          "title": "History Stack Push",
+          "stroke": "#38bdf8",
+          "lines": [
+            "Pushed to in-memory Undo stack",
+            "Preserves compensating snapshot",
+            "Ready for rollback"
+          ]
+        },
+        {
+          "x": 760,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "4",
+          "title": "Undo Rollback",
+          "stroke": "#ef4444",
+          "lines": [
+            "User clicks Undo button",
+            "invoker.undo() pops command",
+            "cmd.undo() reverses balance"
+          ]
+        }
+      ],
+      "flowConns": [
+        {
+          "d": "M 250 200 L 280 200",
+          "lx": 265,
+          "ly": 190,
+          "label": "enqueue"
+        },
+        {
+          "d": "M 490 200 L 520 200",
+          "lx": 505,
+          "ly": 190,
+          "label": "snapshot"
+        },
+        {
+          "d": "M 730 200 L 760 200",
+          "lx": 745,
+          "ly": 190,
+          "label": "undo"
+        }
+      ]
+    },
+    {
+      "id": "template-method",
+      "subtopicNumber": "3.4",
+      "title": "Template Method Pattern",
+      "subtitle": "Defines the skeleton of an algorithm in an operation, deferring some steps to subclasses without changing the algorithm's structure.",
+      "readingTime": "8 min read",
+      "difficulty": "Intermediate",
+      "accent": "#38bdf8",
+      "keyTakeaways": [
+        "Defines an invariant algorithmic workflow in a base class, allowing derived classes to customize specific primitive steps or hook methods.",
+        "Enforces the Hollywood Principle: 'Don't call us, we'll call you.' The parent class controls the execution flow, calling into the subclass hooks.",
+        "Found across framework base classes: Spring's `JdbcTemplate`, React class component lifecycles, and JUnit test fixtures."
+      ],
+      "sections": [
+        {
+          "heading": "1. Architectural Intent: Enforcing Algorithmic Invariants with Subclass Hooks",
+          "body": "In enterprise software, many business algorithms share an identical multi-step execution structure—such as reading a file, parsing its contents, validating records, persisting to a database, and closing resource handles. If every developer writes their own implementation, critical steps (like closing database connections or auditing failures) are frequently omitted. The Template Method pattern encapsulates the invariant algorithm skeleton into a final base method, leaving only domain-specific steps abstract.",
+          "bullets": [
+            "Hollywood Principle ('Don't call us, we'll call you'): The abstract parent class orchestrates the execution flow, calling subclass hooks as needed.",
+            "Code Duplication Elimination: Shared boilerplate (opening sockets, measuring latency, error recovery) is written exactly once in the base class.",
+            "Enforced Invariants: The template method is marked 'final' so subclasses cannot accidentally reorder or bypass security steps."
+          ]
+        },
+        {
+          "heading": "2. Hook Methods, Abstract Primitives & Inversion of Control",
+          "body": "A robust Template Method pattern utilizes three types of methods: 1) Abstract Primitives, which subclasses MUST implement; 2) Concrete Operations, which provide shared invariant logic and cannot be overridden; and 3) Hook Methods, which provide default empty or fallback behavior that subclasses MAY optionally override (e.g. shouldSendAlert() returning false by default).",
+          "bullets": [
+            "Abstract Primitives: Mandatory domain-specific steps that vary by implementation (e.g. parsePayload()).",
+            "Hook Methods: Optional interception points allowing subclasses to extend behavior without breaking base contracts.",
+            "Strict Invariant Guarantees: Steps such as auditing and security sanitization cannot be skipped by subclass authors."
+          ]
+        },
+        {
+          "heading": "3. Failure Modes: Fragile Base Class Pitfall & Inheritance Coupling",
+          "body": "The primary weakness of Template Method is its reliance on inheritance. Modifying the base class's template method can inadvertently break existing subclasses (the Fragile Base Class problem). Furthermore, subclasses are tightly coupled to the base class hierarchy: they cannot inherit from any other class in single-inheritance languages, and mocking base class dependencies during unit tests can be painful.",
+          "bullets": [
+            "Fragile Base Class: Changing the sequence of steps in the base class can silently corrupt subclasses that made assumptions about call order.",
+            "Inheritance Overhead: If a subclass only needs to customize one tiny step, forcing it to inherit an entire heavy base class is poor design; prefer Strategy composition if variations are purely algorithmic.",
+            "Liskov Substitution Violations: Subclasses overriding hooks must never throw unexpected exceptions that break the template method's contract."
+          ]
+        },
+        {
+          "heading": "4. Production Blueprint: Enterprise ETL Data Pipeline in Java 21",
+          "body": "The following production Java implementation showcases an enterprise ETL (Extract, Transform, Load) Pipeline using Template Method with optional hooks and resource cleanup.",
+          "bullets": [
+            "DataPipelineTemplate: Base class defining the final invariant process() algorithm.",
+            "CsvDataPipeline & JsonDataPipeline: Concrete subclasses customizing parsing and validation."
+          ],
+          "codeSnippet": {
+            "title": "Production ETL Pipeline with Template Method in Java 21",
+            "code": "public abstract class DataPipelineTemplate {\n    // Invariant algorithm skeleton marked final to prevent tampering\n    public final void process(Path filePath) throws IOException {\n        System.out.println(\"[Pipeline] Starting data pipeline for: \" + filePath);\n        byte[] rawBytes = readFile(filePath);\n        List<String> records = parseRecords(rawBytes); // Abstract hook\n        validateRecords(records);                       // Abstract hook\n        \n        if (shouldSanitize()) {                         // Optional hook\n            records = sanitize(records);\n        }\n        \n        persistToDatabase(records);\n        auditPipelineCompletion(records.size());\n    }\n\n    private byte[] readFile(Path path) throws IOException {\n        return Files.readAllBytes(path);\n    }\n\n    private void persistToDatabase(List<String> records) {\n        System.out.printf(\"[Database] Persisting %d validated records%n\", records.size());\n    }\n\n    private void auditPipelineCompletion(int count) {\n        System.out.printf(\"[Audit] Pipeline finished. %d rows processed%n\", count);\n    }\n\n    // Abstract Primitive Operations (Mandatory for subclasses)\n    protected abstract List<String> parseRecords(byte[] rawData);\n    protected abstract void validateRecords(List<String> records);\n\n    // Hook Method (Optional override)\n    protected boolean shouldSanitize() { return false; }\n    protected List<String> sanitize(List<String> records) { return records; }\n}"
+          }
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Template Method",
+          "pros": "Enforces algorithm invariants, eliminates code duplication, provides structured hooks for extension.",
+          "cons": "Coupled via class inheritance; susceptible to the Fragile Base Class problem; harder to test.",
+          "bestFor": "Framework lifecycles, ETL pipelines, standard database access workflows (JdbcTemplate)."
+        },
+        {
+          "option": "Strategy Pattern",
+          "pros": "Composition over inheritance; strategies can be swapped dynamically at runtime; trivial to mock.",
+          "cons": "Does not enforce an overarching step-by-step skeleton across multiple stages.",
+          "bestFor": "Swapping standalone interchangeable algorithms without shared multi-step lifecycle phases."
+        },
+        {
+          "option": "Duplicated Procedural Scripts",
+          "pros": "Completely independent code with zero inheritance hierarchies.",
+          "cons": "Severe code duplication; developers forget to implement security, auditing, or resource cleanup.",
+          "bestFor": "Throwaway test scripts."
+        }
+      ],
+      "interviewTip": "When comparing Template Method vs Strategy in an interview, say: 'Template Method uses inheritance to vary parts of an algorithm while keeping the overall skeleton invariant at compile time. Strategy uses composition to vary an entire algorithm at runtime. In production, prefer Strategy unless you specifically need to mandate a strict multi-step invariant lifecycle (like a framework build pipeline).'",
+      "ascii": "+-------------------------------------------------------------------------+\n|                      TEMPLATE METHOD UML CLASS MODEL                    |\n+-------------------------------------------------------------------------+\n                     +----------------------------------+\n                     |           <<abstract>>           |\n                     |         DataMiner (Base)         |\n                     +----------------------------------+\n                     | + mineData(): void {final}       |  <-- Invariant Skeleton\n                     | # openFile(): void               |\n                     | # extractData(): void {abstract} |  <-- Subclass Hook\n                     | # closeFile(): void              |\n                     +-----------------^----------------+\n                                       |\n             +-------------------------+-------------------------+\n             |                                                   |\n+------------+------------+                         +------------+------------+\n|      PdfDataMiner       |                         |       CsvDataMiner      |\n+-------------------------+                         +-------------------------+\n| # extractData(): PDF    |                         | # extractData(): CSV    |\n+-------------------------+                         +-------------------------+",
+      "blockNodes": [
+        {
+          "x": 300,
+          "y": 100,
+          "w": 320,
+          "h": 180,
+          "stereotype": "abstract",
+          "title": "DataMinerPipeline (Base)",
+          "stroke": "#a855f7",
+          "lines": [
+            "+ mine(): void {final skeleton}",
+            "# openFile(): void",
+            "# extractData(): void {abstract}",
+            "# parseData(): void {abstract}",
+            "# closeFile(): void"
+          ],
+          "tag": "Template Method"
+        },
+        {
+          "x": 100,
+          "y": 340,
+          "w": 240,
+          "h": 130,
+          "stereotype": "concrete",
+          "title": "PdfDataMiner",
+          "stroke": "#38bdf8",
+          "lines": [
+            "# extractData(): parse PDF streams",
+            "# parseData(): extract fonts"
+          ],
+          "tag": "Subclass A"
+        },
+        {
+          "x": 580,
+          "y": 340,
+          "w": 240,
+          "h": 130,
+          "stereotype": "concrete",
+          "title": "CsvDataMiner",
+          "stroke": "#10b981",
+          "lines": [
+            "# extractData(): split commas",
+            "# parseData(): build records"
+          ],
+          "tag": "Subclass B"
+        }
+      ],
+      "blockConns": [
+        {
+          "d": "M 220 340 L 380 280",
+          "lx": 280,
+          "ly": 300,
+          "label": "extends"
+        },
+        {
+          "d": "M 700 340 L 540 280",
+          "lx": 640,
+          "ly": 300,
+          "label": "extends"
+        }
+      ],
+      "flowNodes": [
+        {
+          "x": 50,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "1",
+          "title": "mine() Invocation",
+          "stroke": "#a855f7",
+          "lines": [
+            "Client calls miner.mine()",
+            "Fixed execution workflow begins",
+            "Skeleton controls step ordering"
+          ]
+        },
+        {
+          "x": 280,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "2",
+          "title": "Invariant File Open",
+          "stroke": "#38bdf8",
+          "lines": [
+            "Base class opens file handle",
+            "Common error logging executed",
+            "Zero subclass code duplication"
+          ]
+        },
+        {
+          "x": 520,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "3",
+          "title": "Polymorphic Hook",
+          "stroke": "#10b981",
+          "lines": [
+            "Calls extractData() hook",
+            "PDF subclass parses binary stream",
+            "Subclass hook resolves"
+          ]
+        },
+        {
+          "x": 760,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "4",
+          "title": "Invariant Cleanup",
+          "stroke": "#f59e0b",
+          "lines": [
+            "Base class closes file stream",
+            "Logs metrics and telemetry",
+            "Guaranteed finally cleanup"
+          ]
+        }
+      ],
+      "flowConns": [
+        {
+          "d": "M 250 200 L 280 200",
+          "lx": 265,
+          "ly": 190,
+          "label": "open"
+        },
+        {
+          "d": "M 490 200 L 520 200",
+          "lx": 505,
+          "ly": 190,
+          "label": "hook"
+        },
+        {
+          "d": "M 730 200 L 760 200",
+          "lx": 745,
+          "ly": 190,
+          "label": "clean"
+        }
+      ]
+    },
+    {
+      "id": "iterator",
+      "subtopicNumber": "3.5",
+      "title": "Iterator Pattern",
+      "subtitle": "Provides a way to access the elements of an aggregate object sequentially without exposing its underlying representation.",
+      "readingTime": "8 min read",
+      "difficulty": "Intermediate",
+      "accent": "#10b981",
+      "keyTakeaways": [
+        "Decouples traversal algorithms from internal data structures (arrays, binary trees, linked lists, hash tables).",
+        "Allows multiple independent cursors to traverse the same collection simultaneously without state conflicts.",
+        "The ubiquitous foundation of modern `for-each` loops, Java Streams, Python Generators, and JavaScript Iterables."
+      ],
+      "sections": [
+        {
+          "heading": "1. Architectural Intent: Sequential Traversal Without Exposing Internal Data Structures",
+          "body": "A collection data structure can store elements in an array, a doubly-linked list, a B-tree, or a hash bucket array. If client code needs to iterate over the collection, exposing its internal node pointers or bucket indexes completely shatters data encapsulation. The Iterator pattern extracts traversal responsibility into a separate cursor object with a uniform interface (hasNext(), next()).",
+          "bullets": [
+            "Encapsulation Preservation: Clients loop through elements without knowing whether storage is contiguous memory or a fragmented tree.",
+            "Single Responsibility Principle: Traversal logic is separated from collection storage logic.",
+            "Uniform Iteration Interface: A single client method can process elements from any iterable data structure polymorphically."
+          ]
+        },
+        {
+          "heading": "2. Fail-Fast vs Fail-Safe Iteration & Concurrent Modification Mechanics",
+          "body": "In multi-threaded or dynamic environments, modifying a collection while an iterator is actively traversing it creates undefined behavior (e.g. skipping elements or reading deleted nodes). Java solves this with two canonical mechanisms: Fail-Fast (detects modifications via an internal modCount counter and throws ConcurrentModificationException immediately) and Fail-Safe / Snapshot (traverses a copy or memory snapshot, safe from concurrent mutations).",
+          "bullets": [
+            "Fail-Fast (modCount): Checks expectedModCount == modCount on every call to next(); fails immediately if mutated.",
+            "Fail-Safe (Snapshot): Used in CopyOnWriteArrayList and concurrent collections, iterating over an immutable snapshot of the backing array.",
+            "Multiple Active Iterators: Because each iterator holds its own private cursor index, multiple threads or loops can traverse the same collection concurrently."
+          ]
+        },
+        {
+          "heading": "3. Failure Modes: Cursor Desynchronization, Garbage Generation & Leaked Resources",
+          "body": "When iterating over large datasets or external resources (such as reading rows from a remote database cursor or reading lines from disk), failing to close the iterator can leak network sockets and file handles. Furthermore, allocating high-frequency short-lived iterator objects inside inner loops of game engines or high-frequency trading loops causes excessive Garbage Collection pauses.",
+          "bullets": [
+            "Resource Handle Leaks: Database and file iterators must implement AutoCloseable to ensure cursor resources are released.",
+            "Allocation Tax in Hot Loops: Creating new Iterator heap instances inside high-throughput tight loops can cause GC thrashing; prefer zero-allocation primitive iterators.",
+            "Unsupported remove() Operations: Throwing UnsupportedOperationException if an iterator does not support mutation."
+          ]
+        },
+        {
+          "heading": "4. Production Blueprint: Custom Memory-Mapped Binary File Iterator in Java 21",
+          "body": "The following production Java implementation showcases a custom Fail-Fast Iterator traversing a custom binary block collection with bounds checking and modification detection.",
+          "bullets": [
+            "CustomIterator Contract: Standard hasNext() and next() operations.",
+            "Concurrent Modification Guard: Verifies modCount to ensure collection integrity."
+          ],
+          "codeSnippet": {
+            "title": "Production Custom Fail-Fast Iterator in Java 21",
+            "code": "public interface SimpleIterator<T> {\n    boolean hasNext();\n    T next();\n}\n\npublic class MemoryBlockCollection<T> {\n    private Object[] elements;\n    private int size = 0;\n    private int modCount = 0; // Modification tracking\n\n    public MemoryBlockCollection(int capacity) {\n        this.elements = new Object[capacity];\n    }\n\n    public void add(T item) {\n        if (size >= elements.length) {\n            elements = Arrays.copyOf(elements, elements.length * 2);\n        }\n        elements[size++] = item;\n        modCount++;\n    }\n\n    public SimpleIterator<T> iterator() {\n        return new FailFastIterator();\n    }\n\n    private class FailFastIterator implements SimpleIterator<T> {\n        private int cursor = 0;\n        private final int expectedModCount = modCount;\n\n        @Override public boolean hasNext() {\n            return cursor < size;\n        }\n\n        @SuppressWarnings(\"unchecked\")\n        @Override public T next() {\n            if (modCount != expectedModCount) {\n                throw new ConcurrentModificationException(\"Collection mutated during iteration!\");\n            }\n            if (cursor >= size) {\n                throw new NoSuchElementException();\n            }\n            return (T) elements[cursor++];\n        }\n    }\n}"
+          }
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Iterator Pattern",
+          "pros": "Preserves encapsulation, allows polymorphic traversal, supports multiple concurrent cursors.",
+          "cons": "Slight memory and method-dispatch overhead compared to direct raw array indexing in low-level code.",
+          "bestFor": "Custom data collections, tree traversals, streaming database records, pagination APIs."
+        },
+        {
+          "option": "Direct Index Access (get(i))",
+          "pros": "Zero object allocation; fastest execution on raw primitive arrays.",
+          "cons": "Catastrophic O(N^2) performance when used on LinkedList structures; exposes internal indexing.",
+          "bestFor": "Fixed-size internal primitive arrays in performance-critical inner loops."
+        },
+        {
+          "option": "Visitor Pattern",
+          "pros": "Allows executing operations across heterogeneous node types in hierarchical trees.",
+          "cons": "More complex to write; requires double-dispatch.",
+          "bestFor": "Compiler Abstract Syntax Trees (ASTs)."
+        }
+      ],
+      "interviewTip": "In interviews, explain why `for (int i=0; i<list.size(); i++) { list.get(i); }` is an anti-pattern for LinkedLists (it degrades to O(N^2) complexity because get(i) traverses from the head every time!), whereas an Iterator executes in optimal O(N) by holding a direct pointer to the current node.",
+      "ascii": "+-------------------------------------------------------------------------+\n|                         ITERATOR UML CLASS MODEL                        |\n+-------------------------------------------------------------------------+\n+--------------------------+               +-----------------------------+\n|      <<interface>>       |               |        <<interface>>        |\n|      IterableList<T>     |  creates ---> |         Iterator<T>         |\n+--------------------------+               +-----------------------------+\n| + createIterator(): Iter |               | + hasNext(): boolean        |\n+------------^-------------+               | + next(): T                 |\n             |                             +--------------^--------------+\n+------------+-------------+                              |\n|     CustomArrayList      |               +--------------+--------------+\n+--------------------------+               |     CustomArrayIterator     |\n| - items: Object[]        |               +-----------------------------+\n| + createIterator(): Iter |               | - cursor: int = 0           |\n+--------------------------+               | + next(): items[cursor++]   |\n                                           +-----------------------------+",
+      "blockNodes": [
+        {
+          "x": 50,
+          "y": 110,
+          "w": 250,
+          "h": 140,
+          "stereotype": "iterable",
+          "title": "IterableAggregate<T>",
+          "stroke": "#10b981",
+          "lines": [
+            "+ iterator(): Iterator<T>"
+          ],
+          "tag": "Aggregate"
+        },
+        {
+          "x": 50,
+          "y": 310,
+          "w": 250,
+          "h": 130,
+          "stereotype": "concrete-agg",
+          "title": "BinaryTree<T>",
+          "stroke": "#38bdf8",
+          "lines": [
+            "- root: Node<T>",
+            "+ iterator(): InOrderTreeIterator"
+          ],
+          "tag": "ConcreteAggregate"
+        },
+        {
+          "x": 550,
+          "y": 110,
+          "w": 250,
+          "h": 140,
+          "stereotype": "iterator",
+          "title": "Iterator<T>",
+          "stroke": "#f59e0b",
+          "lines": [
+            "+ hasNext(): boolean",
+            "+ next(): T"
+          ],
+          "tag": "Iterator"
+        },
+        {
+          "x": 550,
+          "y": 310,
+          "w": 250,
+          "h": 130,
+          "stereotype": "concrete-iter",
+          "title": "InOrderTreeIterator<T>",
+          "stroke": "#a855f7",
+          "lines": [
+            "- stack: Deque<Node<T>>",
+            "+ next(): yields sorted node"
+          ],
+          "tag": "ConcreteIterator"
+        }
+      ],
+      "blockConns": [
+        {
+          "d": "M 175 310 L 175 250",
+          "lx": 175,
+          "ly": 280,
+          "label": "implements"
+        },
+        {
+          "d": "M 300 170 L 550 170",
+          "lx": 425,
+          "ly": 155,
+          "label": "creates"
+        },
+        {
+          "d": "M 675 310 L 675 250",
+          "lx": 675,
+          "ly": 280,
+          "label": "implements"
+        },
+        {
+          "d": "M 300 375 L 550 375",
+          "lx": 425,
+          "ly": 360,
+          "label": "traverses"
+        }
+      ],
+      "flowNodes": [
+        {
+          "x": 50,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "1",
+          "title": "Iterator Requested",
+          "stroke": "#10b981",
+          "lines": [
+            "Client calls tree.iterator()",
+            "Tree yields fresh cursor object",
+            "Cursor initializes internal stack"
+          ]
+        },
+        {
+          "x": 280,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "2",
+          "title": "hasNext() Check",
+          "stroke": "#f59e0b",
+          "lines": [
+            "Verifies remaining nodes",
+            "Non-destructive query",
+            "Returns true if stack non-empty"
+          ]
+        },
+        {
+          "x": 520,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "3",
+          "title": "next() Advance",
+          "stroke": "#38bdf8",
+          "lines": [
+            "Pops current node from stack",
+            "Pushes right child subtree",
+            "Advances cursor position"
+          ]
+        },
+        {
+          "x": 760,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "4",
+          "title": "Iteration Completes",
+          "stroke": "#a855f7",
+          "lines": [
+            "Cursor reaches end of tree",
+            "hasNext() returns false",
+            "Loop cleanly exits"
+          ]
+        }
+      ],
+      "flowConns": [
+        {
+          "d": "M 250 200 L 280 200",
+          "lx": 265,
+          "ly": 190,
+          "label": "initialize"
+        },
+        {
+          "d": "M 490 200 L 520 200",
+          "lx": 505,
+          "ly": 190,
+          "label": "check"
+        },
+        {
+          "d": "M 730 200 L 760 200",
+          "lx": 745,
+          "ly": 190,
+          "label": "yield"
+        }
+      ]
+    },
+    {
+      "id": "state",
+      "subtopicNumber": "3.6",
+      "title": "State Pattern",
+      "subtitle": "Allows an object to alter its behavior when its internal state changes. The object will appear to change its class.",
+      "readingTime": "9 min read",
+      "difficulty": "Intermediate",
+      "accent": "#ef4444",
+      "keyTakeaways": [
+        "Models Finite State Machines (FSMs) by encapsulating state-dependent behaviors into distinct polymorphic state classes.",
+        "Completely eradicates massive, error-prone switch-case blocks across domain entities.",
+        "State transitions are handled cleanly either by the state classes themselves or by the context orchestrator."
+      ],
+      "sections": [
+        {
+          "heading": "1. Architectural Intent: Modeling Finite State Machines as Clean Polymorphic Objects",
+          "body": "Entities with complex operational lifecycles—such as Order, Document, TCP Connection, or Vending Machine—exhibit radically different behavior depending on their current state. In an Order lifecycle (Created -> Paid -> Shipped -> Delivered -> Cancelled), calling cancelOrder() is allowed in the Paid state, but illegal in the Shipped state. Implementing this via switch-case statements inside every single method results in unmaintainable spaghetti code. The State pattern encapsulates state-specific behaviors into polymorphic classes.",
+          "bullets": [
+            "Single Responsibility Principle: Each state class encapsulates behaviors and transition rules specific to that state.",
+            "Open/Closed Principle: Adding a new lifecycle state requires introducing a new class without modifying existing states.",
+            "Eliminates State Conditional Flags: Eradicates dozens of boolean flags (isPaid, isShipped, isCancelled) scattered across the domain entity."
+          ]
+        },
+        {
+          "heading": "2. Dynamic State Transitions & Separation of State-Specific Behaviors",
+          "body": "The Context maintains a reference to a State interface. When a client calls a method on the Context (e.g. order.ship()), the Context delegates to currentState.ship(). If the transition is valid, the current state transitions the Context to the new state instance (e.g. context.setState(new ShippedOrderState())). The object appears to change its class dynamically as its state changes.",
+          "bullets": [
+            "Context-Driven vs State-Driven Transitions: In State-Driven transitions, concrete states know their successor states; in Context-Driven transitions, the context centrally manages transition rules.",
+            "Shared Stateless States: If states hold no instance variables, state instances can be shared as immutable singletons across thousands of context entities.",
+            "Strict Invariant Enforcement: Invalid actions throw illegal state exceptions naturally without sprawling conditional checks."
+          ]
+        },
+        {
+          "heading": "3. Failure Modes: Circular Transition Coupling, State Explosion & Unhandled Transitions",
+          "body": "A frequent architectural hazard in State implementations is tight coupling between concrete state classes when states manage transitions directly (State A constructs new State B(), which constructs new State C()). This creates circular compilation dependencies. Furthermore, if the base State interface defines 15 operations, every single state class must implement all 15 methods—often throwing UnsupportedOperationException—unless sensible default base implementations are provided.",
+          "bullets": [
+            "Circular Class Dependencies: Avoid hardcoding concrete successor classes; utilize state factories or context-directed transitions.",
+            "State Explosion: If the system has 20 states and 20 events, class counts escalate rapidly; consider finite state machine libraries (Spring StateMachine, XState).",
+            "Dangling State Side-Effects: If a state transition initiates an external RPC that fails, the context must safely roll back to its previous state."
+          ]
+        },
+        {
+          "heading": "4. Production Blueprint: Enterprise Order Fulfillment State Machine in TypeScript",
+          "body": "The following production TypeScript implementation demonstrates an enterprise Order Fulfillment Finite State Machine with safe state transitions and strict invariant validation.",
+          "bullets": [
+            "OrderState Interface: Declares allowed business actions.",
+            "OrderContext: Holds current state and delegates lifecycle operations cleanly."
+          ],
+          "codeSnippet": {
+            "title": "Production Order State Machine in TypeScript",
+            "code": "export interface OrderState {\n  pay(context: OrderContext): void;\n  ship(context: OrderContext): void;\n  cancel(context: OrderContext): void;\n  getStatus(): string;\n}\n\nexport class OrderContext {\n  private state: OrderState;\n\n  constructor() {\n    this.state = new CreatedState();\n  }\n\n  public setState(state: OrderState): void {\n    console.log(`[Transition] State changed to: ${state.getStatus()}`);\n    this.state = state;\n  }\n\n  public pay(): void { this.state.pay(this); }\n  public ship(): void { this.state.ship(this); }\n  public cancel(): void { this.state.cancel(this); }\n  public getStatus(): string { return this.state.getStatus(); }\n}\n\n// Concrete State 1: Created\nexport class CreatedState implements OrderState {\n  pay(ctx: OrderContext): void {\n    console.log(\"[Payment] Payment authorized successfully.\");\n    ctx.setState(new PaidState());\n  }\n  ship(ctx: OrderContext): void {\n    throw new Error(\"Cannot ship an order before payment.\");\n  }\n  cancel(ctx: OrderContext): void {\n    console.log(\"[Cancel] Order cancelled.\");\n    ctx.setState(new CancelledState());\n  }\n  getStatus(): string { return \"CREATED\"; }\n}\n\n// Concrete State 2: Paid\nexport class PaidState implements OrderState {\n  pay(ctx: OrderContext): void {\n    throw new Error(\"Order is already paid.\");\n  }\n  ship(ctx: OrderContext): void {\n    console.log(\"[Shipping] Waybill printed. Order dispatched.\");\n    ctx.setState(new ShippedState());\n  }\n  cancel(ctx: OrderContext): void {\n    console.log(\"[Refund] Processing refund for cancelled order.\");\n    ctx.setState(new CancelledState());\n  }\n  getStatus(): string { return \"PAID\"; }\n}\n\n// Concrete State 3: Shipped\nexport class ShippedState implements OrderState {\n  pay(ctx: OrderContext): void { throw new Error(\"Order is already paid and shipped.\"); }\n  ship(ctx: OrderContext): void { throw new Error(\"Order has already been shipped.\"); }\n  cancel(ctx: OrderContext): void { throw new Error(\"Cannot cancel order after dispatch.\"); }\n  getStatus(): string { return \"SHIPPED\"; }\n}\n\nexport class CancelledState implements OrderState {\n  pay(ctx: OrderContext): void { throw new Error(\"Cannot pay cancelled order.\"); }\n  ship(ctx: OrderContext): void { throw new Error(\"Cannot ship cancelled order.\"); }\n  cancel(ctx: OrderContext): void { throw new Error(\"Order is already cancelled.\"); }\n  getStatus(): string { return \"CANCELLED\"; }\n}"
+          }
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "State Pattern",
+          "pros": "Eliminates giant switch statements, encapsulates state-specific rules, makes transitions explicit.",
+          "cons": "Increases class count significantly; can be over-engineering for simple 2-state objects.",
+          "bestFor": "Order lifecycles, connection handshakes (TCP SYN/ACK), game player animations, document editorial workflows."
+        },
+        {
+          "option": "Enum with Switch Statements",
+          "pros": "Compact; keeps all transitions in a single file; simple for small state machines.",
+          "cons": "High cyclomatic complexity; adding a new state requires editing every single switch block.",
+          "bestFor": "Simple finite entities with 2-3 states and minimal unique behaviors."
+        },
+        {
+          "option": "Strategy Pattern",
+          "pros": "Swaps algorithms dynamically; strategies do not typically know about each other.",
+          "cons": "Does not model transitions between different algorithmic behaviors.",
+          "bestFor": "Interchangeable calculation strategies rather than lifecycle progression."
+        }
+      ],
+      "interviewTip": "Interviewers frequently ask candidates to contrast State vs Strategy. Highlight: 'While their UML class diagrams look almost identical, their architectural intents are fundamentally different. In Strategy, the client selects an independent algorithm to execute, and strategies have no awareness of each other. In State, the context object transitions dynamically through a set of states over time as events occur, modeling a Finite State Machine.'",
+      "ascii": "+-------------------------------------------------------------------------+\n|                           STATE UML CLASS MODEL                         |\n+-------------------------------------------------------------------------+\n   +-----------------------------+               +-----------------------------+\n   |       OrderContext          |               |        <<interface>>        |\n   |                             |  delegates -> |          OrderState         |\n   +-----------------------------+               +-----------------------------+\n   | - state: OrderState         |               | + pay(): void               |\n   | + setState(s: OrderState)   |               | + ship(): void              |\n   | + pay(): void               |               | + cancel(): void            |\n   +-----------------------------+               +--------------^--------------+\n                                                                |\n                                 +------------------------------+------------------------------+\n                                 |                                                             |\n                   +-------------+---------------+                               +-------------+---------------+\n                   |        CreatedState         |                               |          PaidState          |\n                   +-----------------------------+                               +-----------------------------+\n                   | + pay(): ctx.setState(Paid) |                               | + ship(): ctx.setState(Ship)|\n                   | + ship(): throw Error       |                               | + cancel(): refund & cancel |\n                   +-----------------------------+                               +-----------------------------+",
+      "blockNodes": [
+        {
+          "x": 50,
+          "y": 120,
+          "w": 250,
+          "h": 140,
+          "stereotype": "context",
+          "title": "OrderContext",
+          "stroke": "#f59e0b",
+          "lines": [
+            "- currentState: OrderState",
+            "+ setState(s)",
+            "+ pay() / cancel()"
+          ],
+          "tag": "Context"
+        },
+        {
+          "x": 550,
+          "y": 100,
+          "w": 260,
+          "h": 140,
+          "stereotype": "interface",
+          "title": "OrderState",
+          "stroke": "#10b981",
+          "lines": [
+            "+ pay(ctx: OrderContext)",
+            "+ ship(ctx: OrderContext)",
+            "+ cancel(ctx: OrderContext)"
+          ],
+          "tag": "State Interface"
+        },
+        {
+          "x": 400,
+          "y": 310,
+          "w": 230,
+          "h": 130,
+          "stereotype": "concrete-state",
+          "title": "CreatedState",
+          "stroke": "#38bdf8",
+          "lines": [
+            "+ pay(): transition to Paid",
+            "+ ship(): IllegalState!"
+          ],
+          "tag": "State A"
+        },
+        {
+          "x": 670,
+          "y": 310,
+          "w": 230,
+          "h": 130,
+          "stereotype": "concrete-state",
+          "title": "PaidState",
+          "stroke": "#ef4444",
+          "lines": [
+            "+ ship(): transition to Shipped",
+            "+ cancel(): refund money"
+          ],
+          "tag": "State B"
+        }
+      ],
+      "blockConns": [
+        {
+          "d": "M 300 180 L 550 160",
+          "lx": 425,
+          "ly": 155,
+          "label": "delegates to"
+        },
+        {
+          "d": "M 515 310 L 610 240",
+          "lx": 550,
+          "ly": 275,
+          "label": "implements"
+        },
+        {
+          "d": "M 785 310 L 730 240",
+          "lx": 765,
+          "ly": 275,
+          "label": "implements"
+        },
+        {
+          "d": "M 400 375 C 330 375 330 240 250 240",
+          "lx": 330,
+          "ly": 300,
+          "label": "mutates context"
+        }
+      ],
+      "flowNodes": [
+        {
+          "x": 50,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "1",
+          "title": "Order Created",
+          "stroke": "#f59e0b",
+          "lines": [
+            "Context starts in CreatedState",
+            "Client calls order.ship()",
+            "State throws IllegalStateException"
+          ]
+        },
+        {
+          "x": 280,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "2",
+          "title": "Payment Event",
+          "stroke": "#38bdf8",
+          "lines": [
+            "Client calls order.pay()",
+            "CreatedState validates charge",
+            "Calls context.setState(PaidState)"
+          ]
+        },
+        {
+          "x": 520,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "3",
+          "title": "State Swapped",
+          "stroke": "#10b981",
+          "lines": [
+            "Context now behaves as Paid",
+            "Identical order.ship() now works",
+            "Zero giant switch statements"
+          ]
+        },
+        {
+          "x": 760,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "4",
+          "title": "Shipment Complete",
+          "stroke": "#a855f7",
+          "lines": [
+            "PaidState transitions to Shipped",
+            "Canceling order is now forbidden",
+            "Clean finite state machine"
+          ]
+        }
+      ],
+      "flowConns": [
+        {
+          "d": "M 250 200 L 280 200",
+          "lx": 265,
+          "ly": 190,
+          "label": "pay()"
+        },
+        {
+          "d": "M 490 200 L 520 200",
+          "lx": 505,
+          "ly": 190,
+          "label": "transition"
+        },
+        {
+          "d": "M 730 200 L 760 200",
+          "lx": 745,
+          "ly": 190,
+          "label": "ship()"
+        }
+      ]
+    },
+    {
+      "id": "chain-of-responsibility",
+      "subtopicNumber": "3.7",
+      "title": "Chain of Responsibility Pattern",
+      "subtitle": "Passes requests along a chain of handlers; upon receiving a request, each handler decides either to process it or pass it to the next handler.",
+      "readingTime": "8 min read",
+      "difficulty": "Intermediate",
+      "accent": "#38bdf8",
+      "keyTakeaways": [
         "Decouples senders of a request from its receivers by giving multiple objects a chance to handle the request.",
         "Handlers are chained sequentially; a handler can short-circuit the pipeline (e.g., rejecting unauthorized requests) or decorate and forward it.",
         "Standard foundation for Servlet Filter chains, Express.js middleware, Spring Security interceptors, and ATM cash dispensing logic."
       ],
-      ascii: `+-------------------------------------------------------------------------+
-|                  CHAIN OF RESPONSIBILITY UML CLASS MODEL                |
-+-------------------------------------------------------------------------+
-+------------------+                   +----------------------------------+
-|      Client      |   sends ---->     |          <<abstract>>            |
-+------------------+                   |         Handler (Base)           |
-                                       +----------------------------------+
-                                       | - next: Handler                  |
-                                       | + setNext(h: Handler): Handler   |
-                                       | + handle(req: Request): boolean  |
-                                       +-----------------^----------------+
-                                                         |
-                   +-------------------+-----------------+-------------------+
-                   |                                                         |
-         +---------+--------+                                      +---------+--------+
-         | AuthValidationHdl|   --- next: RateLimitHdl --->        | SanitizeInputHdl |
-         +------------------+                                      +------------------+
-         | + handle(): bool |                                      | + handle(): bool |
-         +------------------+                                      +------------------+`,
-      blockNodes: [
-        { x: 50, y: 120, w: 200, h: 120, stereotype: 'client', title: 'HttpRequestClient', stroke: '#38bdf8', lines: ['Client layer', 'Dispatches request'], tag: 'Client' },
-        { x: 340, y: 100, w: 260, h: 150, stereotype: 'abstract', title: 'MiddlewareHandler', stroke: '#10b981', lines: ['- next: MiddlewareHandler', '+ setNext(h): this', '+ handle(req): boolean'], tag: 'BaseHandler' },
-        { x: 120, y: 310, w: 230, h: 130, stereotype: 'concrete', title: 'JwtAuthHandler', stroke: '#38bdf8', lines: ['Verify JWT signatures', 'Drop 401 on expired token'], tag: 'Handler 1' },
-        { x: 400, y: 310, w: 230, h: 130, stereotype: 'concrete', title: 'RateLimiterHandler', stroke: '#f59e0b', lines: ['Token bucket check', 'Drop 429 on abuse'], tag: 'Handler 2' },
-        { x: 680, y: 310, w: 230, h: 130, stereotype: 'concrete', title: 'SanitizerHandler', stroke: '#a855f7', lines: ['Escape SQL / XSS tags', 'Forward to Controller'], tag: 'Handler 3' }
-      ],
-      blockConns: [
-        { d: 'M 250 170 L 340 170', lx: 295, ly: 155, label: 'invokes' },
-        { d: 'M 235 310 L 380 250', lx: 300, ly: 275, label: 'extends' },
-        { d: 'M 515 310 L 490 250', lx: 510, ly: 275, label: 'extends' },
-        { d: 'M 795 310 L 600 250', lx: 710, ly: 275, label: 'extends' },
-        { d: 'M 350 375 L 400 375', lx: 375, ly: 360, label: 'next' },
-        { d: 'M 630 375 L 680 375', lx: 655, ly: 360, label: 'next' }
-      ],
-      flowNodes: [
-        { x: 50, y: 140, w: 200, h: 140, step: '1', title: 'HTTP Request Arrives', stroke: '#38bdf8', lines: ['Request hits server entrypoint', 'Passes to JwtAuthHandler', 'Agnostic to subsequent chain'] },
-        { x: 280, y: 140, w: 210, h: 140, step: '2', title: 'Authentication Pass', stroke: '#10b981', lines: ['JWT validated successfully', 'Injects UserContext to request', 'Calls next.handle(request)'] },
-        { x: 520, y: 140, w: 210, h: 140, step: '3', title: 'Rate Limit Inspection', stroke: '#f59e0b', lines: ['Checks Redis Token Bucket', 'Current rate: 45/100 RPS', 'Calls next.handle(request)'] },
-        { x: 760, y: 140, w: 200, h: 140, step: '4', title: 'Input Sanitization', stroke: '#a855f7', lines: ['Cleans body HTML tags', 'Reaches business Controller', 'Pipeline returns HTTP 200'] }
-      ],
-      flowConns: [
-        { d: 'M 250 200 L 280 200', lx: 265, ly: 190, label: 'valid JWT' },
-        { d: 'M 490 200 L 520 200', lx: 505, ly: 190, label: 'under limit' },
-        { d: 'M 730 200 L 760 200', lx: 745, ly: 190, label: 'sanitize' }
-      ],
-      sections: [
+      "sections": [
         {
-          heading: "Dynamic Request Pipelines and Interceptor Decoupling",
-          body: "When processing incoming requests, hardcoding authorization checks, rate-limiting rules, caching, and input sanitization directly into a controller creates monolithic code that violates the Single Responsibility Principle. The Chain of Responsibility pattern allows you to compose standalone handler units into dynamic linear pipelines.",
-          bullets: [
+          "heading": "1. Architectural Intent: Decoupling Request Senders from Downstream Handlers",
+          "body": "When processing incoming requests in web servers or enterprise backends, hardcoding authorization checks, rate-limiting rules, caching, and input sanitization directly into a controller creates monolithic code that violates the Single Responsibility Principle. The Chain of Responsibility pattern allows you to compose standalone handler units into dynamic linear pipelines.",
+          "bullets": [
             "Single Responsibility Principle: Each handler class does one thing (e.g. rate limiting or authentication).",
             "Open/Closed Principle: You can inject new inspection or filtering handlers into the pipeline without modifying existing handlers.",
             "Short-Circuit Capability: Handlers can abort execution early if validation conditions fail."
-          ],
-          codeSnippet: {
-            title: "Production Request Middleware Chain in Java 21",
-            code: `public record HttpRequest(String token, String ipAddress, String body) {}
-
-public abstract class RequestHandler {
-    private RequestHandler next;
-
-    public RequestHandler linkWith(RequestHandler next) {
-        this.next = next;
-        return next;
-    }
-
-    public boolean handle(HttpRequest request) {
-        if (next == null) return true;
-        return next.handle(request);
-    }
-}
-
-public class AuthHandler extends RequestHandler {
-    @Override public boolean handle(HttpRequest request) {
-        if (!"VALID_JWT_TOKEN".equals(request.token())) {
-            System.out.println("401 Unauthorized: Invalid token");
-            return false; // Short-circuit
-        }
-        return super.handle(request);
-    }
-}
-
-public class RateLimitHandler extends RequestHandler {
-    @Override public boolean handle(HttpRequest request) {
-        if ("192.168.1.100".equals(request.ipAddress())) {
-            System.out.println("429 Too Many Requests: Rate limit exceeded");
-            return false; // Short-circuit
-        }
-        return super.handle(request);
-    }
-}`
-          },
-          flowDiagramUrl: "/diagrams/design-patterns/chain-of-responsibility-flow.svg"
-        }
-      ],
-      tradeOffs: [
-        {
-          option: "Chain of Responsibility",
-          pros: "Decouples senders from receivers; high runtime composability; easy to reorder filters.",
-          cons: "A request can reach the end of the chain unhandled without notification if not configured carefully.",
-          bestFor: "HTTP request filters, event validation pipelines, GUI event bubbling."
+          ]
         },
         {
-          option: "Direct Imperative Conditionals",
-          pros: "Straightforward linear procedural flow; very easy to read for 1-2 static checks.",
-          cons: "Tightly couples validation rules; impossible to dynamically reorder or skip steps via config.",
-          bestFor: "Simple scripts with zero dynamic filtering requirements."
-        }
-      ],
-      interviewTip: "In interviews, cite `javax.servlet.FilterChain` or Spring `HandlerInterceptor` as real-world examples of Chain of Responsibility. Point out that unlike Decorator (which wraps an object to augment behavior and returns results back up), Chain of Responsibility can terminate execution at any link without invoking the rest of the chain."
-    },
-    {
-      id: "command",
-      subtopicNumber: "3.2",
-      title: "Command Pattern",
-      subtitle: "Encapsulates a request as an object, thereby letting you parameterize clients with different requests, queue or log requests, and support undoable operations.",
-      readingTime: "8 min read",
-      difficulty: "Foundational",
-      accent: "#a855f7",
-      keyTakeaways: [
-        "Turns a business operation into a standalone first-class object containing all necessary parameters and receiver references.",
-        "Enables deferred execution, asynchronous task queues, command scheduling, transaction replay logging, and multi-level Undo/Redo stacks.",
-        "Underpins CQRS architectures, database write-ahead logging (WAL), GUI menu actions, and macro recording engines."
-      ],
-      ascii: `+-------------------------------------------------------------------------+
-|                          COMMAND UML CLASS MODEL                        |
-+-------------------------------------------------------------------------+
-   +------------------+                   +-----------------------------+
-   |  Invoker (UI)    |  holds ---->      |        <<interface>>        |
-   +------------------+                   |           Command           |
-   | - onCommand: Cmd |                   +-----------------------------+
-   | + click(): void  |                   | + execute(): void           |
-   +------------------+                   | + undo(): void              |
-                                          +--------------^--------------+
-                                                         |
-                                          +--------------+--------------+
-                                          |        ConcreteCommand      |
-                                          +-----------------------------+
-                                          | - receiver: Database        |
-                                          | - backupState: Snapshot     |
-                                          | + execute(): receiver.op()  |
-                                          | + undo(): receiver.restore()|
-                                          +-----------------------------+`,
-      blockNodes: [
-        { x: 50, y: 120, w: 220, h: 140, stereotype: 'invoker', title: 'CommandInvoker', stroke: '#a855f7', lines: ['- history: Deque<Command>', '+ executeCommand(cmd)', '+ undoLast()'], tag: 'Invoker' },
-        { x: 380, y: 100, w: 250, h: 140, stereotype: 'interface', title: 'Command', stroke: '#10b981', lines: ['+ execute(): void', '+ undo(): void'], tag: 'Command Interface' },
-        { x: 380, y: 310, w: 250, h: 140, stereotype: 'concrete', title: 'InsertRowCommand', stroke: '#38bdf8', lines: ['- db: DatabaseReceiver', '- rowId: UUID', '+ execute(): db.insert()', '+ undo(): db.delete()'], tag: 'ConcreteCommand' },
-        { x: 740, y: 200, w: 220, h: 140, stereotype: 'receiver', title: 'Database (Receiver)', stroke: '#f59e0b', lines: ['+ insertRow(data)', '+ deleteRow(id)'], tag: 'Receiver' }
-      ],
-      blockConns: [
-        { d: 'M 270 170 L 380 170', lx: 325, ly: 155, label: 'invokes' },
-        { d: 'M 505 310 L 505 240', lx: 505, ly: 275, label: 'implements' },
-        { d: 'M 630 380 L 740 280', lx: 690, ly: 340, label: 'operates on' }
-      ],
-      flowNodes: [
-        { x: 50, y: 140, w: 200, h: 140, step: '1', title: 'Command Construction', stroke: '#a855f7', lines: ['User edits bank balance', 'Transfers $500', 'TransferFundsCommand created'] },
-        { x: 280, y: 140, w: 210, h: 140, step: '2', title: 'Invoker Queue & Execute', stroke: '#10b981', lines: ['Pushed to transactional queue', 'invoker.execute() called', 'cmd.execute() alters state'] },
-        { x: 520, y: 140, w: 210, h: 140, step: '3', title: 'History Stack Push', stroke: '#38bdf8', lines: ['Pushed to in-memory Undo stack', 'Preserves compensating snapshot', 'Ready for rollback'] },
-        { x: 760, y: 140, w: 200, h: 140, step: '4', title: 'Undo Rollback', stroke: '#ef4444', lines: ['User clicks Undo button', 'invoker.undo() pops command', 'cmd.undo() reverses balance'] }
-      ],
-      flowConns: [
-        { d: 'M 250 200 L 280 200', lx: 265, ly: 190, label: 'enqueue' },
-        { d: 'M 490 200 L 520 200', lx: 505, ly: 190, label: 'snapshot' },
-        { d: 'M 730 200 L 760 200', lx: 745, ly: 190, label: 'undo' }
-      ],
-      sections: [
-        {
-          heading: "Reifying Invocations into First-Class Objects",
-          body: "Direct method invocations (`account.deposit(500)`) tie the call site directly to execution time, precluding delayed scheduling, queuing, or rollback. By turning the request into an independent Command object, you can serialize commands to disk, ship them across Kafka to remote workers, or maintain an undo buffer.",
-          bullets: [
-            "Single Responsibility Principle: Decouples classes that invoke operations from classes that know how to execute them.",
-            "Open/Closed Principle: Introduce new commands into your system without altering existing invoker or receiver code.",
-            "Enables CQRS (Command Query Responsibility Segregation): Clean separation of write commands from read queries."
-          ],
-          codeSnippet: {
-            title: "Undoable Bank Account Command Architecture in Java 21",
-            code: `public interface Command {
-    void execute();
-    void undo();
-}
-
-public class BankAccount {
-    private int balance = 0;
-    public void deposit(int amount) { balance += amount; }
-    public void withdraw(int amount) { balance -= amount; }
-    public int getBalance() { return balance; }
-}
-
-public class DepositCommand implements Command {
-    private final BankAccount account;
-    private final int amount;
-
-    public DepositCommand(BankAccount account, int amount) {
-        this.account = account;
-        this.amount = amount;
-    }
-
-    @Override public void execute() { account.deposit(amount); }
-    @Override public void undo() { account.withdraw(amount); }
-}
-
-public class TransactionManager {
-    private final Deque<Command> undoStack = new ArrayDeque<>();
-
-    public void executeCommand(Command cmd) {
-        cmd.execute();
-        undoStack.push(cmd);
-    }
-
-    public void undoLast() {
-        if (!undoStack.isEmpty()) {
-            Command cmd = undoStack.pop();
-            cmd.undo();
-        }
-    }
-}`
-          },
-          flowDiagramUrl: "/diagrams/design-patterns/command-flow.svg"
-        }
-      ],
-      tradeOffs: [
-        {
-          option: "Command Pattern",
-          pros: "Enables multi-level undo, asynchronous task queues, transaction replay, and decoupling.",
-          cons: "Creates dozens of individual command classes for every minor operation in the system.",
-          bestFor: "Text editors (undo/redo), CQRS distributed architectures, job schedulers, transactional sagas."
+          "heading": "2. Linear Middleware Pipeline Execution & Short-Circuit Mechanics",
+          "body": "In a Chain of Responsibility, each handler maintains a reference to the next handler in the sequence. When handle(request) is invoked, the handler executes its local logic. If the request is invalid (e.g. invalid JWT), it short-circuits by returning an error response, stopping subsequent processing. If valid, it invokes next.handle(request).",
+          "bullets": [
+            "Uniform Handler Interface: All stages implement the same base contract (e.g., setNext(), handle()).",
+            "Dynamic Assembly: Middleware pipelines can be constructed dynamically per route or per tenant.",
+            "Two-Way Pipelines: Handlers can execute pre-processing before delegating and post-processing after the chain returns."
+          ]
         },
         {
-          option: "Direct Method Invocations",
-          pros: "Immediate execution, minimal classes, direct stack traces.",
-          cons: "Cannot defer execution; impossible to implement undo without complex ad-hoc state tracking.",
-          bestFor: "Simple read-only lookups and stateless calculation services."
+          "heading": "3. Failure Modes: Silent Dropped Requests, Circular Next Pointers & Stack Overflow",
+          "body": "A frequent bug in custom Chain of Responsibility implementations is the unhandled request scenario: if none of the handlers in the chain process the request and there is no terminal fallback handler, the request disappears silently without a response. Furthermore, if handlers are accidentally wired in a loop (A -> B -> A), execution triggers an infinite loop and StackOverflowError.",
+          "bullets": [
+            "Unhandled Request Fallback: Always configure a terminal default handler that logs a warning or returns HTTP 404/500.",
+            "Circular Wiring: Ensure pipeline assembly is strictly acyclic using directed graph validation during bootstrap.",
+            "Call-Stack Depth: In synchronous recursive chains with hundreds of handlers, deep recursion can exhaust stack frames."
+          ]
+        },
+        {
+          "heading": "4. Production Blueprint: Production Security & Rate Limiting Filter Chain in Java 21",
+          "body": "The following production Java implementation showcases an enterprise HTTP Middleware pipeline featuring authentication, token-bucket rate limiting, and input sanitization with clean short-circuiting.",
+          "bullets": [
+            "RequestHandler Abstract Base: Provides fluent linkWith() chaining helper.",
+            "AuthHandler, RateLimitHandler, SanitizerHandler: Modular pipeline stages."
+          ],
+          "codeSnippet": {
+            "title": "Production Request Middleware Chain in Java 21",
+            "code": "public record HttpRequest(String token, String ipAddress, String body) {}\n\npublic abstract class RequestHandler {\n    private RequestHandler next;\n\n    public RequestHandler linkWith(RequestHandler next) {\n        this.next = next;\n        return next;\n    }\n\n    public boolean handle(HttpRequest request) {\n        if (next == null) return true; // Reached end of chain successfully\n        return next.handle(request);\n    }\n}\n\n// Stage 1: Authentication\npublic class AuthHandler extends RequestHandler {\n    @Override public boolean handle(HttpRequest request) {\n        if (!\"VALID_JWT_TOKEN\".equals(request.token())) {\n            System.out.println(\"401 Unauthorized: Invalid token\");\n            return false; // Short-circuit\n        }\n        return super.handle(request);\n    }\n}\n\n// Stage 2: Rate Limiting\npublic class RateLimitHandler extends RequestHandler {\n    private final AtomicInteger requestCount = new AtomicInteger();\n\n    @Override public boolean handle(HttpRequest request) {\n        if (requestCount.incrementAndGet() > 100) {\n            System.out.println(\"429 Too Many Requests: Rate limit exceeded\");\n            return false; // Short-circuit\n        }\n        return super.handle(request);\n    }\n}"
+          }
         }
       ],
-      interviewTip: "In distributed architecture interviews, connect the Command pattern directly to Command Query Responsibility Segregation (CQRS) and the Outbox pattern. Mention that in modern event-driven architectures, commands are dispatched to event brokers for guaranteed asynchronous execution."
+      "tradeOffs": [
+        {
+          "option": "Chain of Responsibility",
+          "pros": "Decouples sender and receiver, easily reorder or inject new pipeline steps, enables early short-circuiting.",
+          "cons": "No guarantee that a request will be handled; can be hard to debug long recursive call chains.",
+          "bestFor": "HTTP middleware, authentication/authorization pipelines, logging filters, approval workflows."
+        },
+        {
+          "option": "Monolithic Controller",
+          "pros": "All checks visible sequentially in one method; easy to step-debug.",
+          "cons": "Violates Single Responsibility; highly coupled; impossible to reuse middleware across routes.",
+          "bestFor": "Simple scripts with 1-2 trivial validations."
+        },
+        {
+          "option": "Decorator Pattern",
+          "pros": "Wraps objects to enhance behavior transparently.",
+          "cons": "Decorators typically execute all layers and do not easily support short-circuit aborts.",
+          "bestFor": "Augmenting object functionality rather than sequential request filtering."
+        }
+      ],
+      "interviewTip": "In interviews, connect Chain of Responsibility to Servlet Filters and Express.js middleware: 'Each middleware handler can either process the request and call next(), or terminate the chain and return an error response immediately. This separation of concerns allows authentication, CORS, rate limiting, and logging to be applied declaratively.'",
+      "ascii": "+-------------------------------------------------------------------------+\n|                  CHAIN OF RESPONSIBILITY UML CLASS MODEL                |\n+-------------------------------------------------------------------------+\n+------------------+                   +----------------------------------+\n|      Client      |   sends ---->     |          <<abstract>>            |\n+------------------+                   |         Handler (Base)           |\n                                       +----------------------------------+\n                                       | - next: Handler                  |\n                                       | + setNext(h: Handler): Handler   |\n                                       | + handle(req: Request): boolean  |\n                                       +-----------------^----------------+\n                                                         |\n                   +-------------------+-----------------+-------------------+\n                   |                                                         |\n         +---------+--------+                                      +---------+--------+\n         | AuthValidationHdl|   --- next: RateLimitHdl --->        | SanitizeInputHdl |\n         +------------------+                                      +------------------+\n         | + handle(): bool |                                      | + handle(): bool |\n         +------------------+                                      +------------------+",
+      "blockNodes": [
+        {
+          "x": 50,
+          "y": 120,
+          "w": 200,
+          "h": 120,
+          "stereotype": "client",
+          "title": "HttpRequestClient",
+          "stroke": "#38bdf8",
+          "lines": [
+            "Client layer",
+            "Dispatches request"
+          ],
+          "tag": "Client"
+        },
+        {
+          "x": 340,
+          "y": 100,
+          "w": 260,
+          "h": 150,
+          "stereotype": "abstract",
+          "title": "MiddlewareHandler",
+          "stroke": "#10b981",
+          "lines": [
+            "- next: MiddlewareHandler",
+            "+ setNext(h): this",
+            "+ handle(req): boolean"
+          ],
+          "tag": "BaseHandler"
+        },
+        {
+          "x": 120,
+          "y": 310,
+          "w": 230,
+          "h": 130,
+          "stereotype": "concrete",
+          "title": "JwtAuthHandler",
+          "stroke": "#38bdf8",
+          "lines": [
+            "Verify JWT signatures",
+            "Drop 401 on expired token"
+          ],
+          "tag": "Handler 1"
+        },
+        {
+          "x": 400,
+          "y": 310,
+          "w": 230,
+          "h": 130,
+          "stereotype": "concrete",
+          "title": "RateLimiterHandler",
+          "stroke": "#f59e0b",
+          "lines": [
+            "Token bucket check",
+            "Drop 429 on abuse"
+          ],
+          "tag": "Handler 2"
+        },
+        {
+          "x": 680,
+          "y": 310,
+          "w": 230,
+          "h": 130,
+          "stereotype": "concrete",
+          "title": "SanitizerHandler",
+          "stroke": "#a855f7",
+          "lines": [
+            "Escape SQL / XSS tags",
+            "Forward to Controller"
+          ],
+          "tag": "Handler 3"
+        }
+      ],
+      "blockConns": [
+        {
+          "d": "M 250 170 L 340 170",
+          "lx": 295,
+          "ly": 155,
+          "label": "invokes"
+        },
+        {
+          "d": "M 235 310 L 380 250",
+          "lx": 300,
+          "ly": 275,
+          "label": "extends"
+        },
+        {
+          "d": "M 515 310 L 490 250",
+          "lx": 510,
+          "ly": 275,
+          "label": "extends"
+        },
+        {
+          "d": "M 795 310 L 600 250",
+          "lx": 710,
+          "ly": 275,
+          "label": "extends"
+        },
+        {
+          "d": "M 350 375 L 400 375",
+          "lx": 375,
+          "ly": 360,
+          "label": "next"
+        },
+        {
+          "d": "M 630 375 L 680 375",
+          "lx": 655,
+          "ly": 360,
+          "label": "next"
+        }
+      ],
+      "flowNodes": [
+        {
+          "x": 50,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "1",
+          "title": "HTTP Request Arrives",
+          "stroke": "#38bdf8",
+          "lines": [
+            "Request hits server entrypoint",
+            "Passes to JwtAuthHandler",
+            "Agnostic to subsequent chain"
+          ]
+        },
+        {
+          "x": 280,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "2",
+          "title": "Authentication Pass",
+          "stroke": "#10b981",
+          "lines": [
+            "JWT validated successfully",
+            "Injects UserContext to request",
+            "Calls next.handle(request)"
+          ]
+        },
+        {
+          "x": 520,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "3",
+          "title": "Rate Limit Inspection",
+          "stroke": "#f59e0b",
+          "lines": [
+            "Checks Redis Token Bucket",
+            "Current rate: 45/100 RPS",
+            "Calls next.handle(request)"
+          ]
+        },
+        {
+          "x": 760,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "4",
+          "title": "Input Sanitization",
+          "stroke": "#a855f7",
+          "lines": [
+            "Cleans body HTML tags",
+            "Reaches business Controller",
+            "Pipeline returns HTTP 200"
+          ]
+        }
+      ],
+      "flowConns": [
+        {
+          "d": "M 250 200 L 280 200",
+          "lx": 265,
+          "ly": 190,
+          "label": "valid JWT"
+        },
+        {
+          "d": "M 490 200 L 520 200",
+          "lx": 505,
+          "ly": 190,
+          "label": "under limit"
+        },
+        {
+          "d": "M 730 200 L 760 200",
+          "lx": 745,
+          "ly": 190,
+          "label": "sanitize"
+        }
+      ]
     },
     {
-      id: "interpreter",
-      subtopicNumber: "3.3",
-      title: "Interpreter Pattern",
-      subtitle: "Given a language, defines a representation for its grammar along with an interpreter that uses the representation to interpret sentences in the language.",
-      readingTime: "7 min read",
-      difficulty: "Advanced",
-      accent: "#f59e0b",
-      keyTakeaways: [
+      "id": "mediator",
+      "subtopicNumber": "3.8",
+      "title": "Mediator Pattern",
+      "subtitle": "Defines an object that encapsulates how a set of objects interact, preventing them from referring to each other explicitly.",
+      "readingTime": "9 min read",
+      "difficulty": "Advanced",
+      "accent": "#a855f7",
+      "keyTakeaways": [
+        "Replaces complex M:N tangled dependency networks with a clean 1:N hub-and-spoke star topology.",
+        "Colleague objects communicate exclusively through the Mediator, knowing nothing about other colleague classes.",
+        "The architectural foundation of Air Traffic Control towers, chat rooms, UI dialog form controllers, and CQRS in-process event dispatchers (MediatR)."
+      ],
+      "sections": [
+        {
+          "heading": "1. Architectural Intent: Taming M:N Spaghetti Dependencies via Centralized Coordination",
+          "body": "When multiple components interact with one another (such as a complex UI modal dialog containing checkboxes, buttons, text inputs, and drop-down menus), changes to one component often affect several others: checking 'Ship to different address' shows extra text inputs, validates postal codes, and recalculates taxes. If every widget communicates directly with every other widget, the system degrades into an unmaintainable M:N spaghetti mesh. The Mediator pattern centralizes all inter-component coordination into a single coordinator object.",
+          "bullets": [
+            "Replaces Mesh with Star Topology: Transforms chaotic O(N^2) direct dependencies into O(N) connections to a central hub.",
+            "Decouples Colleagues: Widgets or services only know about the Mediator; they have zero references to sibling components.",
+            "Single Responsibility Principle: Complex multi-component interaction business rules are consolidated in one coordinator class."
+          ]
+        },
+        {
+          "heading": "2. Hub-and-Spoke Topology & Loose Coupling Across Colleague Objects",
+          "body": "In a Mediator architecture, Colleague components hold a reference to the Mediator interface. When an event occurs (e.g. button.onClick()), the button simply notifies the mediator: mediator.notify(this, 'SUBMIT_CLICKED'). The Mediator encapsulates the intelligence: it reads the state of text inputs, disables the button, shows a spinner, and sends the payload. Neither the button nor the text fields know each other exist.",
+          "bullets": [
+            "Event Notification: Colleagues emit events to the mediator via a standardized notify(sender, event) hook.",
+            "Coordinated Orchestration: The mediator executes multi-component state synchronization.",
+            "Reusability: Individual colleague components remain highly reusable because they are not coupled to specific UI layouts or peer components."
+          ]
+        },
+        {
+          "heading": "3. Failure Modes: God-Object Monolithization & Hidden Event Churn",
+          "body": "The primary risk of the Mediator pattern is that the Mediator class can easily degenerate into a monolithic God Object. As more colleague widgets and complex rules are added, the mediator's notify() method balloons into thousands of lines of nested switch statements. Furthermore, if colleague reactions trigger secondary mediator events, cascading feedback loops can trigger infinite event cycles.",
+          "bullets": [
+            "God Object Anti-Pattern: When a mediator grows too large, decompose it into smaller domain-specific sub-mediators.",
+            "Feedback Loops: If the mediator updates Widget A, and Widget A emits a change event back to the mediator that updates Widget B, circular event churn can crash the UI.",
+            "Tight Mediator Coupling: While colleagues are decoupled from each other, they are all tightly coupled to the Mediator."
+          ]
+        },
+        {
+          "heading": "4. Production Blueprint: Enterprise Air Traffic Control & UI Dialog Coordinator in TypeScript",
+          "body": "The following production TypeScript implementation demonstrates an Air Traffic Control Mediator coordinating aircraft runways and takeoff clearances without aircraft communicating directly.",
+          "bullets": [
+            "AirTrafficControlMediator Interface: Central coordination protocol.",
+            "FlightColleague Base: Aircraft instances that communicate strictly through the tower."
+          ],
+          "codeSnippet": {
+            "title": "Production Air Traffic Control Mediator in TypeScript",
+            "code": "export interface AirTrafficMediator {\n  requestLanding(flightNumber: string): boolean;\n  notifyRunwayCleared(flightNumber: string): void;\n}\n\nexport abstract class Aircraft {\n  constructor(protected mediator: AirTrafficMediator, public flightNumber: string) {}\n  public abstract land(): void;\n  public abstract clearRunway(): void;\n}\n\n// Concrete Colleague\nexport class CommercialFlight extends Aircraft {\n  land(): void {\n    const cleared = this.mediator.requestLanding(this.flightNumber);\n    if (cleared) {\n      console.log(`[Flight ${this.flightNumber}] Landing touchdown confirmed.`);\n      this.clearRunway();\n    } else {\n      console.log(`[Flight ${this.flightNumber}] Holding in holding pattern...`);\n    }\n  }\n\n  clearRunway(): void {\n    console.log(`[Flight ${this.flightNumber}] Runway vacated.`);\n    this.mediator.notifyRunwayCleared(this.flightNumber);\n  }\n}\n\n// The Central Mediator\nexport class AirportControlTower implements AirTrafficMediator {\n  private runwayOccupied: boolean = false;\n  private holdingQueue: string[] = [];\n\n  requestLanding(flightNumber: string): boolean {\n    if (!this.runwayOccupied) {\n      this.runwayOccupied = true;\n      console.log(`[Tower] Cleared ${flightNumber} for immediate landing.`);\n      return true;\n    }\n    console.log(`[Tower] Runway busy. Queuing ${flightNumber}.`);\n    this.holdingQueue.push(flightNumber);\n    return false;\n  }\n\n  notifyRunwayCleared(flightNumber: string): void {\n    this.runwayOccupied = false;\n    console.log(`[Tower] Runway is now open.`);\n    if (this.holdingQueue.length > 0) {\n      const nextFlight = this.holdingQueue.shift()!;\n      console.log(`[Tower] Calling ${nextFlight} from holding queue.`);\n      this.runwayOccupied = true;\n    }\n  }\n}"
+          }
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Mediator Pattern",
+          "pros": "Reduces M:N mesh complexity to 1:N star topology; colleagues are decoupled and reusable.",
+          "cons": "The mediator itself risks becoming a bloated, unmaintainable God Object.",
+          "bestFor": "Air traffic control, UI modal form controllers, in-process CQRS command buses (MediatR), chat rooms."
+        },
+        {
+          "option": "Direct Colleague References",
+          "pros": "Direct and straightforward for tiny applications with only 2 fixed widgets.",
+          "cons": "Tangled spaghetti dependencies; impossible to modify or test one widget without instantiating all others.",
+          "bestFor": "Trivial 2-component interactions."
+        },
+        {
+          "option": "Observer Pattern",
+          "pros": "Colleagues publish events to an open bus without a central coordinator.",
+          "cons": "No central place to understand the overarching business workflow; event flows become opaque.",
+          "bestFor": "Pure broadcast notifications where publishers do not need to coordinate actions across subscribers."
+        }
+      ],
+      "interviewTip": "Distinguish Mediator vs Facade: 'Facade creates a simplified interface over a subsystem; communication is unidirectional from client to subsystem. Mediator centralizes multilateral bidirectional communication between sibling components, replacing an M:N mesh with a 1:N hub-and-spoke star topology.'",
+      "ascii": "+-------------------------------------------------------------------------+\n|                         MEDIATOR UML CLASS MODEL                        |\n+-------------------------------------------------------------------------+\n [Without Mediator: Many-to-Many]            [With Mediator: Star Topology]\n      (A) <--------> (B)                                  (A)\n       ^ \\          / ^                                    ^\n       |   \\      /   |                                    |\n       |     \\  /     |                                    v\n      (C) <--------> (D)                            (B) <-> [Mediator] <-> (C)\n     (Complex Spagetti Links)                              ^\n                                                           |\n                                                           v\n                                                          (D)",
+      "blockNodes": [
+        {
+          "x": 340,
+          "y": 100,
+          "w": 260,
+          "h": 140,
+          "stereotype": "mediator",
+          "title": "AirTrafficMediator",
+          "stroke": "#38bdf8",
+          "lines": [
+            "+ notify(sender, event): void",
+            "+ registerFlight(flight)"
+          ],
+          "tag": "Mediator Interface"
+        },
+        {
+          "x": 100,
+          "y": 310,
+          "w": 220,
+          "h": 130,
+          "stereotype": "colleague",
+          "title": "BoeingFlight747",
+          "stroke": "#10b981",
+          "lines": [
+            "- mediator: AirTrafficMediator",
+            "+ requestLanding()"
+          ],
+          "tag": "Colleague A"
+        },
+        {
+          "x": 360,
+          "y": 310,
+          "w": 220,
+          "h": 130,
+          "stereotype": "colleague",
+          "title": "AirbusFlightA320",
+          "stroke": "#f59e0b",
+          "lines": [
+            "- mediator: AirTrafficMediator",
+            "+ holdInHoldingPattern()"
+          ],
+          "tag": "Colleague B"
+        },
+        {
+          "x": 620,
+          "y": 310,
+          "w": 220,
+          "h": 130,
+          "stereotype": "colleague",
+          "title": "AirportRunway",
+          "stroke": "#ef4444",
+          "lines": [
+            "- mediator: AirTrafficMediator",
+            "+ lockRunway() / free()"
+          ],
+          "tag": "Colleague C"
+        }
+      ],
+      "blockConns": [
+        {
+          "d": "M 210 310 L 400 240",
+          "lx": 280,
+          "ly": 270,
+          "label": "talks via"
+        },
+        {
+          "d": "M 470 310 L 470 240",
+          "lx": 470,
+          "ly": 275,
+          "label": "talks via"
+        },
+        {
+          "d": "M 730 310 L 540 240",
+          "lx": 650,
+          "ly": 270,
+          "label": "talks via"
+        }
+      ],
+      "flowNodes": [
+        {
+          "x": 50,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "1",
+          "title": "Landing Request",
+          "stroke": "#10b981",
+          "lines": [
+            "Flight A requests landing",
+            "Calls mediator.notify(\"LAND\")",
+            "Zero knowledge of Flight B"
+          ]
+        },
+        {
+          "x": 280,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "2",
+          "title": "Mediator Arbitration",
+          "stroke": "#38bdf8",
+          "lines": [
+            "ATC checks runway state",
+            "Runway is currently occupied",
+            "Resolves scheduling priority"
+          ]
+        },
+        {
+          "x": 520,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "3",
+          "title": "Flight B Hold Order",
+          "stroke": "#f59e0b",
+          "lines": [
+            "Mediator orders Flight B to hold",
+            "Adjusts flight altitude",
+            "Guarantees separation safety"
+          ]
+        },
+        {
+          "x": 760,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "4",
+          "title": "Runway Clearance",
+          "stroke": "#ef4444",
+          "lines": [
+            "Mediator clears runway",
+            "Signals Flight A to touch down",
+            "All colleagues stay decoupled"
+          ]
+        }
+      ],
+      "flowConns": [
+        {
+          "d": "M 250 200 L 280 200",
+          "lx": 265,
+          "ly": 190,
+          "label": "request"
+        },
+        {
+          "d": "M 490 200 L 520 200",
+          "lx": 505,
+          "ly": 190,
+          "label": "arbitrate"
+        },
+        {
+          "d": "M 730 200 L 760 200",
+          "lx": 745,
+          "ly": 190,
+          "label": "coordinate"
+        }
+      ]
+    },
+    {
+      "id": "memento",
+      "subtopicNumber": "3.9",
+      "title": "Memento Pattern",
+      "subtitle": "Without violating encapsulation, captures and externalizes an object's internal state so that the object can be restored to this state later.",
+      "readingTime": "8 min read",
+      "difficulty": "Advanced",
+      "accent": "#f59e0b",
+      "keyTakeaways": [
+        "Provides snapshot-and-restore capabilities while maintaining strict encapsulation: the internal state is hidden from all external classes including the Caretaker.",
+        "The Originator creates and consumes Mementos; the Caretaker stores Mementos but cannot inspect or mutate their private internals.",
+        "Essential for database savepoints, text editor checkpoint history, game save states, and transactional rollbacks."
+      ],
+      "sections": [
+        {
+          "heading": "1. Architectural Intent: Snapshotting Internal State Without Violating Encapsulation",
+          "body": "To implement undo, savepoints, or transaction rollback, an application needs to take a snapshot of an object's internal state. However, making all private fields public or exposing getters/setters completely destroys encapsulation: client code can manipulate internal fields, breaking business invariants. The Memento pattern resolves this paradox by letting the Originator serialize its private state into an opaque Memento object that no external class can read or alter.",
+          "bullets": [
+            "Encapsulation Integrity: The Memento's internal state is completely invisible to the Caretaker; only the Originator has permission to unpack it.",
+            "Originator: The domain object whose state is being tracked (e.g. TextEditor, Document).",
+            "Caretaker: The history manager that stores a stack of Mementos (e.g. HistoryManager, UndoStack), treating them as opaque tokens."
+          ]
+        },
+        {
+          "heading": "2. Originator, Caretaker & Opaque Memento Boundary Mechanics",
+          "body": "The elegance of Memento lies in the 'Wide vs Narrow' interface idiom. To the Caretaker, the Memento exposes a 'narrow' interface (often an empty marker interface or a metadata interface showing only timestamp and title). To the Originator, the Memento exposes a 'wide' interface granting full access to its internal state fields. In languages like Java or C++, this is enforced via inner classes or friend classes.",
+          "bullets": [
+            "Narrow Interface: Exposed to the public Caretaker (e.g., getTimestamp(), getName()).",
+            "Wide Interface: Private to the Originator class, providing direct access to raw internal state.",
+            "Atomic Restoration: Invoking originator.restore(memento) instantaneously restores the complete internal object graph."
+          ]
+        },
+        {
+          "heading": "3. Failure Modes: Massive Heap Memory Bloat & Leaky Mementos",
+          "body": "The primary challenge of Memento in production is memory consumption. If an Originator contains a 50MB image or document, and the Caretaker saves a full snapshot on every single keystroke, the JVM will run Out of Memory in minutes. Production systems mitigate this using incremental delta/diff snapshots, copy-on-write data structures, or compressing older snapshots.",
+          "bullets": [
+            "Unbounded Snapshot Growth: Enforce bounded FIFO queues and disk offloading for historical mementos.",
+            "Deep vs Shallow Snapshotting: If state objects reference mutable collections, the Memento must perform defensive deep copies during snapshot creation.",
+            "Leaky Memento Mutation: Never expose public setters on Mementos; they must be strictly immutable."
+          ]
+        },
+        {
+          "heading": "4. Production Blueprint: Incremental Diffing Document Snapshot Engine in Java 21",
+          "body": "The following production Java implementation showcases an enterprise Document Editor Memento system with private inner-class encapsulation and bounded caretaker history.",
+          "bullets": [
+            "DocumentMemento: Opaque to the caretaker; fully accessible to DocumentEditor.",
+            "DocumentHistory Caretaker: Manages undo stack with size limits."
+          ],
+          "codeSnippet": {
+            "title": "Production Encapsulated Memento in Java 21",
+            "code": "// Narrow interface visible to Caretaker\npublic interface Memento {\n    Instant getTimestamp();\n    String getSummary();\n}\n\n// Originator\npublic class DocumentEditor {\n    private String content = \"\";\n    private int cursorPosition = 0;\n\n    public void write(String text) {\n        this.content += text;\n        this.cursorPosition = this.content.length();\n    }\n\n    public String getContent() { return content; }\n\n    // Snapshot state into opaque memento\n    public Memento save() {\n        return new EditorMemento(this.content, this.cursorPosition);\n    }\n\n    // Restore state from memento\n    public void restore(Memento memento) {\n        if (memento instanceof EditorMemento em) {\n            this.content = em.content;\n            this.cursorPosition = em.cursorPosition;\n            System.out.printf(\"[Restore] Restored state from %s%n\", em.getTimestamp());\n        } else {\n            throw new IllegalArgumentException(\"Unknown memento implementation\");\n        }\n    }\n\n    // Wide Interface encapsulated as private static class\n    private static class EditorMemento implements Memento {\n        private final String content;\n        private final int cursorPosition;\n        private final Instant timestamp = Instant.now();\n\n        private EditorMemento(String content, int cursorPosition) {\n            this.content = content;\n            this.cursorPosition = cursorPosition;\n        }\n\n        @Override public Instant getTimestamp() { return timestamp; }\n        @Override public String getSummary() { return content.substring(0, Math.min(content.length(), 20)) + \"...\"; }\n    }\n}"
+          }
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Memento Pattern",
+          "pros": "Preserves encapsulation, allows full state restoration, caretaker cannot corrupt state.",
+          "cons": "High memory consumption if snapshots are frequent and objects are large; cloning overhead.",
+          "bestFor": "Text editor history, game checkpoint saves, database transaction rollback points."
+        },
+        {
+          "option": "Command Pattern (with Inverse)",
+          "pros": "Stores only the operation diff rather than full snapshots; dramatically lower memory usage.",
+          "cons": "Requires implementing inverse operations for every action; mathematically hard for lossy operations.",
+          "bestFor": "Systems with discrete undoable operations (e.g. financial ledgers)."
+        },
+        {
+          "option": "Public Getters / Setters",
+          "pros": "Trivial to serialize to JSON.",
+          "cons": "Destroys encapsulation; leaks internal representation to external callers.",
+          "bestFor": "Stateless DTO data transfers."
+        }
+      ],
+      "interviewTip": "In interviews, emphasize the 'Narrow vs Wide Interface' concept: 'The beauty of Memento is that it solves state snapshotting without violating encapsulation. The Caretaker sees only a narrow marker interface, while the Originator accesses the wide interface via private inner classes to restore state.'",
+      "ascii": "+-------------------------------------------------------------------------+\n|                         MEMENTO UML CLASS MODEL                         |\n+-------------------------------------------------------------------------+\n+----------------------------+             +----------------------------+\n|         Originator         |             |          Memento           |\n+----------------------------+             +----------------------------+\n| - state: String            | creates ->  | - state: String (private)  |\n| + createMemento(): Memento |             | + getState(): String       |\n| + restore(m: Memento): void|             +----------------------------+\n+----------------------------+                           ^\n                                                         | stores\n                                           +-------------+--------------+\n                                           |         Caretaker          |\n                                           +----------------------------+\n                                           | - history: Deque<Memento>  |\n                                           | + save(): void             |\n                                           | + undo(): void             |\n                                           +----------------------------+",
+      "blockNodes": [
+        {
+          "x": 50,
+          "y": 120,
+          "w": 240,
+          "h": 140,
+          "stereotype": "originator",
+          "title": "TextEditor (Originator)",
+          "stroke": "#a855f7",
+          "lines": [
+            "- content: StringBuilder",
+            "+ save(): EditorMemento",
+            "+ restore(m: Memento)"
+          ],
+          "tag": "Originator"
+        },
+        {
+          "x": 370,
+          "y": 120,
+          "w": 250,
+          "h": 140,
+          "stereotype": "memento",
+          "title": "EditorMemento (Opaque)",
+          "stroke": "#10b981",
+          "lines": [
+            "- state: String {private}",
+            "- timestamp: Instant",
+            "Private constructor"
+          ],
+          "tag": "Memento"
+        },
+        {
+          "x": 690,
+          "y": 120,
+          "w": 230,
+          "h": 140,
+          "stereotype": "caretaker",
+          "title": "HistoryManager (Caretaker)",
+          "stroke": "#38bdf8",
+          "lines": [
+            "- snapshots: Deque<Memento>",
+            "+ backup(editor)",
+            "+ undo(editor)"
+          ],
+          "tag": "Caretaker"
+        }
+      ],
+      "blockConns": [
+        {
+          "d": "M 290 190 L 370 190",
+          "lx": 330,
+          "ly": 175,
+          "label": "creates"
+        },
+        {
+          "d": "M 690 190 L 620 190",
+          "lx": 655,
+          "ly": 175,
+          "label": "stores"
+        }
+      ],
+      "flowNodes": [
+        {
+          "x": 50,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "1",
+          "title": "State Mutates",
+          "stroke": "#a855f7",
+          "lines": [
+            "User types \"Hello World\"",
+            "Originator internal state changes",
+            "Snapshot trigger fires"
+          ]
+        },
+        {
+          "x": 280,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "2",
+          "title": "Memento Creation",
+          "stroke": "#10b981",
+          "lines": [
+            "Originator creates Memento",
+            "Copies private state buffer",
+            "Returns immutable memento"
+          ]
+        },
+        {
+          "x": 520,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "3",
+          "title": "Caretaker Retention",
+          "stroke": "#38bdf8",
+          "lines": [
+            "Caretaker pushes to stack",
+            "Caretaker cannot read content",
+            "Opaque state token"
+          ]
+        },
+        {
+          "x": 760,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "4",
+          "title": "State Restoration",
+          "stroke": "#f59e0b",
+          "lines": [
+            "User invokes Undo",
+            "Caretaker hands memento back",
+            "Originator restores state"
+          ]
+        }
+      ],
+      "flowConns": [
+        {
+          "d": "M 250 200 L 280 200",
+          "lx": 265,
+          "ly": 190,
+          "label": "snapshot"
+        },
+        {
+          "d": "M 490 200 L 520 200",
+          "lx": 505,
+          "ly": 190,
+          "label": "store"
+        },
+        {
+          "d": "M 730 200 L 760 200",
+          "lx": 745,
+          "ly": 190,
+          "label": "restore"
+        }
+      ]
+    },
+    {
+      "id": "visitor",
+      "subtopicNumber": "3.10",
+      "title": "Visitor Pattern",
+      "subtitle": "Represents an operation to be performed on the elements of an object structure, letting you define a new operation without changing the classes of the elements.",
+      "readingTime": "9 min read",
+      "difficulty": "Advanced",
+      "accent": "#a855f7",
+      "keyTakeaways": [
+        "Enables adding new polymorphic operations to complex class hierarchies without modifying existing element classes.",
+        "Implements Double Dispatch to bypass single-dispatch virtual method limitations in languages like Java, C++, and C#.",
+        "Ubiquitous in compiler design (AST tree walking, type checkers, code generators) and document export engines (PDF, HTML, Markdown)."
+      ],
+      "sections": [
+        {
+          "heading": "1. Architectural Intent: Adding Operations to Complex Hierarchies Without Modifying Classes",
+          "body": "Consider a compiler or document engine with dozens of node types (Paragraph, Header, Table, CodeBlock). If you need to add operations—such as ExportToPDF, ExportToMarkdown, CountWordFrequency, and AuditAccessibility—adding methods to each node class violates the Open/Closed Principle and pollutes domain entities with formatting logic. The Visitor pattern extracts these operations into separate Visitor classes.",
+          "bullets": [
+            "Open/Closed Principle: Introduce new operations across the entire class hierarchy by creating a new Visitor subclass without touching node classes.",
+            "Single Responsibility Principle: Gathers related operations into a single cohesive Visitor class rather than spreading them across dozens of node files.",
+            "Heterogeneous Data Traversal: Operates seamlessly across collections containing diverse, unrelated node types."
+          ]
+        },
+        {
+          "heading": "2. Double Dispatch Mechanics & Virtual Method Table Resolution",
+          "body": "Most object-oriented languages (Java, C++, TypeScript) support Single Dispatch: the method executed at runtime depends only on the receiver object's dynamic type, not the parameter's dynamic type. If you have visitor.visit(element), the language resolves the method based on the compile-time type of element. Visitor circumvents this using Double Dispatch: 1) The client calls element.accept(visitor); 2) Inside accept(), the element calls visitor.visit(this), binding the exact concrete element type polymorphically.",
+          "bullets": [
+            "Dispatch 1: element.accept(visitor) dynamically dispatches based on the concrete Element class.",
+            "Dispatch 2: Inside accept(), visitor.visit(this) dynamically dispatches based on the concrete Visitor class, passing the strongly-typed 'this'.",
+            "Type-Safe Execution: Eliminates ugly instanceof chains and runtime casting."
+          ]
+        },
+        {
+          "heading": "3. Failure Modes: Cyclic Dependencies & The Pain of Adding New Element Types",
+          "body": "The Achilles' heel of the Visitor pattern is that while it makes adding new *operations* trivial, it makes adding new *element types* excruciatingly difficult. If you introduce a new element class (e.g. VideoBlock), the Visitor base interface must add visitVideoBlock(VideoBlock), instantly breaking every single existing visitor class in the codebase.",
+          "bullets": [
+            "Element Hierarchy Rigidity: Never use Visitor if the element class hierarchy is changing frequently; only use it when the element hierarchy is stable.",
+            "Encapsulation Compromise: Visitors often require access to private/protected fields of elements to perform their tasks, forcing elements to expose public getters.",
+            "Cyclic Dependencies: Element interfaces must import the Visitor interface, and the Visitor interface must import all Element classes, creating mutual compilation cycles."
+          ]
+        },
+        {
+          "heading": "4. Production Blueprint: AST Expression Evaluator & Document Exporter in Java 21",
+          "body": "The following production Java implementation demonstrates an Abstract Syntax Tree (AST) Document Exporter using Visitor with full double dispatch.",
+          "bullets": [
+            "DocumentVisitor: Declares visit() overloads for Paragraph and Heading nodes.",
+            "HtmlExportVisitor & MarkdownExportVisitor: Specialized rendering engines."
+          ],
+          "codeSnippet": {
+            "title": "Production AST Document Visitor in Java 21",
+            "code": "public interface DocumentVisitor {\n    void visit(HeadingNode node);\n    void visit(ParagraphNode node);\n}\n\n// Element Interface\npublic interface DocumentNode {\n    void accept(DocumentVisitor visitor); // The First Dispatch\n}\n\n// Concrete Element 1\npublic record HeadingNode(int level, String text) implements DocumentNode {\n    @Override public void accept(DocumentVisitor visitor) {\n        visitor.visit(this); // The Second Dispatch\n    }\n}\n\n// Concrete Element 2\npublic record ParagraphNode(String text) implements DocumentNode {\n    @Override public void accept(DocumentVisitor visitor) {\n        visitor.visit(this); // The Second Dispatch\n    }\n}\n\n// Concrete Visitor: HTML Exporter\npublic class HtmlExportVisitor implements DocumentVisitor {\n    private final StringBuilder html = new StringBuilder();\n\n    @Override public void visit(HeadingNode node) {\n        html.append(String.format(\"<h%d>%s</h%d>%n\", node.level(), node.text(), node.level()));\n    }\n\n    @Override public void visit(ParagraphNode node) {\n        html.append(String.format(\"<p>%s</p>%n\", node.text()));\n    }\n\n    public String getHtml() { return html.toString(); }\n}"
+          }
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Visitor Pattern",
+          "pros": "Trivial to add new operations across all nodes; clean separation of concerns; enforces Double Dispatch.",
+          "cons": "Extremely painful to add new element classes; requires element classes to expose internal state.",
+          "bestFor": "Compilers, AST evaluators, document format converters (HTML/PDF/Markdown), complex tax/audit rules."
+        },
+        {
+          "option": "Adding Methods to Elements Directly",
+          "pros": "Simple and intuitive when only 1-2 operations exist.",
+          "cons": "Pollutes domain entities with formatting/export logic; violates Open/Closed Principle.",
+          "bestFor": "Small, homogeneous class hierarchies."
+        },
+        {
+          "option": "Pattern Matching (Java 21 switch / TypeScript)",
+          "pros": "Modern language alternative: switch over sealed interfaces without double-dispatch boilerplate.",
+          "cons": "Does not separate concerns into distinct pluggable visitor objects as cleanly in older codebases.",
+          "bestFor": "Modern Java 21 sealed hierarchies and TypeScript union types."
+        }
+      ],
+      "interviewTip": "In interviews, explain Double Dispatch clearly: 'Java supports single dispatch: polymorphic calls resolve only on the dynamic type of the object receiving the call, not on argument types. Visitor simulates double dispatch by having the element call `visitor.visit(this)`, ensuring the compiler binds both the concrete visitor and concrete element at runtime without `instanceof` checks.'",
+      "ascii": "+-------------------------------------------------------------------------+\n|                          VISITOR UML CLASS MODEL                        |\n+-------------------------------------------------------------------------+\n   +-----------------------------+               +-----------------------------+\n   |        <<interface>>        |               |        <<interface>>        |\n   |           Element           |               |           Visitor           |\n   +-----------------------------+               +-----------------------------+\n   | + accept(v: Visitor): void  |               | + visit(c: Circle): void    |\n   +--------------^--------------+               | + visit(r: Rectangle): void |\n                  |                              +--------------^--------------+\n   +--------------+--------------+                              |\n   |                             |               +--------------+--------------+\n+--+----------+           +------+-----+   +-----+------+         +------------+----+\n|   Circle    |           |  Rectangle |   |  XmlExport |         | JsonExportVisitor|\n+-------------+           +------------+   +------------+         +-----------------+\n| + accept(v) |           | + accept(v)|   | + visit(c) |         | + visit(c)      |\n|   -> v.visit|           |   -> v.visit   | + visit(r) |         | + visit(r)      |\n+-------------+           +------------+   +------------+         +-----------------+",
+      "blockNodes": [
+        {
+          "x": 50,
+          "y": 100,
+          "w": 250,
+          "h": 140,
+          "stereotype": "element",
+          "title": "ReportElement",
+          "stroke": "#ef4444",
+          "lines": [
+            "+ accept(v: Visitor): void"
+          ],
+          "tag": "Element Interface"
+        },
+        {
+          "x": 550,
+          "y": 100,
+          "w": 270,
+          "h": 150,
+          "stereotype": "visitor",
+          "title": "Visitor",
+          "stroke": "#10b981",
+          "lines": [
+            "+ visit(user: UserElement)",
+            "+ visit(order: OrderElement)"
+          ],
+          "tag": "Visitor Interface"
+        },
+        {
+          "x": 50,
+          "y": 310,
+          "w": 250,
+          "h": 130,
+          "stereotype": "concrete-elem",
+          "title": "UserElement",
+          "stroke": "#38bdf8",
+          "lines": [
+            "+ accept(v: Visitor): void",
+            "  -> v.visit(this) [Double Dispatch]"
+          ],
+          "tag": "Concrete Element"
+        },
+        {
+          "x": 550,
+          "y": 310,
+          "w": 270,
+          "h": 130,
+          "stereotype": "concrete-vis",
+          "title": "PdfExportVisitor",
+          "stroke": "#f59e0b",
+          "lines": [
+            "+ visit(user): render User PDF",
+            "+ visit(order): render Order PDF"
+          ],
+          "tag": "Concrete Visitor"
+        }
+      ],
+      "blockConns": [
+        {
+          "d": "M 175 310 L 175 240",
+          "lx": 175,
+          "ly": 275,
+          "label": "implements"
+        },
+        {
+          "d": "M 685 310 L 685 250",
+          "lx": 685,
+          "ly": 275,
+          "label": "implements"
+        },
+        {
+          "d": "M 300 375 L 550 375",
+          "lx": 425,
+          "ly": 360,
+          "label": "double dispatches"
+        }
+      ],
+      "flowNodes": [
+        {
+          "x": 50,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "1",
+          "title": "Client Invokes accept()",
+          "stroke": "#ef4444",
+          "lines": [
+            "Client creates PdfVisitor",
+            "Calls element.accept(visitor)",
+            "First polymorphic dispatch"
+          ]
+        },
+        {
+          "x": 280,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "2",
+          "title": "Double Dispatch Trigger",
+          "stroke": "#38bdf8",
+          "lines": [
+            "element executes accept()",
+            "Passes \"this\" (UserElement)",
+            "Second polymorphic dispatch"
+          ]
+        },
+        {
+          "x": 520,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "3",
+          "title": "Visitor visit(User) Runs",
+          "stroke": "#10b981",
+          "lines": [
+            "visitor.visit(UserElement) executes",
+            "Knows exact runtime type",
+            "Extracts fields for PDF"
+          ]
+        },
+        {
+          "x": 760,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "4",
+          "title": "New Visitor Extensibility",
+          "stroke": "#f59e0b",
+          "lines": [
+            "Add XmlExportVisitor later",
+            "Zero changes to UserElement",
+            "Clean separation of concerns"
+          ]
+        }
+      ],
+      "flowConns": [
+        {
+          "d": "M 250 200 L 280 200",
+          "lx": 265,
+          "ly": 190,
+          "label": "accept"
+        },
+        {
+          "d": "M 490 200 L 520 200",
+          "lx": 505,
+          "ly": 190,
+          "label": "visit(this)"
+        },
+        {
+          "d": "M 730 200 L 760 200",
+          "lx": 745,
+          "ly": 190,
+          "label": "export"
+        }
+      ]
+    },
+    {
+      "id": "interpreter",
+      "subtopicNumber": "3.11",
+      "title": "Interpreter Pattern",
+      "subtitle": "Given a language, defines a representation for its grammar along with an interpreter that uses the representation to interpret sentences in the language.",
+      "readingTime": "10 min read",
+      "difficulty": "Expert",
+      "accent": "#f59e0b",
+      "keyTakeaways": [
         "Defines an Abstract Syntax Tree (AST) where terminal and non-terminal grammar rules are represented by classes.",
         "Allows evaluating domain-specific languages (DSLs), mathematical formulas, SQL-like query filters, or JSON path expressions.",
-        "For complex languages, dedicated parser generators (ANTLR, Lex/Yacc) are preferred over manual GoF Interpreter class trees."
+        "For complex grammars, dedicated parser generators (ANTLR, Lex/Yacc) are preferred over manual GoF Interpreter class trees."
       ],
-      ascii: `+-------------------------------------------------------------------------+
-|                        INTERPRETER UML CLASS MODEL                      |
-+-------------------------------------------------------------------------+
-                       +-----------------------------+
-                       |        <<interface>>        |
-                       |         Expression          |
-                       +-----------------------------+
-                       | + interpret(ctx): boolean   |
-                       +--------------^--------------+
-                                      |
-              +-----------------------+-----------------------+
-              |                                               |
-+-------------+---------------+               +---------------+-------------+
-|     TerminalExpression      |               |     OrExpression (Non-term) |
-+-----------------------------+               +-----------------------------+
-| - literal: String           |               | - expr1: Expression         |
-| + interpret(ctx): match     |               | - expr2: Expression         |
-+-----------------------------+               | + interpret(ctx): e1 || e2  |
-                                              +-----------------------------+`,
-      blockNodes: [
-        { x: 320, y: 100, w: 260, h: 130, stereotype: 'interface', title: 'BooleanExpression', stroke: '#f59e0b', lines: ['+ interpret(ctx: Context): boolean'], tag: 'AbstractExpression' },
-        { x: 100, y: 290, w: 250, h: 140, stereotype: 'terminal', title: 'TerminalRule', stroke: '#10b981', lines: ['- literal: String', '+ interpret(ctx): ctx.contains(literal)'], tag: 'Terminal' },
-        { x: 550, y: 290, w: 270, h: 150, stereotype: 'non-terminal', title: 'AndExpression', stroke: '#38bdf8', lines: ['- left: Expression', '- right: Expression', '+ interpret(ctx): left.eval() &amp;&amp; right.eval()'], tag: 'Non-Terminal' }
-      ],
-      blockConns: [
-        { d: 'M 225 290 L 370 230', lx: 280, ly: 255, label: 'implements' },
-        { d: 'M 685 290 L 530 230', lx: 635, ly: 255, label: 'implements' },
-        { d: 'M 820 365 C 870 365 870 160 580 160', lx: 870, ly: 260, label: 'recursively evaluates' }
-      ],
-      flowNodes: [
-        { x: 50, y: 140, w: 200, h: 140, step: '1', title: 'Query String Parsing', stroke: '#f59e0b', lines: ['Rule: "(VIP OR Gold) AND Active"', 'Tokenizer splits into tokens', 'Parser builds AST tree'] },
-        { x: 280, y: 140, w: 210, h: 140, step: '2', title: 'AST Assembly', stroke: '#38bdf8', lines: ['Root: AndExpression', 'Left child: OrExpression', 'Leaves: TerminalExpressions'] },
-        { x: 520, y: 140, w: 210, h: 140, step: '3', title: 'Context Evaluation', stroke: '#10b981', lines: ['Context contains user tags', 'Evaluates leaf node matches', 'Leaves return true/false'] },
-        { x: 760, y: 140, w: 200, h: 140, step: '4', title: 'Final Resolution', stroke: '#a855f7', lines: ['Root And evaluates subtrees', 'Short-circuits where possible', 'Returns final Boolean result'] }
-      ],
-      flowConns: [
-        { d: 'M 250 200 L 280 200', lx: 265, ly: 190, label: 'build AST' },
-        { d: 'M 490 200 L 520 200', lx: 505, ly: 190, label: 'evaluate' },
-        { d: 'M 730 200 L 760 200', lx: 745, ly: 190, label: 'resolve' }
-      ],
-      sections: [
+      "sections": [
         {
-          heading: "Evaluating Domain-Specific Rules via Recursive AST Trees",
-          body: "When building business rule engines (e.g. 'Discount eligible if order total > $100 AND user is VIP'), hardcoding rules into procedural code requires redeploying software whenever business analysts change marketing rules. The Interpreter pattern maps grammar production rules into an object-oriented composite tree evaluated against a context.",
-          bullets: [
-            "Easy Grammar Extensibility: Adding a new operator (e.g. `XOR` or `NOT`) simply requires introducing a new Expression subclass.",
-            "Decoupled Context: The evaluation context holds runtime variables without coupling to AST grammar structure.",
-            "Performance Trade-off: Deep AST trees incur method recursion overhead; for high-frequency trading rules, compiling to bytecode or using ANTLR is superior."
-          ],
-          codeSnippet: {
-            title: "Rule Engine Boolean Interpreter in Java 21",
-            code: `public interface Expression {
-    boolean interpret(Set<String> context);
-}
-
-public record TerminalExpression(String data) implements Expression {
-    @Override public boolean interpret(Set<String> context) {
-        return context.contains(data);
-    }
-}
-
-public record OrExpression(Expression expr1, Expression expr2) implements Expression {
-    @Override public boolean interpret(Set<String> context) {
-        return expr1.interpret(context) || expr2.interpret(context);
-    }
-}
-
-public record AndExpression(Expression expr1, Expression expr2) implements Expression {
-    @Override public boolean interpret(Set<String> context) {
-        return expr1.interpret(context) && expr2.interpret(context);
-    }
-}`
-          },
-          flowDiagramUrl: "/diagrams/design-patterns/interpreter-flow.svg"
-        }
-      ],
-      tradeOffs: [
-        {
-          option: "Interpreter Pattern",
-          pros: "Simple to implement for small Domain Specific Languages (DSLs); flexible rule modifications.",
-          cons: "Not scalable for complex grammars; creates massive class trees; inefficient compared to bytecode compilers.",
-          bestFor: "Simple SQL query filter parsers, regex evaluation, calculation rule engines."
+          "heading": "1. Architectural Intent: Defining Grammars & Evaluating Domain-Specific Languages",
+          "body": "Many enterprise systems require users to define dynamic business rules at runtime—such as fraud detection filters ('riskScore > 80 AND (country != US OR transactionAmount > 5000)'), SQL-like search queries, or promotion discount rules. Hardcoding these rules into code requires continuous redeployment. The Interpreter pattern defines a formal grammar for the language and constructs an Abstract Syntax Tree (AST) where each grammar rule is represented by a class.",
+          "bullets": [
+            "Grammar as Class Tree: Each production rule in the formal language grammar maps directly to a class in the tree.",
+            "Abstract Syntax Tree (AST): Sentences in the language are parsed into composite tree structures for evaluation.",
+            "Dynamic Domain Rules: Allows non-engineers to define dynamic rules in a simple DSL without recompiling the application."
+          ]
         },
         {
-          option: "Dedicated Parser Generator (ANTLR / JavaCC)",
-          pros: "Handles complex BNF grammars, generates efficient ASTs, industrial-grade error reporting.",
-          cons: "Steep learning curve, additional build tooling dependencies.",
-          bestFor: "Full programming language compilers and complex data query dialects."
-        }
-      ],
-      interviewTip: "In interviews, explicitly state the limitation of the GoF Interpreter pattern: it is only suitable for simple grammars. For anything complex, recommend parser generator tools like ANTLR or using lightweight scripting engines like SpEL (Spring Expression Language)."
-    },
-    {
-      id: "iterator",
-      subtopicNumber: "3.4",
-      title: "Iterator Pattern",
-      subtitle: "Provides a way to access the elements of an aggregate object sequentially without exposing its underlying representation.",
-      readingTime: "6 min read",
-      difficulty: "Foundational",
-      accent: "#10b981",
-      keyTakeaways: [
-        "Encapsulates collection traversal algorithms (Depth-First Search, Breadth-First Search, reverse order) away from the collection itself.",
-        "Allows multiple concurrent iterations over the same collection without modifying collection internal state.",
-        "The standard underpinning of Java's `java.util.Iterator`, `Iterable`, and the enhanced `for-each` loop."
-      ],
-      ascii: `+-------------------------------------------------------------------------+
-|                         ITERATOR UML CLASS MODEL                        |
-+-------------------------------------------------------------------------+
-+--------------------------+               +-----------------------------+
-|      <<interface>>       |               |        <<interface>>        |
-|      IterableList<T>     |  creates ---> |         Iterator<T>         |
-+--------------------------+               +-----------------------------+
-| + createIterator(): Iter |               | + hasNext(): boolean        |
-+------------^-------------+               | + next(): T                 |
-             |                             +--------------^--------------+
-+------------+-------------+                              |
-|     CustomArrayList      |               +--------------+--------------+
-+--------------------------+               |     CustomArrayIterator     |
-| - items: Object[]        |               +-----------------------------+
-| + createIterator(): Iter |               | - cursor: int = 0           |
-+--------------------------+               | + next(): items[cursor++]   |
-                                           +-----------------------------+`,
-      blockNodes: [
-        { x: 50, y: 110, w: 250, h: 140, stereotype: 'iterable', title: 'IterableAggregate<T>', stroke: '#10b981', lines: ['+ iterator(): Iterator<T>'], tag: 'Aggregate' },
-        { x: 50, y: 310, w: 250, h: 130, stereotype: 'concrete-agg', title: 'BinaryTree<T>', stroke: '#38bdf8', lines: ['- root: Node<T>', '+ iterator(): InOrderTreeIterator'], tag: 'ConcreteAggregate' },
-        { x: 550, y: 110, w: 250, h: 140, stereotype: 'iterator', title: 'Iterator<T>', stroke: '#f59e0b', lines: ['+ hasNext(): boolean', '+ next(): T'], tag: 'Iterator' },
-        { x: 550, y: 310, w: 250, h: 130, stereotype: 'concrete-iter', title: 'InOrderTreeIterator<T>', stroke: '#a855f7', lines: ['- stack: Deque<Node<T>>', '+ next(): yields sorted node'], tag: 'ConcreteIterator' }
-      ],
-      blockConns: [
-        { d: 'M 175 310 L 175 250', lx: 175, ly: 280, label: 'implements' },
-        { d: 'M 300 170 L 550 170', lx: 425, ly: 155, label: 'creates' },
-        { d: 'M 675 310 L 675 250', lx: 675, ly: 280, label: 'implements' },
-        { d: 'M 300 375 L 550 375', lx: 425, ly: 360, label: 'traverses' }
-      ],
-      flowNodes: [
-        { x: 50, y: 140, w: 200, h: 140, step: '1', title: 'Iterator Requested', stroke: '#10b981', lines: ['Client calls tree.iterator()', 'Tree yields fresh cursor object', 'Cursor initializes internal stack'] },
-        { x: 280, y: 140, w: 210, h: 140, step: '2', title: 'hasNext() Check', stroke: '#f59e0b', lines: ['Verifies remaining nodes', 'Non-destructive query', 'Returns true if stack non-empty'] },
-        { x: 520, y: 140, w: 210, h: 140, step: '3', title: 'next() Advance', stroke: '#38bdf8', lines: ['Pops current node from stack', 'Pushes right child subtree', 'Advances cursor position'] },
-        { x: 760, y: 140, w: 200, h: 140, step: '4', title: 'Iteration Completes', stroke: '#a855f7', lines: ['Cursor reaches end of tree', 'hasNext() returns false', 'Loop cleanly exits'] }
-      ],
-      flowConns: [
-        { d: 'M 250 200 L 280 200', lx: 265, ly: 190, label: 'initialize' },
-        { d: 'M 490 200 L 520 200', lx: 505, ly: 190, label: 'check' },
-        { d: 'M 730 200 L 760 200', lx: 745, ly: 190, label: 'yield' }
-      ],
-      sections: [
-        {
-          heading: "Uniform Traversal without Breaking Internal Encapsulation",
-          body: "Exposing internal collection structures (arrays, binary tree nodes, skip lists) to client code exposes private pointers and breaks encapsulation. The Iterator pattern provides a standardized cursor interface, allowing developers to switch from an array list to a balanced AVL tree without changing any client traversal loops.",
-          bullets: [
-            "Single Responsibility Principle: Traversal algorithms are extracted away from the data structure classes into dedicated iterator classes.",
-            "Open/Closed Principle: Introduce custom iterators (e.g., Breadth-First or Depth-First) without changing the data structure.",
-            "Fail-Fast Semantics: Modern iterators detect concurrent modifications using version counters (`modCount`), throwing `ConcurrentModificationException`."
-          ],
-          codeSnippet: {
-            title: "Custom In-Order Binary Tree Iterator in Java 21",
-            code: `public record TreeNode<T>(T val, TreeNode<T> left, TreeNode<T> right) {}
-
-public class InOrderTreeIterator<T> implements Iterator<T> {
-    private final Deque<TreeNode<T>> stack = new ArrayDeque<>();
-
-    public InOrderTreeIterator(TreeNode<T> root) {
-        pushLeft(root);
-    }
-
-    private void pushLeft(TreeNode<T> node) {
-        while (node != null) {
-            stack.push(node);
-            node = node.left();
-        }
-    }
-
-    @Override
-    public boolean hasNext() {
-        return !stack.isEmpty();
-    }
-
-    @Override
-    public T next() {
-        if (!hasNext()) throw new NoSuchElementException();
-        TreeNode<T> current = stack.pop();
-        pushLeft(current.right());
-        return current.val();
-    }
-}`
-          },
-          flowDiagramUrl: "/diagrams/design-patterns/iterator-flow.svg"
-        }
-      ],
-      tradeOffs: [
-        {
-          option: "Iterator Pattern",
-          pros: "Hides data structure representation; supports multiple simultaneous traversals; clean unified API.",
-          cons: "Overkill for simple arrays where indexed `for` loops are marginally faster and simpler.",
-          bestFor: "Complex graphs, binary trees, paginated database cursor streams."
+          "heading": "2. Terminal vs Non-Terminal Expressions & AST Traversal",
+          "body": "The Interpreter pattern divides grammar expressions into two distinct categories: 1) Terminal Expressions, which represent the literal leaves of the AST (such as a string literal, number, or variable reference that evaluates directly against the Context); and 2) Non-Terminal Expressions, which represent operations combining multiple sub-expressions (such as AndExpression, OrExpression, AddExpression). The interpret(Context) method evaluates the tree recursively.",
+          "bullets": [
+            "Context: Holds global state, input variables, and evaluation environment.",
+            "TerminalExpression: Leaf nodes that evaluate directly without recursion.",
+            "NonTerminalExpression: Branch nodes that recursively invoke interpret() on child expressions and combine results."
+          ]
         },
         {
-          option: "Direct Array/Index Access",
-          pros: "Zero object allocation overhead; direct memory pointer access.",
-          cons: "Tightly binds client to array indexing; fails for trees and linked graphs.",
-          bestFor: "High-performance primitives arrays in numerical computing."
-        }
-      ],
-      interviewTip: "In interviews, explain Java's Fail-Fast vs Fail-Safe iterators: Fail-Fast (e.g. `ArrayList.iterator()`) throws `ConcurrentModificationException` if the underlying list changes during iteration. Fail-Safe (e.g. `CopyOnWriteArrayList`) operates on a clone of the collection and never throws."
-    },
-    {
-      id: "mediator",
-      subtopicNumber: "3.5",
-      title: "Mediator Pattern",
-      subtitle: "Defines an object that encapsulates how a set of objects interact, preventing them from referring to each other explicitly.",
-      readingTime: "7 min read",
-      difficulty: "Intermediate",
-      accent: "#38bdf8",
-      keyTakeaways: [
-        "Replaces many-to-many dependencies ($O(N^2)$ coupling) between colleagues with one-to-many dependencies ($O(N)$ coupling) via a central Mediator.",
-        "Colleagues only know about the Mediator; they send notifications to it, and the Mediator orchestrates the reactions of other components.",
-        "Underpins Air Traffic Control systems, chatroom message hubs, and complex UI dialog forms with interdependent form inputs."
-      ],
-      ascii: `+-------------------------------------------------------------------------+
-|                         MEDIATOR UML CLASS MODEL                        |
-+-------------------------------------------------------------------------+
- [Without Mediator: Many-to-Many]            [With Mediator: Star Topology]
-      (A) <--------> (B)                                  (A)
-       ^ \\          / ^                                    ^
-       |   \\      /   |                                    |
-       |     \\  /     |                                    v
-      (C) <--------> (D)                            (B) <-> [Mediator] <-> (C)
-     (Complex Spagetti Links)                              ^
-                                                           |
-                                                           v
-                                                          (D)`,
-      blockNodes: [
-        { x: 340, y: 100, w: 260, h: 140, stereotype: 'mediator', title: 'AirTrafficMediator', stroke: '#38bdf8', lines: ['+ notify(sender, event): void', '+ registerFlight(flight)'], tag: 'Mediator Interface' },
-        { x: 100, y: 310, w: 220, h: 130, stereotype: 'colleague', title: 'BoeingFlight747', stroke: '#10b981', lines: ['- mediator: AirTrafficMediator', '+ requestLanding()'], tag: 'Colleague A' },
-        { x: 360, y: 310, w: 220, h: 130, stereotype: 'colleague', title: 'AirbusFlightA320', stroke: '#f59e0b', lines: ['- mediator: AirTrafficMediator', '+ holdInHoldingPattern()'], tag: 'Colleague B' },
-        { x: 620, y: 310, w: 220, h: 130, stereotype: 'colleague', title: 'AirportRunway', stroke: '#ef4444', lines: ['- mediator: AirTrafficMediator', '+ lockRunway() / free()'], tag: 'Colleague C' }
-      ],
-      blockConns: [
-        { d: 'M 210 310 L 400 240', lx: 280, ly: 270, label: 'talks via' },
-        { d: 'M 470 310 L 470 240', lx: 470, ly: 275, label: 'talks via' },
-        { d: 'M 730 310 L 540 240', lx: 650, ly: 270, label: 'talks via' }
-      ],
-      flowNodes: [
-        { x: 50, y: 140, w: 200, h: 140, step: '1', title: 'Landing Request', stroke: '#10b981', lines: ['Flight A requests landing', 'Calls mediator.notify("LAND")', 'Zero knowledge of Flight B'] },
-        { x: 280, y: 140, w: 210, h: 140, step: '2', title: 'Mediator Arbitration', stroke: '#38bdf8', lines: ['ATC checks runway state', 'Runway is currently occupied', 'Resolves scheduling priority'] },
-        { x: 520, y: 140, w: 210, h: 140, step: '3', title: 'Flight B Hold Order', stroke: '#f59e0b', lines: ['Mediator orders Flight B to hold', 'Adjusts flight altitude', 'Guarantees separation safety'] },
-        { x: 760, y: 140, w: 200, h: 140, step: '4', title: 'Runway Clearance', stroke: '#ef4444', lines: ['Mediator clears runway', 'Signals Flight A to touch down', 'All colleagues stay decoupled'] }
-      ],
-      flowConns: [
-        { d: 'M 250 200 L 280 200', lx: 265, ly: 190, label: 'request' },
-        { d: 'M 490 200 L 520 200', lx: 505, ly: 190, label: 'arbitrate' },
-        { d: 'M 730 200 L 760 200', lx: 745, ly: 190, label: 'coordinate' }
-      ],
-      sections: [
-        {
-          heading: "Preventing Sprawling Spiderweb Dependencies",
-          body: "When UI dialogs contain checkboxes that disable text inputs, which trigger validation errors, which change button colors, objects become tightly coupled in an $O(N^2)$ tangle. Changing one component breaks three others. The Mediator pattern extracts all communication logic into a centralized controller.",
-          bullets: [
-            "Single Responsibility Principle: Centralizes communication and orchestration logic between disparate objects into one dedicated class.",
-            "Open/Closed Principle: You can introduce new colleagues into the system without changing existing colleagues.",
-            "Risk of God Object: The mediator can easily devolve into an overly complex 'God Object' if not subdivided properly."
-          ],
-          codeSnippet: {
-            title: "Chatroom Hub Mediator in Java 21",
-            code: `public interface ChatMediator {
-    void sendMessage(String message, User sender);
-    void addUser(User user);
-}
-
-public abstract class User {
-    protected final ChatMediator mediator;
-    protected final String name;
-
-    public User(ChatMediator mediator, String name) {
-        this.mediator = mediator;
-        this.name = name;
-    }
-
-    public abstract void send(String message);
-    public abstract void receive(String message);
-}
-
-public class ChatRoomMediator implements ChatMediator {
-    private final List<User> users = new ArrayList<>();
-
-    @Override public void addUser(User user) { users.add(user); }
-
-    @Override
-    public void sendMessage(String message, User sender) {
-        for (User u : users) {
-            // Do not echo back to sender
-            if (u != sender) u.receive(sender.name + ": " + message);
-        }
-    }
-}`
-          },
-          flowDiagramUrl: "/diagrams/design-patterns/mediator-flow.svg"
-        }
-      ],
-      tradeOffs: [
-        {
-          option: "Mediator Pattern",
-          pros: "Reduces coupling between multiple classes; centralizes complex relationships.",
-          cons: "The mediator itself can evolve into an unmaintainable monolith over time.",
-          bestFor: "Air traffic control, chatrooms, interconnected UI form wizard steps."
+          "heading": "3. Failure Modes: Performance Degradation on Deep ASTs & When to Use ANTLR",
+          "body": "The primary limitation of the Gang of Four Interpreter pattern is that it does NOT define how to parse text into the AST—it only defines how to represent and execute the AST once constructed. Writing manual recursive descent parsers for complex grammars is error-prone. Furthermore, deep recursive AST traversal introduces heavy call-stack overhead and GC allocation. For non-trivial grammars, production architectures use parser generators like ANTLR or compile to bytecode (ByteBuddy/JASM).",
+          "bullets": [
+            "Parsing vs Interpreting: GoF Interpreter addresses only execution, not lexing or parsing.",
+            "Grammar Complexity Limits: For grammars with more than 10-15 rules, the class hierarchy becomes unmanageable; use ANTLR or Lex/Yacc instead.",
+            "Stack Overflow on Deep Trees: Highly nested expressions can trigger StackOverflowError; convert to iterative stack evaluation if expressions are unbounded."
+          ]
         },
         {
-          option: "Direct Colleague References",
-          pros: "Direct and simple when there are only 2 classes interacting.",
-          cons: "Combinatorial spaghetti code as the number of interacting classes grows past 4.",
-          bestFor: "Simple 1-to-1 relationships."
-        }
-      ],
-      interviewTip: "Contrast Mediator with Observer: In Observer, communication flows dynamically from 1 Subject to many Observers in a publisher-subscriber model. In Mediator, communication flows multidirectionally between Colleagues through a centralized hub that encapsulates complex cross-cutting coordination logic."
-    },
-    {
-      id: "memento",
-      subtopicNumber: "3.6",
-      title: "Memento Pattern",
-      subtitle: "Captures and externalizes an object's internal state without violating encapsulation, allowing the object to be restored to this state later.",
-      readingTime: "7 min read",
-      difficulty: "Intermediate",
-      accent: "#a855f7",
-      keyTakeaways: [
-        "Provides state snapshotting and restoration without exposing private fields or internal implementation details.",
-        "The Caretaker (e.g. history manager) stores mementos but can never read or mutate their internal contents ('black box' token).",
-        "Essential for database transaction savepoints, graphic editor history checkpoints, and text editor undo buffers."
-      ],
-      ascii: `+-------------------------------------------------------------------------+
-|                         MEMENTO UML CLASS MODEL                         |
-+-------------------------------------------------------------------------+
-+----------------------------+             +----------------------------+
-|         Originator         |             |          Memento           |
-+----------------------------+             +----------------------------+
-| - state: String            | creates ->  | - state: String (private)  |
-| + createMemento(): Memento |             | + getState(): String       |
-| + restore(m: Memento): void|             +----------------------------+
-+----------------------------+                           ^
-                                                         | stores
-                                           +-------------+--------------+
-                                           |         Caretaker          |
-                                           +----------------------------+
-                                           | - history: Deque<Memento>  |
-                                           | + save(): void             |
-                                           | + undo(): void             |
-                                           +----------------------------+`,
-      blockNodes: [
-        { x: 50, y: 120, w: 240, h: 140, stereotype: 'originator', title: 'TextEditor (Originator)', stroke: '#a855f7', lines: ['- content: StringBuilder', '+ save(): EditorMemento', '+ restore(m: Memento)'], tag: 'Originator' },
-        { x: 370, y: 120, w: 250, h: 140, stereotype: 'memento', title: 'EditorMemento (Opaque)', stroke: '#10b981', lines: ['- state: String {private}', '- timestamp: Instant', 'Private constructor'], tag: 'Memento' },
-        { x: 690, y: 120, w: 230, h: 140, stereotype: 'caretaker', title: 'HistoryManager (Caretaker)', stroke: '#38bdf8', lines: ['- snapshots: Deque<Memento>', '+ backup(editor)', '+ undo(editor)'], tag: 'Caretaker' }
-      ],
-      blockConns: [
-        { d: 'M 290 190 L 370 190', lx: 330, ly: 175, label: 'creates' },
-        { d: 'M 690 190 L 620 190', lx: 655, ly: 175, label: 'stores' }
-      ],
-      flowNodes: [
-        { x: 50, y: 140, w: 200, h: 140, step: '1', title: 'State Mutates', stroke: '#a855f7', lines: ['User types "Hello World"', 'Originator internal state changes', 'Snapshot trigger fires'] },
-        { x: 280, y: 140, w: 210, h: 140, step: '2', title: 'Memento Creation', stroke: '#10b981', lines: ['Originator creates Memento', 'Copies private state buffer', 'Returns immutable memento'] },
-        { x: 520, y: 140, w: 210, h: 140, step: '3', title: 'Caretaker Retention', stroke: '#38bdf8', lines: ['Caretaker pushes to stack', 'Caretaker cannot read content', 'Opaque state token'] },
-        { x: 760, y: 140, w: 200, h: 140, step: '4', title: 'State Restoration', stroke: '#f59e0b', lines: ['User invokes Undo', 'Caretaker hands memento back', 'Originator restores state'] }
-      ],
-      flowConns: [
-        { d: 'M 250 200 L 280 200', lx: 265, ly: 190, label: 'snapshot' },
-        { d: 'M 490 200 L 520 200', lx: 505, ly: 190, label: 'store' },
-        { d: 'M 730 200 L 760 200', lx: 745, ly: 190, label: 'restore' }
-      ],
-      sections: [
-        {
-          heading: "Encapsulated State Restoration without Breaking Privacy",
-          body: "Directly exposing an object's internal fields via public getters and setters to allow external classes to take backups breaks encapsulation. If the internal data structure changes from a String to a Rope or Tree, external backup classes break. Memento ensures that the Originator is the only class capable of reading and writing the snapshot data.",
-          bullets: [
-            "Preserves Encapsulation Boundaries: The internal state of the originator remains strictly private.",
-            "Simplified Caretaker: The caretaker only stores and passes memento objects without knowing anything about their contents.",
-            "Memory Consumption Caution: Storing frequent deep-state mementos can exhaust heap memory; consider delta/diff compression."
+          "heading": "4. Production Blueprint: Production Boolean Rule Engine & Query Filter in TypeScript",
+          "body": "The following production TypeScript implementation demonstrates an enterprise Dynamic Fraud Rule Engine evaluating complex boolean ASTs.",
+          "bullets": [
+            "Expression Interface: Core interpret() contract accepting a context dictionary.",
+            "Terminal & Non-Terminal Nodes: VariableExpression, ComparisonExpression, AndExpression, OrExpression."
           ],
-          codeSnippet: {
-            title: "Type-Safe Memento Snapshot in Java 21",
-            code: `// Originator
-public class TextDocument {
-    private String text = "";
-
-    public void write(String words) { text += words; }
-    public String getText() { return text; }
-
-    // Creates Snapshot
-    public Memento save() { return new Memento(this.text); }
-
-    // Restores Snapshot
-    public void restore(Memento memento) { this.text = memento.state(); }
-
-    // The Memento (Immutable record)
-    public record Memento(String state) {}
-}
-
-// Caretaker
-public class DocumentHistory {
-    private final Deque<TextDocument.Memento> history = new ArrayDeque<>();
-
-    public void backup(TextDocument doc) {
-        history.push(doc.save());
-    }
-
-    public void undo(TextDocument doc) {
-        if (!history.isEmpty()) {
-            doc.restore(history.pop());
-        }
-    }
-}`
-          },
-          flowDiagramUrl: "/diagrams/design-patterns/memento-flow.svg"
+          "codeSnippet": {
+            "title": "Production Rule Engine Interpreter in TypeScript",
+            "code": "export interface Expression {\n  interpret(context: Record<string, any>): boolean;\n}\n\n// Terminal Expression: Checks variable equality or threshold\nexport class ComparisonExpression implements Expression {\n  constructor(\n    private readonly field: string,\n    private readonly operator: \">\" | \"<\" | \"==\",\n    private readonly value: number\n  ) {}\n\n  interpret(context: Record<string, any>): boolean {\n    const actual = context[this.field];\n    if (actual === undefined) return false;\n    switch (this.operator) {\n      case \">\": return actual > this.value;\n      case \"<\": return actual < this.value;\n      case \"==\": return actual === this.value;\n    }\n  }\n}\n\n// Non-Terminal Expression: Logical AND\nexport class AndExpression implements Expression {\n  constructor(private left: Expression, private right: Expression) {}\n\n  interpret(context: Record<string, any>): boolean {\n    return this.left.interpret(context) && this.right.interpret(context);\n  }\n}\n\n// Non-Terminal Expression: Logical OR\nexport class OrExpression implements Expression {\n  constructor(private left: Expression, private right: Expression) {}\n\n  interpret(context: Record<string, any>): boolean {\n    return this.left.interpret(context) || this.right.interpret(context);\n  }\n}\n\n// Usage Example\n// Rule: (amount > 1000 AND riskScore > 75) OR isBlacklisted == 1\nconst fraudRule = new OrExpression(\n  new AndExpression(\n    new ComparisonExpression(\"amount\", \">\", 1000),\n    new ComparisonExpression(\"riskScore\", \">\", 75)\n  ),\n  new ComparisonExpression(\"isBlacklisted\", \"==\", 1)\n);"
+          }
         }
       ],
-      tradeOffs: [
+      "tradeOffs": [
         {
-          option: "Memento Pattern",
-          pros: "Protects encapsulation; allows clean restoration of historical states.",
-          cons: "High memory footprint if snapshots are taken frequently on large objects.",
-          bestFor: "Transaction savepoints, graphic design undo stacks, game save files."
+          "option": "Interpreter Pattern",
+          "pros": "Simple to implement for small domain-specific languages; dynamic rule evaluation at runtime.",
+          "cons": "Inefficient for complex grammars; creates large class trees; does not include text parsing.",
+          "bestFor": "Dynamic rule engines, boolean filter expressions, simple math formula evaluators."
         },
         {
-          option: "Public Getters/Setters State Cloning",
-          pros: "Simple to write quickly without dedicated memento classes.",
-          cons: "Destroys encapsulation; leaks private internal state across the codebase.",
-          bestFor: "Simple anemic DTO records with no private invariants."
-        }
-      ],
-      interviewTip: "In interviews, explain how Memento combines with Command: A Command object can store a Memento of the Receiver's state right before executing `execute()`. When `undo()` is called, the Command passes the saved Memento back to the Receiver to revert it cleanly."
-    },
-    {
-      id: "observer",
-      subtopicNumber: "3.7",
-      title: "Observer Pattern",
-      subtitle: "Defines a one-to-many dependency between objects so that when one object changes state, all its dependents are notified and updated automatically.",
-      readingTime: "8 min read",
-      difficulty: "Foundational",
-      accent: "#10b981",
-      keyTakeaways: [
-        "Defines a publisher-subscriber contract where Subject publishes state updates to an arbitrary number of registered Observers.",
-        "Subject does not know the concrete class of any Observer, adhering strictly to the Open/Closed Principle.",
-        "The bedrock of event-driven architectures, reactive programming (RxJava, Project Reactor), GUI button listeners, and message queues."
-      ],
-      ascii: `+-------------------------------------------------------------------------+
-|                         OBSERVER UML CLASS MODEL                        |
-+-------------------------------------------------------------------------+
-   +-----------------------------+               +-----------------------------+
-   |        <<interface>>        |               |        <<interface>>        |
-   |           Subject           |  notifies --> |           Observer          |
-   +-----------------------------+               +-----------------------------+
-   | + attach(o: Observer): void |               | + update(event): void       |
-   | + detach(o: Observer): void |               +--------------^--------------+
-   | + notifyObservers(): void   |                              |
-   +--------------^--------------+               +--------------+--------------+
-                  |                              |                             |
-   +--------------+--------------+     +---------+----------+       +----------+---------+
-   |         StockTicker         |     |   MobileAppDisplay |       |   EmailAlertSubscriber |
-   +-----------------------------+     +--------------------+       +--------------------+
-   | - price: BigDecimal         |     | + update(): render |       | + update(): send   |
-   +-----------------------------+     +--------------------+       +--------------------+`,
-      blockNodes: [
-        { x: 50, y: 110, w: 260, h: 140, stereotype: 'subject', title: 'MarketSubject', stroke: '#10b981', lines: ['- observers: List<Observer>', '+ attach(o) / detach(o)', '+ notifyObservers(event)'], tag: 'Subject' },
-        { x: 550, y: 110, w: 260, h: 140, stereotype: 'observer', title: 'Observer<T>', stroke: '#38bdf8', lines: ['+ onUpdate(event: T): void'], tag: 'Observer Interface' },
-        { x: 420, y: 320, w: 220, h: 130, stereotype: 'concrete-obs', title: 'TradingBotObserver', stroke: '#f59e0b', lines: ['+ onUpdate(): evaluate RSI', '  -> trigger automated order'], tag: 'Concrete Obs A' },
-        { x: 670, y: 320, w: 220, h: 130, stereotype: 'concrete-obs', title: 'PushNotifierObserver', stroke: '#ef4444', lines: ['+ onUpdate(): dispatch APNS', '  -> mobile push alert'], tag: 'Concrete Obs B' }
-      ],
-      blockConns: [
-        { d: 'M 310 170 L 550 170', lx: 430, ly: 155, label: 'notifies' },
-        { d: 'M 530 320 L 630 250', lx: 570, ly: 285, label: 'implements' },
-        { d: 'M 780 320 L 710 250', lx: 755, ly: 285, label: 'implements' }
-      ],
-      flowNodes: [
-        { x: 50, y: 140, w: 200, h: 140, step: '1', title: 'Price Change Event', stroke: '#10b981', lines: ['Stock price jumps to $195', 'StockTicker state mutates', 'Calls notifyObservers()'] },
-        { x: 280, y: 140, w: 210, h: 140, step: '2', title: 'Broadcast Iteration', stroke: '#38bdf8', lines: ['Iterates subscriber list', 'Calls observer.onUpdate()', 'Non-blocking notification'] },
-        { x: 520, y: 140, w: 210, h: 140, step: '3', title: 'Algorithmic Bot', stroke: '#f59e0b', lines: ['Trading bot executes order', 'Buys 100 shares in 2ms', 'Independent processing'] },
-        { x: 760, y: 140, w: 200, h: 140, step: '4', title: 'Mobile Notification', stroke: '#ef4444', lines: ['Apple Push Notification sent', 'User phone vibrates', 'Subject completely decoupled'] }
-      ],
-      flowConns: [
-        { d: 'M 250 200 L 280 200', lx: 265, ly: 190, label: 'publish' },
-        { d: 'M 490 200 L 520 200', lx: 505, ly: 190, label: 'dispatch' },
-        { d: 'M 730 200 L 760 200', lx: 745, ly: 190, label: 'notify' }
-      ],
-      sections: [
-        {
-          heading: "Decoupled Event Broadcasting and Memory Leak Hazards",
-          body: "When business state changes need to trigger updates across disparate services (e.g. user signup triggers welcome emails, analytics tracking, and fraud checks), coupling the signup service to all three modules creates an unmaintainable tangle. The Observer pattern allows subscribers to register and deregister dynamically.",
-          bullets: [
-            "Open/Closed Principle: Add new subscribers without modifying a single line of the publisher.",
-            "Lapsed Listener Problem: Observers that fail to unregister can remain in the Subject's reference list forever, creating silent memory leaks.",
-            "Push vs Pull Models: Push sends all event data directly in method parameters; Pull passes only a reference so the observer queries what it needs."
-          ],
-          codeSnippet: {
-            title: "Thread-Safe Stock Market Publisher in Java 21",
-            code: `public interface MarketObserver {
-    void onPriceUpdate(String symbol, double price);
-}
-
-public class StockTicker {
-    private final List<MarketObserver> observers = new CopyOnWriteArrayList<>();
-    private final Map<String, Double> prices = new ConcurrentHashMap<>();
-
-    public void subscribe(MarketObserver observer) {
-        observers.add(observer);
-    }
-
-    public void unsubscribe(MarketObserver observer) {
-        observers.remove(observer);
-    }
-
-    public void setPrice(String symbol, double price) {
-        prices.put(symbol, price);
-        for (MarketObserver observer : observers) {
-            observer.onPriceUpdate(symbol, price);
-        }
-    }
-}`
-          },
-          flowDiagramUrl: "/diagrams/design-patterns/observer-flow.svg"
-        }
-      ],
-      tradeOffs: [
-        {
-          option: "Observer Pattern",
-          pros: "Loosely coupled publisher/subscriber; dynamic runtime subscription; clean Open/Closed design.",
-          cons: "Subscribers are notified in random/unspecified order; potential memory leaks if not unsubscribed.",
-          bestFor: "Event-driven systems, UI button event listeners, stock price updates, sensor networks."
+          "option": "Parser Generators (ANTLR / Lex-Yacc)",
+          "pros": "Industry standard for complex grammars, generates optimized ASTs and parsers automatically.",
+          "cons": "Requires external build tools, learning curve for grammar definition files (.g4).",
+          "bestFor": "Full programming languages, SQL parsers, complex query languages."
         },
         {
-          option: "Synchronous Polling",
-          pros: "Very simple; client controls when to query for updates.",
-          cons: "Wastes CPU cycles and network bandwidth checking for changes that haven't occurred.",
-          bestFor: "Low-frequency batch jobs."
+          "option": "JavaScript eval() / Script Engine",
+          "pros": "Evaluates arbitrary code strings out of the box.",
+          "cons": "Massive security risk (code injection / RCE); slow performance; impossible to sandbox reliably.",
+          "bestFor": "Never recommended for untrusted user inputs in production backends."
         }
       ],
-      interviewTip: "In interviews, discuss the 'Lapsed Listener Problem' (memory leak caused by strong references from Subject to Observers preventing GC). Explain how using `WeakReference` or explicit lifecycle cleanup methods prevents this in long-running services."
-    },
-    {
-      id: "state",
-      subtopicNumber: "3.8",
-      title: "State Pattern",
-      subtitle: "Allows an object to alter its behavior when its internal state changes, appearing to change its class.",
-      readingTime: "7 min read",
-      difficulty: "Intermediate",
-      accent: "#f59e0b",
-      keyTakeaways: [
-        "Eliminates gargantuan switch-case statements that check `if (state == PAID)` across dozens of class methods.",
-        "Encapsulates state-specific behavior into independent State classes; state transitions are handled cleanly by delegating to new State instances.",
-        "Underpins Finite State Machines (FSMs), order checkout lifecycles, TCP connection handling, and game character animations."
-      ],
-      ascii: `+-------------------------------------------------------------------------+
-|                           STATE UML CLASS MODEL                         |
-+-------------------------------------------------------------------------+
-   +-----------------------------+               +-----------------------------+
-   |       OrderContext          |               |        <<interface>>        |
-   |                             |  delegates -> |          OrderState         |
-   +-----------------------------+               +-----------------------------+
-   | - state: OrderState         |               | + pay(): void               |
-   | + setState(s: OrderState)   |               | + ship(): void              |
-   | + pay(): void               |               | + cancel(): void            |
-   +-----------------------------+               +--------------^--------------+
-                                                                |
-                                 +------------------------------+------------------------------+
-                                 |                                                             |
-                   +-------------+---------------+                               +-------------+---------------+
-                   |        CreatedState         |                               |          PaidState          |
-                   +-----------------------------+                               +-----------------------------+
-                   | + pay(): ctx.setState(Paid) |                               | + ship(): ctx.setState(Ship)|
-                   | + ship(): throw Error       |                               | + cancel(): refund & cancel |
-                   +-----------------------------+                               +-----------------------------+`,
-      blockNodes: [
-        { x: 50, y: 120, w: 250, h: 140, stereotype: 'context', title: 'OrderContext', stroke: '#f59e0b', lines: ['- currentState: OrderState', '+ setState(s)', '+ pay() / cancel()'], tag: 'Context' },
-        { x: 550, y: 100, w: 260, h: 140, stereotype: 'interface', title: 'OrderState', stroke: '#10b981', lines: ['+ pay(ctx: OrderContext)', '+ ship(ctx: OrderContext)', '+ cancel(ctx: OrderContext)'], tag: 'State Interface' },
-        { x: 400, y: 310, w: 230, h: 130, stereotype: 'concrete-state', title: 'CreatedState', stroke: '#38bdf8', lines: ['+ pay(): transition to Paid', '+ ship(): IllegalState!'], tag: 'State A' },
-        { x: 670, y: 310, w: 230, h: 130, stereotype: 'concrete-state', title: 'PaidState', stroke: '#ef4444', lines: ['+ ship(): transition to Shipped', '+ cancel(): refund money'], tag: 'State B' }
-      ],
-      blockConns: [
-        { d: 'M 300 180 L 550 160', lx: 425, ly: 155, label: 'delegates to' },
-        { d: 'M 515 310 L 610 240', lx: 550, ly: 275, label: 'implements' },
-        { d: 'M 785 310 L 730 240', lx: 765, ly: 275, label: 'implements' },
-        { d: 'M 400 375 C 330 375 330 240 250 240', lx: 330, ly: 300, label: 'mutates context' }
-      ],
-      flowNodes: [
-        { x: 50, y: 140, w: 200, h: 140, step: '1', title: 'Order Created', stroke: '#f59e0b', lines: ['Context starts in CreatedState', 'Client calls order.ship()', 'State throws IllegalStateException'] },
-        { x: 280, y: 140, w: 210, h: 140, step: '2', title: 'Payment Event', stroke: '#38bdf8', lines: ['Client calls order.pay()', 'CreatedState validates charge', 'Calls context.setState(PaidState)'] },
-        { x: 520, y: 140, w: 210, h: 140, step: '3', title: 'State Swapped', stroke: '#10b981', lines: ['Context now behaves as Paid', 'Identical order.ship() now works', 'Zero giant switch statements'] },
-        { x: 760, y: 140, w: 200, h: 140, step: '4', title: 'Shipment Complete', stroke: '#a855f7', lines: ['PaidState transitions to Shipped', 'Canceling order is now forbidden', 'Clean finite state machine'] }
-      ],
-      flowConns: [
-        { d: 'M 250 200 L 280 200', lx: 265, ly: 190, label: 'pay()' },
-        { d: 'M 490 200 L 520 200', lx: 505, ly: 190, label: 'transition' },
-        { d: 'M 730 200 L 760 200', lx: 745, ly: 190, label: 'ship()' }
-      ],
-      sections: [
+      "interviewTip": "In system design and architecture interviews, be candid about the Interpreter pattern's limitations: 'The GoF Interpreter pattern is great for small, stable Domain-Specific Languages (DSLs) like custom boolean filtering or math expressions. However, for real-world enterprise query languages or SQL parsers, manual GoF AST classes become unmanageable. In production, I would use a dedicated parser generator like ANTLR or compile the expressions to JVM bytecode.'",
+      "ascii": "+-------------------------------------------------------------------------+\n|                        INTERPRETER UML CLASS MODEL                      |\n+-------------------------------------------------------------------------+\n                       +-----------------------------+\n                       |        <<interface>>        |\n                       |         Expression          |\n                       +-----------------------------+\n                       | + interpret(ctx): boolean   |\n                       +--------------^--------------+\n                                      |\n              +-----------------------+-----------------------+\n              |                                               |\n+-------------+---------------+               +---------------+-------------+\n|     TerminalExpression      |               |     OrExpression (Non-term) |\n+-----------------------------+               +-----------------------------+\n| - literal: String           |               | - expr1: Expression         |\n| + interpret(ctx): match     |               | - expr2: Expression         |\n+-----------------------------+               | + interpret(ctx): e1 || e2  |\n                                              +-----------------------------+",
+      "blockNodes": [
         {
-          heading: "Eliminating Massive Switch-Case State Machines",
-          body: "When an entity's behavior depends entirely on its lifecycle state, imperative code fills up with giant conditional statements: `switch(order.status) { case PENDING: ... case SHIPPED: ... }`. Every time a new state is added, developers must find and edit every switch statement. The State pattern extracts each state into an autonomous class.",
-          bullets: [
-            "Single Responsibility Principle: Organizes all behavior specific to a particular state into a single cohesive class.",
-            "Open/Closed Principle: Introduce new states without modifying existing state classes or context methods.",
-            "Type-Safe State Transitions: Impossible transitions (e.g., shipping an unpaid order) throw clear compile or runtime exceptions."
+          "x": 320,
+          "y": 100,
+          "w": 260,
+          "h": 130,
+          "stereotype": "interface",
+          "title": "BooleanExpression",
+          "stroke": "#f59e0b",
+          "lines": [
+            "+ interpret(ctx: Context): boolean"
           ],
-          codeSnippet: {
-            title: "Order Lifecycle Finite State Machine in Java 21",
-            code: `public interface OrderState {
-    void pay(OrderContext ctx);
-    void ship(OrderContext ctx);
-}
-
-public class OrderContext {
-    private OrderState state = new CreatedState();
-
-    public void setState(OrderState state) { this.state = state; }
-    public void pay() { state.pay(this); }
-    public void ship() { state.ship(this); }
-}
-
-public class CreatedState implements OrderState {
-    @Override public void pay(OrderContext ctx) {
-        System.out.println("Payment processed successfully.");
-        ctx.setState(new PaidState());
-    }
-
-    @Override public void ship(OrderContext ctx) {
-        throw new IllegalStateException("Cannot ship an unpaid order!");
-    }
-}
-
-public class PaidState implements OrderState {
-    @Override public void pay(OrderContext ctx) {
-        throw new IllegalStateException("Order is already paid.");
-    }
-
-    @Override public void ship(OrderContext ctx) {
-        System.out.println("Dispatched to warehouse for shipping.");
-        ctx.setState(new ShippedState());
-    }
-}`
-          },
-          flowDiagramUrl: "/diagrams/design-patterns/state-flow.svg"
-        }
-      ],
-      tradeOffs: [
-        {
-          option: "State Pattern",
-          pros: "Eliminates duplicate switch statements; encapsulates state transitions; highly extensible.",
-          cons: "Overkill if the state machine has only 2 simple states that rarely change.",
-          bestFor: "Complex order lifecycles, payment workflows, game AI states, document publishing flows."
+          "tag": "AbstractExpression"
         },
         {
-          option: "Enum with Switch Cases",
-          pros: "Compact and easy to read for tiny state machines with 2-3 states.",
-          cons: "Violates Open/Closed; state machine logic becomes scattered across all business methods.",
-          bestFor: "Trivial binary states (e.g. ENABLED / DISABLED)."
-        }
-      ],
-      interviewTip: "Distinguish State from Strategy: While both rely on composition and have similar UML class diagrams, their intent is completely opposite. In Strategy, the client chooses an algorithm once and usually does not change it. In State, the states transition dynamically and automatically as internal operations occur."
-    },
-    {
-      id: "strategy",
-      subtopicNumber: "3.9",
-      title: "Strategy Pattern",
-      subtitle: "Defines a family of algorithms, encapsulates each one, and makes them interchangeable at runtime.",
-      readingTime: "7 min read",
-      difficulty: "Foundational",
-      accent: "#38bdf8",
-      keyTakeaways: [
-        "Enables selecting an algorithm's implementation dynamically at runtime without modifying the client that uses it.",
-        "Replaces bloated conditional statements (`if-else` blocks based on customer tier or payment method) with clean polymorphism.",
-        "In modern Java 8+, strategies can be passed directly as concise Lambda expressions (`Comparator.comparing(...)`)."
-      ],
-      ascii: `+-------------------------------------------------------------------------+
-|                         STRATEGY UML CLASS MODEL                        |
-+-------------------------------------------------------------------------+
-   +-----------------------------+               +-----------------------------+
-   |       CheckoutService       |               |        <<interface>>        |
-   |          (Context)          |  has-a ---->  |       PricingStrategy       |
-   +-----------------------------+               +-----------------------------+
-   | - strategy: PricingStrategy |               | + calculate(cents): long    |
-   | + setStrategy(s: Strategy)  |               +--------------^--------------+
-   | + calculateTotal(): long    |                              |
-   +-----------------------------+               +--------------+--------------+
-                                                 |                             |
-                                  +--------------+--------------+     +--------+--------+
-                                  |    VipDiscountStrategy      |     | BlackFridayStrat|
-                                  +-----------------------------+     +-----------------+
-                                  | + calculate(): 20% off      |     | + calculate():  |
-                                  +-----------------------------+     |   50% off       |
-                                                                      +-----------------+`,
-      blockNodes: [
-        { x: 50, y: 120, w: 250, h: 140, stereotype: 'context', title: 'PaymentService (Context)', stroke: '#38bdf8', lines: ['- strategy: PaymentStrategy', '+ setStrategy(s)', '+ process(amount: long)'], tag: 'Context' },
-        { x: 550, y: 110, w: 260, h: 140, stereotype: 'interface', title: 'PaymentStrategy', stroke: '#10b981', lines: ['+ pay(amountInCents: long): void'], tag: 'Strategy Interface' },
-        { x: 420, y: 320, w: 220, h: 130, stereotype: 'concrete-strat', title: 'CreditCardPayment', stroke: '#f59e0b', lines: ['+ pay(): authorize Visa/MC'], tag: 'Strategy A' },
-        { x: 670, y: 320, w: 220, h: 130, stereotype: 'concrete-strat', title: 'CryptoPayment', stroke: '#a855f7', lines: ['+ pay(): verify blockchain'], tag: 'Strategy B' }
-      ],
-      blockConns: [
-        { d: 'M 300 170 L 550 170', lx: 425, ly: 155, label: 'delegates to' },
-        { d: 'M 530 320 L 630 250', lx: 570, ly: 285, label: 'implements' },
-        { d: 'M 780 320 L 710 250', lx: 755, ly: 285, label: 'implements' }
-      ],
-      flowNodes: [
-        { x: 50, y: 140, w: 200, h: 140, step: '1', title: 'User Selects Payment', stroke: '#38bdf8', lines: ['User clicks "Pay with Crypto"', 'Client instantiates CryptoStrategy', 'Injected into Context'] },
-        { x: 280, y: 140, w: 210, h: 140, step: '2', title: 'Service Execution', stroke: '#10b981', lines: ['Context calls strategy.pay()', 'Context has zero crypto logic', 'Pure polymorphic dispatch'] },
-        { x: 520, y: 140, w: 210, h: 140, step: '3', title: 'Dynamic Switch', stroke: '#f59e0b', lines: ['Payment fails / user switches', 'Swaps to CreditCardStrategy', 'No redeployment or restart'] },
-        { x: 760, y: 140, w: 200, h: 140, step: '4', title: 'Success Confirmation', stroke: '#a855f7', lines: ['Card transaction completes', 'Receipt dispatched to caller', 'Complete algorithm isolation'] }
-      ],
-      flowConns: [
-        { d: 'M 250 200 L 280 200', lx: 265, ly: 190, label: 'inject' },
-        { d: 'M 490 200 L 520 200', lx: 505, ly: 190, label: 'execute' },
-        { d: 'M 730 200 L 760 200', lx: 745, ly: 190, label: 're-try' }
-      ],
-      sections: [
-        {
-          heading: "Runtime Algorithm Swapping and Lambda Modernization",
-          body: "When business logic requires computing shipping rates (FedEx vs UPS vs DHL) or applying discounts (Black Friday vs Student vs VIP), hardcoding algorithms with nested if-else branches creates high cyclomatic complexity. The Strategy pattern isolates each algorithm into a standalone class sharing a common interface.",
-          bullets: [
-            "Open/Closed Principle: Introduce brand new pricing or routing strategies without touching the context class.",
-            "Functional Programming Bridge: In Java 21, single-method strategy interfaces (`@FunctionalInterface`) can be implemented as lambda expressions, cutting boilerplate to 1 line.",
-            "Testability: Algorithms can be isolated and unit-tested in isolation without mocking the entire context."
+          "x": 100,
+          "y": 290,
+          "w": 250,
+          "h": 140,
+          "stereotype": "terminal",
+          "title": "TerminalRule",
+          "stroke": "#10b981",
+          "lines": [
+            "- literal: String",
+            "+ interpret(ctx): ctx.contains(literal)"
           ],
-          codeSnippet: {
-            title: "Modern Functional Strategy Pattern in Java 21",
-            code: `@FunctionalInterface
-public interface DiscountStrategy {
-    long applyDiscount(long priceInCents);
-}
-
-public class OrderCheckout {
-    private DiscountStrategy discountStrategy;
-
-    public OrderCheckout(DiscountStrategy discountStrategy) {
-        this.discountStrategy = discountStrategy;
-    }
-
-    public void setDiscountStrategy(DiscountStrategy strategy) {
-        this.discountStrategy = strategy;
-    }
-
-    public long calculateTotal(long originalPrice) {
-        return discountStrategy.applyDiscount(originalPrice);
-    }
-}
-
-// Usage with Modern Lambdas
-public class Main {
-    public static void main(String[] args) {
-        OrderCheckout checkout = new OrderCheckout(p -> (long) (p * 0.8)); // 20% off
-        System.out.println("VIP Total: " + checkout.calculateTotal(10000)); // 8000
-
-        checkout.setDiscountStrategy(p -> p - 1500); // $15 flat coupon
-        System.out.println("Coupon Total: " + checkout.calculateTotal(10000)); // 8500
-    }
-}`
-          },
-          flowDiagramUrl: "/diagrams/design-patterns/strategy-flow.svg"
-        }
-      ],
-      tradeOffs: [
-        {
-          option: "Strategy Pattern",
-          pros: "Isolates algorithms; hot-swappable at runtime; completely eliminates if-else chains.",
-          cons: "Clients must be aware of differences between strategies to select the right one.",
-          bestFor: "Sorting engines, routing algorithms, payment methods, compression formats."
+          "tag": "Terminal"
         },
         {
-          option: "Hardcoded Procedural If-Else",
-          pros: "No interfaces needed; simple for 1-2 invariant calculations.",
-          cons: "Violates Open/Closed; editing algorithms requires modifying existing code, risking regressions.",
-          bestFor: "Fixed, unchanging formula calculations."
-        }
-      ],
-      interviewTip: "Highlight that in modern Java, Strategy is often combined with Lambdas and Method References: `Collections.sort(list, Comparator.comparing(User::getAge))` is a pure production manifestation of the Strategy pattern."
-    },
-    {
-      id: "template-method",
-      subtopicNumber: "3.10",
-      title: "Template Method Pattern",
-      subtitle: "Defines the skeleton of an algorithm in an operation, deferring some steps to subclasses without changing the algorithm's structure.",
-      readingTime: "7 min read",
-      difficulty: "Foundational",
-      accent: "#a855f7",
-      keyTakeaways: [
-        "Defines an algorithm's invariant steps in a `final` base class method, allowing subclasses to override specific hook steps.",
-        "Enforces the 'Hollywood Principle' ('Don't call us, we'll call you'): the base class calls the subclass methods, never the reverse.",
-        "Underpins build automation pipelines (CI/CD), data miners (parse -> extract -> load), and Spring `JdbcTemplate`."
-      ],
-      ascii: `+-------------------------------------------------------------------------+
-|                      TEMPLATE METHOD UML CLASS MODEL                    |
-+-------------------------------------------------------------------------+
-                     +----------------------------------+
-                     |           <<abstract>>           |
-                     |         DataMiner (Base)         |
-                     +----------------------------------+
-                     | + mineData(): void {final}       |  <-- Invariant Skeleton
-                     | # openFile(): void               |
-                     | # extractData(): void {abstract} |  <-- Subclass Hook
-                     | # closeFile(): void              |
-                     +-----------------^----------------+
-                                       |
-             +-------------------------+-------------------------+
-             |                                                   |
-+------------+------------+                         +------------+------------+
-|      PdfDataMiner       |                         |       CsvDataMiner      |
-+-------------------------+                         +-------------------------+
-| # extractData(): PDF    |                         | # extractData(): CSV    |
-+-------------------------+                         +-------------------------+`,
-      blockNodes: [
-        { x: 300, y: 100, w: 320, h: 180, stereotype: 'abstract', title: 'DataMinerPipeline (Base)', stroke: '#a855f7', lines: ['+ mine(): void {final skeleton}', '# openFile(): void', '# extractData(): void {abstract}', '# parseData(): void {abstract}', '# closeFile(): void'], tag: 'Template Method' },
-        { x: 100, y: 340, w: 240, h: 130, stereotype: 'concrete', title: 'PdfDataMiner', stroke: '#38bdf8', lines: ['# extractData(): parse PDF streams', '# parseData(): extract fonts'], tag: 'Subclass A' },
-        { x: 580, y: 340, w: 240, h: 130, stereotype: 'concrete', title: 'CsvDataMiner', stroke: '#10b981', lines: ['# extractData(): split commas', '# parseData(): build records'], tag: 'Subclass B' }
-      ],
-      blockConns: [
-        { d: 'M 220 340 L 380 280', lx: 280, ly: 300, label: 'extends' },
-        { d: 'M 700 340 L 540 280', lx: 640, ly: 300, label: 'extends' }
-      ],
-      flowNodes: [
-        { x: 50, y: 140, w: 200, h: 140, step: '1', title: 'mine() Invocation', stroke: '#a855f7', lines: ['Client calls miner.mine()', 'Fixed execution workflow begins', 'Skeleton controls step ordering'] },
-        { x: 280, y: 140, w: 210, h: 140, step: '2', title: 'Invariant File Open', stroke: '#38bdf8', lines: ['Base class opens file handle', 'Common error logging executed', 'Zero subclass code duplication'] },
-        { x: 520, y: 140, w: 210, h: 140, step: '3', title: 'Polymorphic Hook', stroke: '#10b981', lines: ['Calls extractData() hook', 'PDF subclass parses binary stream', 'Subclass hook resolves'] },
-        { x: 760, y: 140, w: 200, h: 140, step: '4', title: 'Invariant Cleanup', stroke: '#f59e0b', lines: ['Base class closes file stream', 'Logs metrics and telemetry', 'Guaranteed finally cleanup'] }
-      ],
-      flowConns: [
-        { d: 'M 250 200 L 280 200', lx: 265, ly: 190, label: 'open' },
-        { d: 'M 490 200 L 520 200', lx: 505, ly: 190, label: 'hook' },
-        { d: 'M 730 200 L 760 200', lx: 745, ly: 190, label: 'clean' }
-      ],
-      sections: [
-        {
-          heading: "Inversion of Control and Invariant Algorithm Skeletons",
-          body: "When multiple classes implement the same algorithmic workflow with only small differences in specific steps (e.g. data mining pipelines where opening files and closing files is identical, but data parsing differs), duplicating the algorithm creates severe maintenance hazards. The Template Method marks the skeleton method `final` and leaves specific steps `abstract`.",
-          bullets: [
-            "DRY (Don't Repeat Yourself): Consolidates duplicate boilerplate workflow code into a single shared superclass.",
-            "Guaranteed Cleanup: Invariant steps like database connection closing, telemetry emission, or transaction commit are guaranteed to run.",
-            "Liskov Substitution Principle: Subclasses preserve the overarching behavior of the superclass while refining details."
+          "x": 550,
+          "y": 290,
+          "w": 270,
+          "h": 150,
+          "stereotype": "non-terminal",
+          "title": "AndExpression",
+          "stroke": "#38bdf8",
+          "lines": [
+            "- left: Expression",
+            "- right: Expression",
+            "+ interpret(ctx): left.eval() &amp;&amp; right.eval()"
           ],
-          codeSnippet: {
-            title: "ETL Pipeline Template Method in Java 21",
-            code: `public abstract class EtlPipeline {
-    // The Template Method (sealed with final)
-    public final void runPipeline(String source) {
-        connect(source);
-        byte[] rawData = extract();
-        String transformed = transform(rawData);
-        load(transformed);
-        disconnect();
-    }
-
-    private void connect(String source) { System.out.println("Connecting to: " + source); }
-    private void disconnect() { System.out.println("Disconnected cleanly."); }
-
-    // Abstract hooks for subclasses
-    protected abstract byte[] extract();
-    protected abstract String transform(byte[] rawData);
-    protected abstract void load(String processedData);
-}
-
-public class S3EtlPipeline extends EtlPipeline {
-    @Override protected byte[] extract() { return "s3_raw_bytes".getBytes(); }
-    @Override protected String transform(byte[] raw) { return new String(raw).toUpperCase(); }
-    @Override protected void load(String data) { System.out.println("Loaded to Snowflake: " + data); }
-}`
-          },
-          flowDiagramUrl: "/diagrams/design-patterns/template-method-flow.svg"
+          "tag": "Non-Terminal"
         }
       ],
-      tradeOffs: [
+      "blockConns": [
         {
-          option: "Template Method Pattern",
-          pros: "Eliminates duplicate workflow logic; guarantees invariant steps run in exact order.",
-          cons: "Tightly bound by inheritance; subclasses cannot alter the ordering of steps.",
-          bestFor: "Build systems, ETL pipelines, standard web request lifecycles."
+          "d": "M 225 290 L 370 230",
+          "lx": 280,
+          "ly": 255,
+          "label": "implements"
         },
         {
-          option: "Strategy Pattern with Composition",
-          pros: "More flexible; steps can be swapped independently at runtime without subclassing.",
-          cons: "Requires instantiating and coordinating multiple strategy objects.",
-          bestFor: "Workflows where individual steps vary completely independently."
-        }
-      ],
-      interviewTip: "Be ready to explain the 'Hollywood Principle' ('Don't call us, we'll call you') in the context of Template Method vs Strategy: Template Method uses Inheritance (superclass calls subclass methods); Strategy uses Composition (context calls interface methods)."
-    },
-    {
-      id: "visitor",
-      subtopicNumber: "3.11",
-      title: "Visitor Pattern",
-      subtitle: "Separates an algorithm from the object structure on which it operates, allowing new operations to be added without modifying the structure.",
-      readingTime: "8 min read",
-      difficulty: "Advanced",
-      accent: "#ef4444",
-      keyTakeaways: [
-        "Uses 'Double Dispatch' (`element.accept(visitor)` -> `visitor.visit(this)`) to execute the appropriate operation based on both the element type and the visitor type.",
-        "Allows adding new operations (e.g. JSON export, XML export, pricing calculation) across complex object structures without modifying the element classes.",
-        "Heavily used in compilers (AST tree traversal and type checking) and DOM document serializers."
-      ],
-      ascii: `+-------------------------------------------------------------------------+
-|                          VISITOR UML CLASS MODEL                        |
-+-------------------------------------------------------------------------+
-   +-----------------------------+               +-----------------------------+
-   |        <<interface>>        |               |        <<interface>>        |
-   |           Element           |               |           Visitor           |
-   +-----------------------------+               +-----------------------------+
-   | + accept(v: Visitor): void  |               | + visit(c: Circle): void    |
-   +--------------^--------------+               | + visit(r: Rectangle): void |
-                  |                              +--------------^--------------+
-   +--------------+--------------+                              |
-   |                             |               +--------------+--------------+
-+--+----------+           +------+-----+   +-----+------+         +------------+----+
-|   Circle    |           |  Rectangle |   |  XmlExport |         | JsonExportVisitor|
-+-------------+           +------------+   +------------+         +-----------------+
-| + accept(v) |           | + accept(v)|   | + visit(c) |         | + visit(c)      |
-|   -> v.visit|           |   -> v.visit   | + visit(r) |         | + visit(r)      |
-+-------------+           +------------+   +------------+         +-----------------+`,
-      blockNodes: [
-        { x: 50, y: 100, w: 250, h: 140, stereotype: 'element', title: 'ReportElement', stroke: '#ef4444', lines: ['+ accept(v: Visitor): void'], tag: 'Element Interface' },
-        { x: 550, y: 100, w: 270, h: 150, stereotype: 'visitor', title: 'Visitor', stroke: '#10b981', lines: ['+ visit(user: UserElement)', '+ visit(order: OrderElement)'], tag: 'Visitor Interface' },
-        { x: 50, y: 310, w: 250, h: 130, stereotype: 'concrete-elem', title: 'UserElement', stroke: '#38bdf8', lines: ['+ accept(v: Visitor): void', '  -> v.visit(this) [Double Dispatch]'], tag: 'Concrete Element' },
-        { x: 550, y: 310, w: 270, h: 130, stereotype: 'concrete-vis', title: 'PdfExportVisitor', stroke: '#f59e0b', lines: ['+ visit(user): render User PDF', '+ visit(order): render Order PDF'], tag: 'Concrete Visitor' }
-      ],
-      blockConns: [
-        { d: 'M 175 310 L 175 240', lx: 175, ly: 275, label: 'implements' },
-        { d: 'M 685 310 L 685 250', lx: 685, ly: 275, label: 'implements' },
-        { d: 'M 300 375 L 550 375', lx: 425, ly: 360, label: 'double dispatches' }
-      ],
-      flowNodes: [
-        { x: 50, y: 140, w: 200, h: 140, step: '1', title: 'Client Invokes accept()', stroke: '#ef4444', lines: ['Client creates PdfVisitor', 'Calls element.accept(visitor)', 'First polymorphic dispatch'] },
-        { x: 280, y: 140, w: 210, h: 140, step: '2', title: 'Double Dispatch Trigger', stroke: '#38bdf8', lines: ['element executes accept()', 'Passes "this" (UserElement)', 'Second polymorphic dispatch'] },
-        { x: 520, y: 140, w: 210, h: 140, step: '3', title: 'Visitor visit(User) Runs', stroke: '#10b981', lines: ['visitor.visit(UserElement) executes', 'Knows exact runtime type', 'Extracts fields for PDF'] },
-        { x: 760, y: 140, w: 200, h: 140, step: '4', title: 'New Visitor Extensibility', stroke: '#f59e0b', lines: ['Add XmlExportVisitor later', 'Zero changes to UserElement', 'Clean separation of concerns'] }
-      ],
-      flowConns: [
-        { d: 'M 250 200 L 280 200', lx: 265, ly: 190, label: 'accept' },
-        { d: 'M 490 200 L 520 200', lx: 505, ly: 190, label: 'visit(this)' },
-        { d: 'M 730 200 L 760 200', lx: 745, ly: 190, label: 'export' }
-      ],
-      sections: [
-        {
-          heading: "Double Dispatch Mechanics and Clean Separation of Algorithms",
-          body: "Imagine having a geometric shape tree (Circle, Square). If you need to add export functions (`exportXML`, `exportJSON`, `exportSVG`), adding these methods to Circle and Square pollutes domain classes with serialization logic. Every new export format forces editing every shape class. The Visitor pattern moves these operations into standalone Visitor classes without changing the shapes.",
-          bullets: [
-            "Open/Closed Principle: You can introduce powerful new operations over complex object graphs without editing element classes.",
-            "Single Responsibility Principle: Consolidates related operations for multiple classes into a single visitor class.",
-            "Double Dispatch Explained: Single dispatch (standard Java) binds methods based only on the runtime type of the receiver. Visitor binds based on BOTH the element and the visitor."
-          ],
-          codeSnippet: {
-            title: "Double-Dispatch Compiler AST Visitor in Java 21",
-            code: `// Element Interface
-public interface AstNode {
-    void accept(AstVisitor visitor);
-}
-
-// Visitor Interface
-public interface AstVisitor {
-    void visit(LiteralNode node);
-    void visit(BinaryOpNode node);
-}
-
-// Concrete Elements
-public record LiteralNode(int value) implements AstNode {
-    @Override public void accept(AstVisitor visitor) {
-        visitor.visit(this); // Double dispatch
-    }
-}
-
-public record BinaryOpNode(String op, AstNode left, AstNode right) implements AstNode {
-    @Override public void accept(AstVisitor visitor) {
-        visitor.visit(this); // Double dispatch
-    }
-}
-
-// Concrete Visitor: Pretty Printer
-public class PrettyPrintVisitor implements AstVisitor {
-    @Override public void visit(LiteralNode node) {
-        System.out.print(node.value());
-    }
-
-    @Override public void visit(BinaryOpNode node) {
-        System.out.print("(");
-        node.left().accept(this);
-        System.out.print(" " + node.op() + " ");
-        node.right().accept(this);
-        System.out.print(")");
-    }
-}`
-          },
-          flowDiagramUrl: "/diagrams/design-patterns/visitor-flow.svg"
-        }
-      ],
-      tradeOffs: [
-        {
-          option: "Visitor Pattern",
-          pros: "Adding new operations across many classes is trivial; groups related algorithms together.",
-          cons: "Adding a new Element class forces updating every single Visitor class in the codebase.",
-          bestFor: "AST compilers, document serializers, static code analysis rules."
+          "d": "M 685 290 L 530 230",
+          "lx": 635,
+          "ly": 255,
+          "label": "implements"
         },
         {
-          option: "Direct Methods on Domain Classes",
-          pros: "Simple when the set of element classes changes frequently.",
-          cons: "Pollutes domain models with disparate export and rendering logic.",
-          bestFor: "Rapid prototypes where operations rarely change."
+          "d": "M 820 365 C 870 365 870 160 580 160",
+          "lx": 870,
+          "ly": 260,
+          "label": "recursively evaluates"
         }
       ],
-      interviewTip: "In interviews, clearly define why Double Dispatch is needed in Java: Java method overloading is resolved statically at compile time, while method overriding is resolved dynamically at runtime. Visitor achieves dynamic dispatch on both arguments."
+      "flowNodes": [
+        {
+          "x": 50,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "1",
+          "title": "Query String Parsing",
+          "stroke": "#f59e0b",
+          "lines": [
+            "Rule: \"(VIP OR Gold) AND Active\"",
+            "Tokenizer splits into tokens",
+            "Parser builds AST tree"
+          ]
+        },
+        {
+          "x": 280,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "2",
+          "title": "AST Assembly",
+          "stroke": "#38bdf8",
+          "lines": [
+            "Root: AndExpression",
+            "Left child: OrExpression",
+            "Leaves: TerminalExpressions"
+          ]
+        },
+        {
+          "x": 520,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "3",
+          "title": "Context Evaluation",
+          "stroke": "#10b981",
+          "lines": [
+            "Context contains user tags",
+            "Evaluates leaf node matches",
+            "Leaves return true/false"
+          ]
+        },
+        {
+          "x": 760,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "4",
+          "title": "Final Resolution",
+          "stroke": "#a855f7",
+          "lines": [
+            "Root And evaluates subtrees",
+            "Short-circuits where possible",
+            "Returns final Boolean result"
+          ]
+        }
+      ],
+      "flowConns": [
+        {
+          "d": "M 250 200 L 280 200",
+          "lx": 265,
+          "ly": 190,
+          "label": "build AST"
+        },
+        {
+          "d": "M 490 200 L 520 200",
+          "lx": 505,
+          "ly": 190,
+          "label": "evaluate"
+        },
+        {
+          "d": "M 730 200 L 760 200",
+          "lx": 745,
+          "ly": 190,
+          "label": "resolve"
+        }
+      ]
     }
   ]
 };

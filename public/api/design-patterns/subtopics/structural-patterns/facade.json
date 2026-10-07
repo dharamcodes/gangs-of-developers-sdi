@@ -3,10 +3,10 @@
   "topicId": "structural-patterns",
   "topicTitle": "2. Structural Patterns",
   "topicNumber": 2,
-  "subtopicNumber": "2.5",
+  "subtopicNumber": "2.2",
   "title": "Facade Pattern",
   "subtitle": "Provides a unified, simplified interface to a complex subsystem, making the subsystem easier to use.",
-  "readingTime": "6 min read",
+  "readingTime": "8 min read",
   "difficulty": "Foundational",
   "keyTakeaways": [
     "Shields client code from the convoluted internal workings and cascading dependencies of complex subsystems.",
@@ -18,19 +18,45 @@
   "flowDiagramUrl": "/diagrams/design-patterns/facade-flow.svg",
   "sections": [
     {
-      "heading": "Taming Subsystem Complexity and Establishing Cohesive Boundaries",
-      "body": "As enterprise architectures grow, completing a single high-level business requirement often requires orchestrating 5 to 10 independent subsystems. Exposing this orchestration directly to UI controllers creates massive coupling: any change in a subsystem breaks all consumers. A Facade provides an intentional, ergonomic entry point while insulating consumers from lower-level churn.",
+      "heading": "1. Architectural Intent: Taming Subsystem Sprawl & Establishing Cohesive Boundaries",
+      "body": "As enterprise architectures grow, completing a single high-level business requirement often requires orchestrating 5 to 10 independent subsystems. Exposing this orchestration directly to UI controllers or external microservices creates massive coupling: any change in an internal subsystem class breaks all external callers. A Facade provides an intentional, ergonomic entry point while insulating consumers from lower-level churn.",
       "bullets": [
-        "Encapsulation without Confinement: Simplifies the 95% common use cases while allowing power users to interact with underlying subsystems directly if required.",
-        "Layered Architecture: Facades define natural boundaries between architectural layers in distributed backends.",
-        "Reduced Compilation Dependencies: Changes to internal subsystem classes do not force recompilation of client modules."
+        "Coarse-Grained API: Exposes high-level methods tailored to consumer business intents rather than technical implementation details.",
+        "Subsystem Isolation: Changes to internal subsystem dependencies, method signatures, or data structures remain contained behind the facade.",
+        "Reduced Compilation Dependencies: In large monorepos, consumers only depend on the Facade module, speeding up build and test cycles."
+      ],
+      "diagramImageUrl": "/diagrams/design-patterns/facade-block.svg",
+      "flowDiagramUrl": "/diagrams/design-patterns/facade-flow.svg"
+    },
+    {
+      "heading": "2. Encapsulation Without Confinement: Subsystem Bypass & Layering",
+      "body": "A crucial distinction between Facade and patterns like Adapter or Proxy is that Facade does not hide or seal the subsystem classes. It simply offers a convenient default workflow for the 90% common use cases. Power users or specialized subsystems that require fine-grained access (e.g., custom batch fulfillment or advanced telemetry) can still bypass the Facade and interact directly with underlying subsystem classes.",
+      "bullets": [
+        "Permeable Boundary: Does not encapsulate subsystems into private black boxes; subsystem classes remain accessible when needed.",
+        "Layered Facades: Multiple facades can be constructed for different domains (e.g., MobileOrderFacade vs WarehouseFulfillmentFacade) over the same underlying subsystem classes.",
+        "Coordination Orchestrator: Facades handle the order of execution, error compensation, and transaction lifecycle across subsystem components."
+      ]
+    },
+    {
+      "heading": "3. Failure Modes: The God-Object Anti-Pattern & Leaky Domain Models",
+      "body": "When teams adopt Facades, a common failure mode is treating the Facade as a dumping ground for all cross-cutting business logic. Over time, the Facade accumulates hundreds of methods, thousands of lines of conditional code, and becomes an untestable God Object. Furthermore, if the Facade leaks internal subsystem entities in its return signatures, consumers become coupled to the subsystem anyway.",
+      "bullets": [
+        "God Object Sprawl: When a single facade orchestrates too many disparate domains, break it down into multiple domain-specific facades.",
+        "Leaky Return Types: Facade methods should return clean DTOs or value objects rather than raw internal subsystem entity models.",
+        "Implicit Rollbacks: If Subsystem 3 fails after Subsystems 1 and 2 succeed, the Facade must orchestrate compensation steps or let a distributed transaction manager handle atomicity."
+      ]
+    },
+    {
+      "heading": "4. Production Blueprint: Enterprise E-Commerce Checkout Facade in TypeScript",
+      "body": "The following production TypeScript implementation demonstrates an enterprise Checkout Facade coordinating inventory reservation, payment processing, and shipment dispatching with robust error compensation.",
+      "bullets": [
+        "CheckoutFacade: Single cohesive entry point for client checkout transactions.",
+        "Compensating Rollbacks: Releases inventory hold if payment authorization fails."
       ],
       "codeSnippet": {
-        "title": "E-Commerce Checkout Facade in Java 21",
-        "code": "public record OrderReceipt(UUID orderId, String trackingNumber, boolean successful) {}\n\npublic class CheckoutFacade {\n    private final InventorySubsystem inventory;\n    private final PaymentSubsystem payment;\n    private final ShippingSubsystem shipping;\n\n    public CheckoutFacade(InventorySubsystem inventory, PaymentSubsystem payment, ShippingSubsystem shipping) {\n        this.inventory = inventory;\n        this.payment = payment;\n        this.shipping = shipping;\n    }\n\n    public OrderReceipt placeOrder(String sku, int quantity, String creditCard, String address) {\n        // Step 1: Check and reserve stock\n        if (!inventory.reserveStock(sku, quantity)) {\n            throw new IllegalStateException(\"Insufficient inventory for: \" + sku);\n        }\n\n        // Step 2: Charge payment\n        boolean paid = payment.charge(creditCard, inventory.calculatePrice(sku, quantity));\n        if (!paid) {\n            inventory.releaseStock(sku, quantity);\n            throw new PaymentFailedException(\"Card authorization declined\");\n        }\n\n        // Step 3: Dispatch shipping\n        String tracking = shipping.createShipment(sku, quantity, address);\n        return new OrderReceipt(UUID.randomUUID(), tracking, true);\n    }\n}"
-      },
-      "flowDiagramUrl": "/diagrams/design-patterns/facade-flow.svg",
-      "diagramImageUrl": "/diagrams/design-patterns/facade-block.svg"
+        "title": "Production Checkout Facade in TypeScript",
+        "code": "// Subsystem 1: Inventory\nexport class InventoryService {\n  public async reserve(sku: string, qty: number): Promise<string> {\n    console.log(`[Inventory] Reserved ${qty} units of ${sku}`);\n    return \"RES-9872\";\n  }\n  public async release(reservationId: string): Promise<void> {\n    console.log(`[Inventory] Released reservation ${reservationId}`);\n  }\n}\n\n// Subsystem 2: Payment\nexport class PaymentService {\n  public async charge(customerId: string, amountCents: number): Promise<string> {\n    console.log(`[Payment] Charged ${amountCents} cents to ${customerId}`);\n    return \"TX-55412\";\n  }\n}\n\n// Subsystem 3: Logistics\nexport class LogisticsService {\n  public async scheduleShipment(sku: string, qty: number, address: string): Promise<string> {\n    console.log(`[Logistics] Scheduled dispatch to ${address}`);\n    return \"TRACK-FEDEX-998\";\n  }\n}\n\n// The Unified Facade\nexport class CheckoutFacade {\n  constructor(\n    private readonly inventory: InventoryService,\n    private readonly payment: PaymentService,\n    private readonly logistics: LogisticsService\n  ) {}\n\n  public async placeOrder(\n    customerId: string,\n    sku: string,\n    qty: number,\n    amountCents: number,\n    address: string\n  ): Promise<{ success: boolean; orderId?: string; error?: string }> {\n    let reservationId: string | null = null;\n    try {\n      // Step 1: Reserve Stock\n      reservationId = await this.inventory.reserve(sku, qty);\n\n      // Step 2: Authorize Payment\n      const paymentTx = await this.payment.charge(customerId, amountCents);\n\n      // Step 3: Schedule Logistics\n      const trackingNumber = await this.logistics.scheduleShipment(sku, qty, address);\n\n      const orderId = `ORD-${Date.now()}`;\n      return { success: true, orderId };\n    } catch (err: any) {\n      // Compensating action: Rollback inventory reservation\n      if (reservationId) {\n        await this.inventory.release(reservationId);\n      }\n      return { success: false, error: err.message };\n    }\n  }\n}"
+      }
     }
   ],
   "tradeOffs": [
@@ -44,9 +70,15 @@
       "option": "Direct Subsystem Interfacing",
       "pros": "Maximum fine-grained control; no extra layer between caller and implementation.",
       "cons": "Massive code duplication across clients; high cognitive load on development teams.",
-      "bestFor": "Specialized tools where clients genuinely need low-level customization of every single parameter."
+      "bestFor": "Specialized internal tools where clients genuinely need low-level customization of every single parameter."
+    },
+    {
+      "option": "Mediator Pattern",
+      "pros": "Decouples subsystem classes from each other by centralizing their mutual communication.",
+      "cons": "Subsystem classes must know about the Mediator, creating bidirectional dependencies.",
+      "bestFor": "GUI component frameworks where sibling widgets must react to each other's state changes."
     }
   ],
-  "interviewTip": "Emphasize to interviewers that a Facade provides an *optional* simplified interface; it does not hide or seal the subsystem classes. Contrast Facade with Adapter (Adapter adapts one existing interface to another; Facade creates a completely new, simplified interface over many subsystems).",
+  "interviewTip": "Emphasize to interviewers that a Facade provides an *optional* simplified interface; it does not hide or seal the subsystem classes. Contrast Facade with Adapter: Adapter adapts one existing interface to another; Facade creates a completely new, simplified interface over multiple subsystems.",
   "jsonUrl": "/api/design-patterns/subtopics/structural-patterns/facade.json"
 }

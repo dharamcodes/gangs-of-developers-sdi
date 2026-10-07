@@ -3,13 +3,13 @@
   "topicId": "creational-patterns",
   "topicTitle": "1. Creational Patterns",
   "topicNumber": 1,
-  "subtopicNumber": "1.1",
+  "subtopicNumber": "1.2",
   "title": "Factory Method Pattern",
   "subtitle": "Defines an interface for creating an object, but lets subclasses decide which class to instantiate.",
-  "readingTime": "7 min read",
+  "readingTime": "9 min read",
   "difficulty": "Foundational",
   "keyTakeaways": [
-    "Factory Method delegates object creation to derived subclasses, completely decoupling high-level business logic from concrete product classes.",
+    "Delegates object creation to derived subclasses, completely decoupling high-level orchestration from concrete product types.",
     "Adheres strictly to the Open/Closed Principle: you can introduce new concrete product types into the program without breaking existing client code.",
     "Eliminates tightly-coupled 'new' keyword instantiations sprinkled across your business services."
   ],
@@ -18,35 +18,67 @@
   "flowDiagramUrl": "/diagrams/design-patterns/factory-method-flow.svg",
   "sections": [
     {
-      "heading": "Architectural Intent and Separation of Concerns",
-      "body": "The Factory Method pattern resolves the fundamental design tension where a framework or service needs to standardize the workflow of object interactions without committing to the concrete implementations of those objects. Rather than instantiating dependencies with direct constructor invocations, the creator class delegates the instantiation responsibility to an abstract or virtual method.",
+      "heading": "1. Architectural Intent: Decoupling Instantiation from Orchestration",
+      "body": "The Factory Method pattern resolves a fundamental software design tension: an application framework needs to execute standard business workflows involving certain objects, but the exact concrete subtypes cannot be known ahead of time or should remain customizable by callers. By moving the object instantiation statement into a dedicated polymorphic method (createProduct()), the core orchestrator operates strictly against an abstract interface.",
       "bullets": [
-        "Decouples Creator from Concrete Products: The base creator works exclusively with high-level abstract product interfaces.",
-        "Single Responsibility Principle: Isolates product creation code into a single location in the codebase, simplifying maintenance.",
-        "Open/Closed Principle: Introduce new products and creators without editing existing client or core framework classes."
+        "Decouples Creator from Concrete Products: The base creator class works exclusively with high-level abstract product contracts.",
+        "Single Responsibility Principle: Isolates complex product instantiation logic into dedicated sub-factories, preventing bloated god-classes.",
+        "Open/Closed Principle: Adding a new product type requires creating a new subclass without editing existing core orchestrator workflows."
+      ],
+      "diagramImageUrl": "/diagrams/design-patterns/factory-method-block.svg",
+      "flowDiagramUrl": "/diagrams/design-patterns/factory-method-flow.svg"
+    },
+    {
+      "heading": "2. Polymorphic Lifecycle & Virtual Dispatch Mechanics",
+      "body": "At runtime, when client code invokes a business method on the creator class (such as dialog.render()), the creator invokes its internal createButton() method. Under polymorphic virtual table (vtable) resolution, the runtime dispatches to the derived subclass implementation (e.g. WindowsDialog.createButton()). The derived method instantiates the concrete WindowsButton and returns it polymorphically as the generic Button interface.",
+      "bullets": [
+        "Inversion of Control (Hollywood Principle): 'Don't call us, we'll call you.' The base class controls the overall algorithm flow, calling down into the subclass for the concrete piece.",
+        "Parameterized Factory Methods: Factory methods can accept input parameters to construct variants of a product while keeping types strongly checked.",
+        "Default Implementations: Abstract creators can provide a sensible default concrete product, allowing subclasses to override only when customization is required."
+      ]
+    },
+    {
+      "heading": "3. Failure Modes: Subclass Explosion & Static Factory Confusion",
+      "body": "A frequent architectural trap is confusing the Gang of Four Factory Method pattern with a 'Simple Factory' or static helper method. A static method (e.g., ButtonFactory.create('win')) uses switch/case statements and does not rely on inheritance or polymorphism. Furthermore, forcing a new creator subclass for every single new product variant can cause class explosion if the creator hierarchy has no independent behavioral differences.",
+      "bullets": [
+        "Class Explosion Anti-Pattern: If every single product requires an identical dummy creator subclass containing just one line (return new Foo()), use lambda registries instead.",
+        "Violating Liskov Substitution: If a subclass factory returns null or throws UnsupportedOperationException because it cannot support the product interface.",
+        "Leaky Constructor Parameters: Exposing complex construction parameters in the factory method signature that are relevant to only one concrete subclass."
+      ]
+    },
+    {
+      "heading": "4. Production Blueprint: Modern Extensible Factory in TypeScript",
+      "body": "The following production TypeScript implementation demonstrates an enterprise Notification Delivery Orchestrator using Factory Method with dynamic registration, avoiding subclass explosion while preserving Open/Closed compliance.",
+      "bullets": [
+        "Abstract Channel Dispatcher: Houses common telemetry, retry backoff, and logging.",
+        "Extensible Channel Registries: Allows plug-and-play addition of SMS, Push, and Email adapters."
       ],
       "codeSnippet": {
-        "title": "Java 21 Factory Method Implementation",
-        "code": "// Product Interface\npublic interface Button {\n    void render();\n    void onClick();\n}\n\n// Concrete Products\npublic record WindowsButton() implements Button {\n    @Override public void render() { System.out.println(\"Rendering Windows Native Button\"); }\n    @Override public void onClick() { System.out.println(\"Windows Click Event Handled\"); }\n}\n\npublic record HtmlButton() implements Button {\n    @Override public void render() { System.out.println(\"<button class='btn'>Submit</button>\"); }\n    @Override public void onClick() { System.out.println(\"DOM Click Event Dispatched\"); }\n}\n\n// Creator Abstract Class\npublic abstract class Dialog {\n    public void renderWindow() {\n        // High-level business logic\n        Button okButton = createButton();\n        okButton.render();\n    }\n    // The Factory Method\n    protected abstract Button createButton();\n}\n\n// Concrete Creators\npublic class WindowsDialog extends Dialog {\n    @Override protected Button createButton() { return new WindowsButton(); }\n}\n\npublic class HtmlDialog extends Dialog {\n    @Override protected Button createButton() { return new HtmlButton(); }\n}"
-      },
-      "flowDiagramUrl": "/diagrams/design-patterns/factory-method-flow.svg",
-      "diagramImageUrl": "/diagrams/design-patterns/factory-method-block.svg"
+        "title": "Production Notification Dispatcher with Factory Method in TypeScript",
+        "code": "// Product Interface\nexport interface NotificationChannel {\n  send(recipient: string, message: string): Promise<boolean>;\n  getChannelType(): string;\n}\n\n// Concrete Products\nexport class SlackNotificationChannel implements NotificationChannel {\n  async send(recipient: string, message: string): Promise<boolean> {\n    console.log(`[Slack Webhook] Sending to ${recipient}: ${message}`);\n    return true;\n  }\n  getChannelType(): string { return \"SLACK\"; }\n}\n\nexport class EmailNotificationChannel implements NotificationChannel {\n  async send(recipient: string, message: string): Promise<boolean> {\n    console.log(`[SMTP Outbound] Sending to ${recipient}: ${message}`);\n    return true;\n  }\n  getChannelType(): string { return \"EMAIL\"; }\n}\n\n// Base Creator (Factory Method)\nexport abstract class NotificationDispatcher {\n  // The Factory Method\n  protected abstract createChannel(): NotificationChannel;\n\n  // Template Orchestration Method\n  public async dispatch(recipient: string, message: string): Promise<void> {\n    const channel = this.createChannel();\n    console.log(`[Audit] Dispatching via ${channel.getChannelType()}`);\n    const success = await channel.send(recipient, message);\n    if (!success) {\n      throw new Error(`Delivery failed on channel: ${channel.getChannelType()}`);\n    }\n  }\n}\n\n// Concrete Creators\nexport class SlackDispatcher extends NotificationDispatcher {\n  protected createChannel(): NotificationChannel {\n    return new SlackNotificationChannel();\n  }\n}\n\nexport class EmailDispatcher extends NotificationDispatcher {\n  protected createChannel(): NotificationChannel {\n    return new EmailNotificationChannel();\n  }\n}"
+      }
     }
   ],
   "tradeOffs": [
     {
       "option": "Factory Method",
-      "pros": "Avoids tight coupling between creator and concrete products; enables Open/Closed extension.",
-      "cons": "Requires creating many subclasses just to create one particular object type.",
-      "bestFor": "Frameworks, extensible plugin architectures, and systems where object types vary dynamically."
+      "pros": "Strict Open/Closed Principle adherence; decoupled business logic; subclasses customize creation.",
+      "cons": "Requires creating creator subclasses alongside product subclasses, potentially doubling class counts.",
+      "bestFor": "Frameworks, extensible libraries, and core business workflows with evolving product types."
     },
     {
-      "option": "Direct Constructor ('new')",
-      "pros": "Simplest possible code, zero boilerplate classes, direct compiler checks.",
-      "cons": "Violates Dependency Inversion; client code becomes hard-coded to concrete implementations.",
-      "bestFor": "Simple Value Objects (DTOs, records) with invariant structures and zero polymorphic behavior."
+      "option": "Simple Static Factory",
+      "pros": "Quick to write; single centralized class; no subclass inheritance hierarchy needed.",
+      "cons": "Violates Open/Closed Principle: requires editing switch-case blocks for every new product type.",
+      "bestFor": "Small utilities with a fixed, immutable set of product variants (e.g. LocalDate.of())."
+    },
+    {
+      "option": "Dependency Injection Container",
+      "pros": "Declarative binding, automated lifecycle management, zero boilerplate factory code.",
+      "cons": "Requires heavy framework runtime; configuration overhead.",
+      "bestFor": "Complex enterprise microservices with multi-tier dependency graphs."
     }
   ],
-  "interviewTip": "In Staff-level system design and architecture interviews, distinguish between Simple Factory (a static helper method with switch statements) and Gang of Four Factory Method (polymorphic subclass inheritance where the subclass decides instantiation). Point out how Factory Method eliminates switch-case code smells.",
+  "interviewTip": "Interviewers love asking: 'What is the difference between Simple Factory and Factory Method?' Answer clearly: 'Simple Factory is a concrete class with conditional switch-statements that instantiates classes. Factory Method is a GoF creational pattern that delegates instantiation to polymorphic subclasses via an inheritance hook, fulfilling the Open/Closed Principle.'",
   "jsonUrl": "/api/design-patterns/subtopics/creational-patterns/factory-method.json"
 }

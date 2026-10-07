@@ -3,46 +3,81 @@
   "topicId": "resilience-fault-tolerance",
   "topicTitle": "4. Distributed Resilience & Fault Tolerance",
   "topicNumber": 4,
-  "subtopicNumber": "4.3",
+  "subtopicNumber": "4.4",
   "title": "Distributed Rate Limiting & Throttling",
   "subtitle": "Token Bucket, Leaky Bucket, Sliding Window Counter algorithms, and Redis cluster rate limiting.",
   "readingTime": "8 min read",
   "difficulty": "Intermediate",
   "keyTakeaways": [
     "Rate limiting protects services from denial-of-service, abusive scrapers, and cascading overload by capping the request rate per client.",
-    "The **Token Bucket algorithm** allows for bursts of traffic up to the bucket capacity while maintaining a stable average refill rate.",
-    "In distributed environments, use **Redis Lua scripts** or **Sliding Window Counter** to prevent race conditions and synchronize limits across multiple gateway nodes."
+    "The Token Bucket algorithm allows for bursts of traffic up to the bucket capacity while maintaining a stable average refill rate.",
+    "In distributed environments, use Redis Lua scripts or Sliding Window Counters to prevent race conditions across multiple gateway nodes.",
+    "Standard RFC 6585 HTTP headers (X-RateLimit-Limit, X-RateLimit-Remaining, Retry-After) communicate quota status to clients."
   ],
   "architectureDiagram": "+-------------------------------------------------------------------------+\n|                  TOKEN BUCKET RATE LIMITING TOPOLOGY                    |\n+-------------------------------------------------------------------------+\n       [Refill Clock: +10 tokens/sec] ===> [Token Bucket: Max 50]\n                                                  |\n[Client Request Arrival] =========================+\n                                                  |\n                            (Bucket has tokens?)  |\n                            /                  \\  |\n                         [YES]                 [NO]\n                         /                        \\\n             (Deduct 1 Token: Allow)         (Reject: HTTP 429 Too Many)\n             (Forward to Microservice)       (Retry-After: 3 seconds)",
   "diagramImageUrl": "/diagrams/microservices/rate-limiting-block.svg",
   "flowDiagramUrl": "/diagrams/microservices/rate-limiting-flow.svg",
   "sections": [
     {
-      "heading": "Token Bucket vs Leaky Bucket vs Sliding Window Counter",
-      "body": "The Token Bucket algorithm maintains a fixed-capacity bucket of tokens that refills at a constant rate. A client needs one token per request. If tokens exist, they are deducted and the request proceeds immediately. This permits bursts of traffic while guaranteeing an upper bound. The Leaky Bucket processes requests at a constant, unvarying rate (useful for smoothing traffic out to an external partner). The Sliding Window Counter divides time into minute chunks and interpolates requests across the boundary to prevent 2x traffic bursts at the top of the minute.",
+      "heading": "1. The 4 Rate Limiting Algorithms: Token Bucket, Leaky Bucket, Fixed, and Sliding Window",
+      "body": "Rate limiting is the defensive boundary protecting microservices from DDoS attacks, web scrapers, runaway scripts, and noisy neighbors. There are four primary algorithms:\n1. Token Bucket: Maintains a bucket with maximum capacity that refills at a fixed rate. Requests consume tokens. Allows natural bursts while enforcing a steady rate.\n2. Leaky Bucket: Requests enter a queue and are processed at an unvarying constant rate. Best for smoothing out spikes before calling external payment APIs.\n3. Fixed Window Counter: Counts requests within 1-minute blocks. Vulnerable to 2x burst traffic across window boundaries.\n4. Sliding Window Counter: Combines current window counts with a weighted percentage of the previous window, preventing boundary bursts with minimal memory.",
       "bullets": [
-        "Distributed State: Store tokens in Redis using a Hash with fields `tokens` and `last_updated_timestamp`.",
-        "Atomic Lua Execution: Refill calculation and token deduction must happen in a single atomic Redis Lua script to prevent race conditions.",
-        "Client Headers: Always return standard RFC 6585 headers: `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `Retry-After`."
+        "Token Bucket Advantage: Accommodates bursts (e.g. user opening a screen with 15 parallel images) without rejecting valid traffic.",
+        "Tiered Quotas: Rate limits should be tiered by user authentication level: 10 req/min for anonymous IP, 1,000 req/min for authenticated users, 10,000 req/min for enterprise tier."
       ],
       "diagramImageUrl": "/diagrams/microservices/rate-limiting-block.svg",
       "flowDiagramUrl": "/diagrams/microservices/rate-limiting-flow.svg"
+    },
+    {
+      "heading": "2. Distributed Rate Limiting via Redis Lua Scripts",
+      "body": "In a multi-node API gateway cluster (e.g. 10 Envoy or Spring Cloud Gateway pods), rate limits cannot be tracked in local server memory; an attacker could bypass limits by spreading traffic across all 10 pods. Distributed rate limiting stores bucket counters in Redis. However, executing separate `GET`, calculate, and `SET` commands creates race conditions. The solution is executing the calculation inside an atomic Redis Lua Script.",
+      "bullets": [
+        "Atomic Lua Execution: The entire token calculation, refill, and deduction executes atomically in Redis in a single round-trip.",
+        "Sub-Millisecond Overhead: Redis evaluates the Lua script in memory in under 0.5 milliseconds.",
+        "Clustering & Sharding: Keys are hashed by `rate_limit:{user_id}`, sharding evenly across Redis Cluster nodes."
+      ]
+    },
+    {
+      "heading": "3. Failure Modes: Redis Failover & Fallback Modes",
+      "body": "What happens when the Redis rate limit cluster crashes or experiences high network latency?",
+      "bullets": [
+        "Fail-Open vs Fail-Closed: Fail-Open permits requests to pass if Redis is unreachable (protects user experience at the risk of backend overload). Fail-Closed blocks traffic (protects backend at the cost of availability). Modern systems Fail-Open for authenticated users and Fail-Closed for anonymous traffic.",
+        "Rate Limit Header Standards: Always return `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `Retry-After: <seconds>` on HTTP 429."
+      ]
+    },
+    {
+      "heading": "4. Production Blueprint: Redis Token Bucket Lua Script in Go",
+      "body": "The following Go and Redis Lua implementation demonstrates an atomic token bucket algorithm computing continuous refills.",
+      "bullets": [
+        "Continuous Refill Math: Refill is calculated based on `(now - last_update) * refill_rate`.",
+        "TTL Cleanup: Keys automatically expire after inactivity to prevent Redis memory leaks."
+      ],
+      "codeSnippet": {
+        "title": "Atomic Redis Token Bucket Lua Script in Go",
+        "code": "package ratelimit\n\nimport (\n    \"context\"\n    \"time\"\n    \"github.com/redis/go-redis/v9\"\n)\n\nconst tokenBucketLua = `\nlocal key = KEYS[1]\nlocal capacity = tonumber(ARGV[1])\nlocal refill_rate = tonumber(ARGV[2])\nlocal now = tonumber(ARGV[3])\nlocal requested = tonumber(ARGV[4])\n\nlocal data = redis.call(\"HMGET\", key, \"tokens\", \"last_updated\")\nlocal tokens = tonumber(data[1])\nlocal last_updated = tonumber(data[2])\n\nif not tokens then\n    tokens = capacity\n    last_updated = now\nelse\n    local delta = math.max(0, now - last_updated)\n    tokens = math.min(capacity, tokens + delta * refill_rate)\n    last_updated = now\nend\n\nif tokens >= requested then\n    tokens = tokens - requested\n    redis.call(\"HMSET\", key, \"tokens\", tokens, \"last_updated\", last_updated)\n    redis.call(\"EXPIRE\", key, math.ceil(capacity / refill_rate) * 2)\n    return {1, math.floor(tokens)} -- Allowed\nelse\n    redis.call(\"HMSET\", key, \"tokens\", tokens, \"last_updated\", last_updated)\n    return {0, math.floor(tokens)} -- Blocked (HTTP 429)\nend\n`\n\nfunc CheckRateLimit(ctx context.Context, rdb *redis.Client, key string, capacity, rate float64) (bool, int64, error) {\n    res, err := rdb.Eval(ctx, tokenBucketLua, []string{\"rate:\" + key}, capacity, rate, time.Now().Unix(), 1).Slice()\n    if err != nil { return true, 0, err } // Fail-open on Redis error\n    allowed := res[0].(int64) == 1\n    remaining := res[1].(int64)\n    return allowed, remaining, nil\n}"
+      }
     }
   ],
   "tradeOffs": [
     {
-      "option": "Token Bucket Algorithm",
-      "pros": "Allows natural traffic bursts, memory efficient (requires only 2 numbers per client in Redis).",
-      "cons": "Bursts can momentarily stress backend before tokens deplete.",
-      "bestFor": "General-purpose API Gateway rate limiting."
+      "option": "Redis Token Bucket (Distributed)",
+      "pros": "Allows natural traffic bursts; shared across all gateway nodes; sub-ms evaluation; atomic Lua script safety.",
+      "cons": "Adds a network hop to Redis for every incoming HTTP call; Redis is a critical cluster dependency.",
+      "bestFor": "Standard microservices API Gateways (Kong, Envoy, Spring Cloud)."
     },
     {
-      "option": "Sliding Window Log",
-      "pros": "100% accurate, zero burst boundary anomalies.",
-      "cons": "High memory consumption (stores every timestamp in a Redis sorted set).",
-      "bestFor": "Strict low-volume security checkpoints (e.g. login attempts)."
+      "option": "In-Memory Rate Limiting (Local)",
+      "pros": "Zero network latency; no external Redis cluster needed.",
+      "cons": "Rate limits cannot be synchronized across auto-scaled pods; scaling from 2 to 10 pods multiplies total allowed traffic 5x.",
+      "bestFor": "Single-instance services or host-level security agents."
+    },
+    {
+      "option": "Cloud WAF Rate Limiting (Cloudflare / AWS WAF)",
+      "pros": "Drops abusive traffic at the edge before it enters your VPC; zero server compute cost.",
+      "cons": "Less granular business logic (cannot easily rate limit based on internal user tier DTOs).",
+      "bestFor": "DDoS and bot mitigation at the public edge."
     }
   ],
-  "interviewTip": "When designing rate limiters in interviews, draw the Token Bucket and write down the Redis Lua formula: `tokens = min(capacity, current_tokens + (now - last_refill) * rate)`. Interviewers love seeing this mathematical rigor.",
+  "interviewTip": "When designing rate limiters in interviews, draw the Token Bucket and write down the Redis Lua formula: `tokens = min(capacity, current_tokens + (now - last_refill) * rate)`. Emphasize that executing in Lua prevents race conditions between parallel gateway pods, and return standard RFC headers (`Retry-After`).",
   "jsonUrl": "/api/microservices/subtopics/resilience-fault-tolerance/rate-limiting.json"
 }

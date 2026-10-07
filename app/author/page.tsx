@@ -77,7 +77,7 @@ export default function AuthorPage() {
     {
       number: "13",
       label: "Core Modules",
-      sub: "Fundamentals to Staff-level engineering",
+      sub: "Foundational to expert-level architecture",
     },
     {
       number: "15+",
@@ -112,8 +112,8 @@ export default function AuthorPage() {
       icon: <ArticleIcon sx={{ fontSize: 24, color: "#ec4899" }} />,
       title: "System Design Mentorship & Literature",
       description:
-        "Deconstructing complex distributed architectures into clear, production-grade blueprints through the GOD Handbook, technical publications on Medium, and Staff+ interview frameworks.",
-      focus: ["Architectural Blueprints", "Staff+ Mentorship", "Technical Publications"],
+        "Deconstructing complex distributed architectures into clear, production-grade blueprints through the GOD Handbook, technical publications on Medium, and advanced system design interview frameworks.",
+      focus: ["Architectural Blueprints", "Systems Mentorship", "Technical Publications"],
     },
   ];
 
@@ -207,7 +207,7 @@ export default function AuthorPage() {
                   >
                     <Image
                       src="/author.jpg"
-                      alt={`${fullName} (${preferredName}) - Author & Staff Engineer`}
+                      alt={`${fullName} (${preferredName}) - Author & Systems Architect`}
                       fill
                       priority
                       sizes="(max-width: 600px) 175px, (max-width: 900px) 200px, 220px"
@@ -226,7 +226,7 @@ export default function AuthorPage() {
                   sx={{ mt: 2, alignItems: "center", justifyContent: "center", flexWrap: "wrap", gap: 0.75 }}
                 >
                   <Chip
-                    label="Author & Staff Engineer"
+                    label="Author & Systems Architect"
                     size="small"
                     sx={{
                       fontWeight: 750,
@@ -473,7 +473,7 @@ export default function AuthorPage() {
                         mb: 1.5,
                       }}
                     >
-                      Senior / Staff Distributed Systems Engineer • Creator, Gangs of Developers (GOD)
+                      Senior Distributed Systems Engineer &amp; Architect • Creator, Gangs of Developers (GOD)
                     </Typography>
 
                     {/* Resume Contact & Location Meta Strip */}
@@ -562,7 +562,7 @@ export default function AuthorPage() {
                       , <strong>Stackademic</strong>, and{" "}
                       <strong>wiredcoder.pub</strong>. Creator of the{" "}
                       <strong>Gangs of Developers (GOD) System Design Handbook</strong>, bringing battle-tested
-                      architectural blueprints, real trade-off comparisons, and zero-fluff Staff-level interview guidance
+                      architectural blueprints, real trade-off comparisons, and zero-fluff architectural interview guidance
                       to thousands of engineers globally.
                     </Typography>
                   </Box>
@@ -888,7 +888,7 @@ export default function AuthorPage() {
               shallow bullet points with deep architectural reality. Every chapter
               provides the mathematical fundamentals, ASCII and visual SVG
               architectural blueprints, trade-off comparisons across conflicting
-              approaches, and battle-tested Staff-level interview guidance.
+              approaches, and battle-tested technical interview guidance.
             </Typography>
 
             <Typography

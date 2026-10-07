@@ -6,47 +6,79 @@
   "subtopicNumber": "1.3",
   "title": "Builder Pattern",
   "subtitle": "Separates the construction of a complex object from its representation, allowing the same construction process to create various representations.",
-  "readingTime": "7 min read",
-  "difficulty": "Foundational",
+  "readingTime": "9 min read",
+  "difficulty": "Intermediate",
   "keyTakeaways": [
-    "Eliminates the 'Telescoping Constructor' anti-pattern where classes require constructors with 10+ overloaded parameters.",
-    "Enforces object immutability by collecting configuration parameters step-by-step and validating invariants prior to final instantiation in build().",
-    "Separates optional attributes from mandatory constraints while providing clean, readable fluent method chaining."
+    "Eliminates telescoping constructor anti-patterns and parameter ordering bugs when instantiating objects with dozens of optional configurations.",
+    "Enforces immutability: allows complex multi-step construction while producing a strictly read-only, validated product upon build().",
+    "Supports Director orchestration to encapsulate standard construction recipes for common product variations."
   ],
-  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                        BUILDER UML CLASS MODEL                          |\n+-------------------------------------------------------------------------+\n      +------------------------+             +------------------------+\n      |        Director        |             |     <<interface>>      |\n      +------------------------+             |      OrderBuilder      |\n      | - builder: OrderBuilder|  uses --->  +------------------------+\n      +------------------------+             | + setItem(item): this  |\n      | + constructVipOrder()  |             | + setCoupon(code): this|\n      +------------------------+             | + build(): Order       |\n                                             +-----------^------------+\n                                                         |\n                                             +-----------+------------+\n                                             |  ConcreteOrderBuilder  |\n                                             +------------------------+\n                                             | - items: List<Item>    |\n                                             | - coupon: String       |\n                                             | + build(): Order       |\n                                             +------------------------+",
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                           BUILDER UML CLASS MODEL                       |\n+-------------------------------------------------------------------------+\n          +-----------------------+              +-----------------------+\n          |       Director        |              |     <<interface>>     |\n          +-----------------------+              |      HttpBuilder      |\n          | - builder: HttpBuilder|              +-----------------------+\n          +-----------------------+              | + setMethod(): self   |\n          | + buildJsonPost(): Req|              | + setUrl(): self      |\n          +-----------+-----------+              | + setHeader(): self   |\n                      |                          | + build(): Request    |\n                      | uses                     +-----------^-----------+\n                      v                                      |\n          +-----------------------+              +-----------+-----------+\n          |    Client Request     |              |    OkHttpBuilder      |\n          +-----------------------+              +-----------------------+\n          | OkHttpBuilder.create()|              | - req: HttpRequest    |\n          |   .url(\"/api/v1\")     |              +-----------------------+\n          |   .header(\"auth\", key)|              | + build(): HttpRequest|\n          |   .build()            |              +-----------------------+",
   "diagramImageUrl": "/diagrams/design-patterns/builder-block.svg",
   "flowDiagramUrl": "/diagrams/design-patterns/builder-flow.svg",
   "sections": [
     {
-      "heading": "Preventing Telescoping Constructors and Mutation Bugs",
-      "body": "As domain entities accumulate dozens of optional settings, constructors become unmaintainable (e.g. `new HttpRequest(url, headers, timeout, retry, proxy, cookieJar, null, null, false)`). Passing multiple boolean and null arguments introduces severe caller bugs. The Builder pattern isolates configuration assembly, enforces required parameters, and produces an immutable target instance.",
+      "heading": "1. Architectural Intent: Telescoping Constructors vs Stepwise Construction",
+      "body": "When designing domain entities or configuration objects with many fields—some mandatory and many optional—engineers historically relied on 'telescoping constructors' (multiple overloaded constructors with 2, 3, 4, 8 parameters). This results in unreadable client code (new Request('url', null, 5000, null, true, null, false)) that is highly susceptible to positional argument inversion bugs. The Builder pattern isolates the step-by-step assembly process into a fluent API.",
       "bullets": [
-        "Fluent API: Self-documenting, chained method invocations improve code readability across engineering teams.",
-        "Fail-Fast Invariant Checking: All business constraint validations run atomically inside the build() method prior to object creation.",
-        "Thread Safety: The constructed entity can have only private final fields and no setters, making it inherently thread-safe."
+        "Readable Fluent Interface: Method names explicitly declare which parameter is being set, eliminating positional ambiguity.",
+        "Immutable Domain Entities: The target object exposes only getter methods and has private constructor access, ensuring post-construction state cannot be mutated.",
+        "Stepwise Validation: Business rule validation (e.g., if TLS is enabled, certificate must be non-null) is enforced atomically inside the terminal build() method."
+      ],
+      "diagramImageUrl": "/diagrams/design-patterns/builder-block.svg",
+      "flowDiagramUrl": "/diagrams/design-patterns/builder-flow.svg"
+    },
+    {
+      "heading": "2. Fluent Chaining, Immutability & Thread Safety Guarantees",
+      "body": "In high-throughput multi-threaded systems, mutable JavaBean objects with public setters introduce critical race conditions: another thread can read an entity while it is in a partially populated state. The Builder pattern avoids this by accumulating parameters inside a thread-local builder instance. Once build() is invoked, an immutable record or frozen instance is returned, making it inherently thread-safe across thread boundaries without locking.",
+      "bullets": [
+        "Defensive Copying: The builder creates deep or defensive copies of mutable collections (lists, maps) during build() to prevent callers from modifying them externally.",
+        "Director Role: An optional Director class encapsulates repetitive assembly steps (e.g., standardJsonClientBuilder vs highThroughputStreamingClientBuilder).",
+        "Polymorphic Builders: In hierarchical class structures, recursive generics (e.g. Builder<T extends Builder<T>>) ensure subclass methods return the correct derived builder type."
+      ]
+    },
+    {
+      "heading": "3. Validation Invariants, Partial State Hazards & Anti-patterns",
+      "body": "A frequent pitfall is performing validation inside individual setter methods rather than the terminal build() method. If Field A and Field B are interdependent (e.g., endDate must be after startDate), validating inside setEndDate() fails if the caller invokes setEndDate() before setStartDate(). All relational invariant checks must be deferred to the terminal build() step.",
+      "bullets": [
+        "Premature Validation Trap: Validating interdependent fields prematurely during chained setter calls leads to call-order dependencies.",
+        "Incomplete Object Leakage: Allowing the product to be consumed before build() finishes executing can leak unvalidated or incomplete objects.",
+        "Boilerplate Overhead: Hand-writing builders for simple 2-field data transfer objects adds unnecessary maintenance friction. Use modern language features like records or Lombok where appropriate."
+      ]
+    },
+    {
+      "heading": "4. Production Blueprint: Type-Safe Fluent Builder with Immutability",
+      "body": "The following production Java implementation showcases an enterprise HTTP Client Request builder featuring strict invariant validation, defensive collection copying, and unmodifiable state.",
+      "bullets": [
+        "Private Constructor: Enforces instantiation exclusively via the static builder.",
+        "Defensive Copying: Freezes headers map into Collections.unmodifiableMap."
       ],
       "codeSnippet": {
-        "title": "Production Java 21 Builder with Fail-Fast Invariant Checks",
-        "code": "public final class HttpRequest {\n    private final String url;\n    private final Duration timeout;\n    private final boolean followRedirects;\n    private final Map<String, String> headers;\n\n    private HttpRequest(Builder builder) {\n        this.url = builder.url;\n        this.timeout = builder.timeout;\n        this.followRedirects = builder.followRedirects;\n        this.headers = Map.copyOf(builder.headers); // Defensive copy\n    }\n\n    public static Builder newBuilder(String url) { return new Builder(url); }\n\n    public static class Builder {\n        private final String url; // Mandatory\n        private Duration timeout = Duration.ofSeconds(5); // Default\n        private boolean followRedirects = true;\n        private final Map<String, String> headers = new HashMap<>();\n\n        public Builder(String url) {\n            Objects.requireNonNull(url, \"URL cannot be null\");\n            this.url = url;\n        }\n\n        public Builder timeout(Duration timeout) {\n            if (timeout.isNegative()) throw new IllegalArgumentException(\"Timeout cannot be negative\");\n            this.timeout = timeout;\n            return this;\n        }\n\n        public Builder header(String key, String value) {\n            headers.put(key, value);\n            return this;\n        }\n\n        public HttpRequest build() {\n            if (!url.startsWith(\"http://\") && !url.startsWith(\"https://\")) {\n                throw new IllegalStateException(\"URL must use HTTP or HTTPS protocol\");\n            }\n            return new HttpRequest(this);\n        }\n    }\n}"
-      },
-      "flowDiagramUrl": "/diagrams/design-patterns/builder-flow.svg",
-      "diagramImageUrl": "/diagrams/design-patterns/builder-block.svg"
+        "title": "Production Immutable Request Builder in Java 21",
+        "code": "public final class HttpRequest {\n    private final String url;\n    private final String method;\n    private final Map<String, String> headers;\n    private final byte[] body;\n    private final Duration timeout;\n\n    private HttpRequest(Builder builder) {\n        this.url = builder.url;\n        this.method = builder.method;\n        this.headers = Collections.unmodifiableMap(new HashMap<>(builder.headers));\n        this.body = builder.body != null ? builder.body.clone() : null;\n        this.timeout = builder.timeout;\n    }\n\n    public static Builder newBuilder() { return new Builder(); }\n\n    public String getUrl() { return url; }\n    public String getMethod() { return method; }\n    public Map<String, String> getHeaders() { return headers; }\n\n    public static final class Builder {\n        private String url;\n        private String method = \"GET\";\n        private final Map<String, String> headers = new HashMap<>();\n        private byte[] body;\n        private Duration timeout = Duration.ofSeconds(30);\n\n        private Builder() {}\n\n        public Builder url(String url) {\n            this.url = Objects.requireNonNull(url, \"URL cannot be null\");\n            return this;\n        }\n\n        public Builder method(String method) {\n            this.method = Objects.requireNonNull(method, \"HTTP method cannot be null\").toUpperCase();\n            return this;\n        }\n\n        public Builder header(String name, String value) {\n            this.headers.put(name, value);\n            return this;\n        }\n\n        public Builder timeout(Duration timeout) {\n            this.timeout = Objects.requireNonNull(timeout, \"Timeout cannot be null\");\n            return this;\n        }\n\n        public HttpRequest build() {\n            // Atomic Invariant Validation\n            if (url == null || url.isBlank()) {\n                throw new IllegalStateException(\"Cannot construct HttpRequest without a valid URL\");\n            }\n            if (\"POST\".equals(method) && (body == null || body.length == 0)) {\n                // Warning or policy enforcement\n            }\n            return new HttpRequest(this);\n        }\n    }\n}"
+      }
     }
   ],
   "tradeOffs": [
     {
       "option": "Builder Pattern",
-      "pros": "Provides fluent readable code, supports partial construction, enables immutable target objects.",
-      "cons": "Requires duplicating all domain fields in the builder class; higher boilerplate overhead.",
-      "bestFor": "Complex domain entities, HTTP/gRPC client configurations, SQL/query generators."
+      "pros": "Fluent readability; strict immutability; step-by-step assembly; robust multi-field validation.",
+      "cons": "Requires creating a builder companion class; extra memory overhead during object construction.",
+      "bestFor": "Domain entities with 4+ attributes, HTTP/gRPC client configurations, and immutable records."
     },
     {
-      "option": "Java Record / POJO Setters",
-      "pros": "Compact syntax (records), simple bean reflection support (frameworks like Jackson/Spring).",
-      "cons": "Setters expose mutable state causing concurrent race conditions; records with 10+ fields are hard to read at call sites.",
-      "bestFor": "Small DTOs with 2-4 fields, simple data mapping payloads."
+      "option": "JavaBeans (Default Constructor + Setters)",
+      "pros": "Simple to write; zero boilerplate; works seamlessly with legacy reflection serializers.",
+      "cons": "Mutable; susceptible to race conditions; allows objects to exist in partially constructed invalid states.",
+      "bestFor": "Simple internal data transfer objects (DTOs) bound by framework reflection (e.g. Jackson)."
+    },
+    {
+      "option": "Telescoping Constructors",
+      "pros": "Native language feature; enforces immutability without helper companion classes.",
+      "cons": "Unreadable call sites; parameter order confusion leads to silent production bugs.",
+      "bestFor": "Tiny value classes with 1 to 3 non-optional immutable attributes."
     }
   ],
-  "interviewTip": "In interviews, emphasize how Builder enables Immutability. Explain that in multi-threaded environments, an immutable object constructed via a Builder eliminates the need for synchronization locks.",
+  "interviewTip": "When discussing Builder in system design interviews, emphasize the concurrency benefits: 'Builder is not just about syntactic sugar for telescoping constructors; it is the premier pattern for constructing thread-safe immutable objects. By ensuring that the object cannot be observed until the terminal build() method runs and performs atomic validation, we eliminate partially initialized object bugs.'",
   "jsonUrl": "/api/design-patterns/subtopics/creational-patterns/builder.json"
 }

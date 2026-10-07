@@ -28,7 +28,7 @@ export interface SubtopicSummary {
   title: string;
   subtitle: string;
   readingTime: string;
-  difficulty: "Foundational" | "Intermediate" | "Advanced" | "Staff+";
+  difficulty: "Foundational" | "Intermediate" | "Advanced" | "Expert" | "Staff+";
   diagramImageUrl?: string;
   flowDiagramUrl?: string;
   jsonUrl: string;

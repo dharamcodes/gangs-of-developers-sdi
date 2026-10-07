@@ -1,854 +1,1663 @@
- 
+/* eslint-disable @typescript-eslint/no-require-imports */
 
 const STRUCTURAL_PATTERNS = {
-  id: "structural-patterns",
-  topicNumber: 2,
-  title: "2. Structural Patterns",
-  description: "Assembling objects and classes into larger, flexible structures while keeping systems efficient and decoupled: Adapter, Bridge, Composite, Decorator, Facade, Flyweight, and Proxy.",
-  subtopics: [
+  "id": "structural-patterns",
+  "topicNumber": 2,
+  "title": "2. Structural Patterns",
+  "description": "Assembling objects and classes into larger, flexible structures while keeping systems efficient and decoupled: Adapter, Facade, Decorator, Proxy, Composite, Bridge, and Flyweight.",
+  "subtopics": [
     {
-      id: "adapter",
-      subtopicNumber: "2.1",
-      title: "Adapter Pattern",
-      subtitle: "Allows objects with incompatible interfaces to collaborate by converting the interface of a class into another interface clients expect.",
-      readingTime: "7 min read",
-      difficulty: "Foundational",
-      accent: "#38bdf8",
-      keyTakeaways: [
+      "id": "adapter",
+      "subtopicNumber": "2.1",
+      "title": "Adapter Pattern",
+      "subtitle": "Allows objects with incompatible interfaces to collaborate by converting the interface of a class into another interface clients expect.",
+      "readingTime": "8 min read",
+      "difficulty": "Foundational",
+      "accent": "#38bdf8",
+      "keyTakeaways": [
         "Acts as a translator wrapper between two existing, incompatible APIs or legacy interfaces.",
-        "Object Adapter uses object composition (wraps Adaptee instance) rather than multiple inheritance, which is favored by the 'composition over inheritance' design principle.",
+        "Object Adapter uses object composition (wraps Adaptee instance) rather than multiple inheritance, strictly honoring 'composition over inheritance'.",
         "Essential when integrating third-party SDKs, legacy SOAP services, or differing data format schemas without polluting core domain models."
       ],
-      ascii: `+-------------------------------------------------------------------------+
-|                         ADAPTER UML CLASS MODEL                         |
-+-------------------------------------------------------------------------+
-+-----------------------+              +-----------------------+
-|        Client         |  uses --->   |     <<interface>>     |
-|                       |              |     PaymentGateway    |
-+-----------------------+              +-----------------------+
-                                       | + pay(cents): boolean |
-                                       +-----------^-----------+
-                                                   | implements
-                                       +-----------+-----------+
-                                       |     StripeAdapter     |
-                                       +-----------------------+
-                                       | - stripeSdk: StripeApi|
-                                       | + pay(cents): boolean |
-                                       +-----------+-----------+
-                                                   | delegates to
-                                       +-----------v-----------+
-                                       |   Legacy StripeApi    |
-                                       +-----------------------+
-                                       | + makeCharge(currency)|
-                                       +-----------------------+`,
-      blockNodes: [
-        { x: 50, y: 120, w: 200, h: 120, stereotype: 'client', title: 'PaymentService', stroke: '#38bdf8', lines: ['Client business logic', 'Calls gateway.pay()'], tag: 'Client' },
-        { x: 340, y: 110, w: 240, h: 130, stereotype: 'interface', title: 'PaymentGateway', stroke: '#10b981', lines: ['+ pay(cents: long): bool'], tag: 'Target Interface' },
-        { x: 340, y: 310, w: 240, h: 140, stereotype: 'adapter', title: 'StripePaymentAdapter', stroke: '#f59e0b', lines: ['- stripeClient: StripeSdk', '+ pay(cents): bool', '  -> adapts dollars & params'], tag: 'Adapter' },
-        { x: 670, y: 310, w: 230, h: 140, stereotype: 'adaptee', title: 'StripeSdk (External)', stroke: '#ef4444', lines: ['+ createCharge(amount: BigDecimal, curr: String)'], tag: 'Adaptee' }
-      ],
-      blockConns: [
-        { d: 'M 250 170 L 340 170', lx: 295, ly: 160, label: 'uses' },
-        { d: 'M 460 310 L 460 240', lx: 460, ly: 275, label: 'implements' },
-        { d: 'M 580 380 L 670 380', lx: 625, ly: 370, label: 'delegates' }
-      ],
-      flowNodes: [
-        { x: 50, y: 140, w: 200, h: 140, step: '1', title: 'Client Payment Call', stroke: '#38bdf8', lines: ['Client invokes pay(5000)', 'Uses domain gateway interface', 'Zero vendor details exposed'] },
-        { x: 280, y: 140, w: 210, h: 140, step: '2', title: 'Adapter Translation', stroke: '#f59e0b', lines: ['Translates cents to Dollars', 'Constructs vendor payload', 'Maps auth tokens & telemetry'] },
-        { x: 520, y: 140, w: 210, h: 140, step: '3', title: 'Adaptee Execution', stroke: '#ef4444', lines: ['Stripe SDK executes RPC', 'Processes charge at bank', 'Returns proprietary DTO'] },
-        { x: 760, y: 140, w: 200, h: 140, step: '4', title: 'Normalized Response', stroke: '#10b981', lines: ['Adapter catches exceptions', 'Translates to domain status', 'Returns clean boolean to client'] }
-      ],
-      flowConns: [
-        { d: 'M 250 200 L 280 200', lx: 265, ly: 190, label: 'pay()' },
-        { d: 'M 490 200 L 520 200', lx: 505, ly: 190, label: 'charge()' },
-        { d: 'M 730 200 L 760 200', lx: 745, ly: 190, label: 'normalize' }
-      ],
-      sections: [
+      "ascii": "+-------------------------------------------------------------------------+\n|                         ADAPTER UML CLASS MODEL                         |\n+-------------------------------------------------------------------------+\n+-----------------------+              +-----------------------+\n|        Client         |  uses --->   |     <<interface>>     |\n|                       |              |     PaymentGateway    |\n+-----------------------+              +-----------------------+\n                                       | + pay(cents): boolean |\n                                       +-----------^-----------+\n                                                   | implements\n                                       +-----------+-----------+\n                                       |     StripeAdapter     |\n                                       +-----------------------+\n                                       | - stripeSdk: StripeApi|\n                                       | + pay(cents): boolean |\n                                       +-----------+-----------+\n                                                   | delegates to\n                                       +-----------v-----------+\n                                       |   Legacy StripeApi    |\n                                       +-----------------------+\n                                       | + makeCharge(currency)|\n                                       +-----------------------+",
+      "blockNodes": [
         {
-          heading: "Bridging Legacy Interfaces and Vendor SDK Boundaries",
-          body: "In production engineering, third-party libraries and legacy internal systems rarely match modern internal domain interfaces. Without an adapter, vendor-specific method names, exceptions, and argument structures leak directly into core application business logic, locking your system to a single vendor. The Adapter pattern encapsulates third-party interactions behind a standard internal domain interface.",
-          bullets: [
-            "Single Responsibility Principle: Data conversion and vendor translation logic is cleanly separated from primary business rules.",
-            "Open/Closed Principle: You can swap payment providers (e.g., Stripe to Adyen or PayPal) simply by introducing a new adapter class without changing a single line of client code.",
-            "Encapsulates Vendor Exceptions: Translates vendor-specific HTTP/gRPC runtime exceptions into domain-level checked/unchecked exceptions."
+          "x": 50,
+          "y": 120,
+          "w": 200,
+          "h": 120,
+          "stereotype": "client",
+          "title": "PaymentService",
+          "stroke": "#38bdf8",
+          "lines": [
+            "Client business logic",
+            "Calls gateway.pay()"
           ],
-          codeSnippet: {
-            title: "Production Adapter Pattern in Java 21",
-            code: `// Domain Target Interface
-public interface PaymentProcessor {
-    boolean processPayment(String customerId, long amountInCents);
-}
-
-// Incompatible Third-Party SDK
-public class LegacyPayPalService {
-    public int sendMoney(String email, double amountInDollars, String token) {
-        System.out.printf("PayPal: Charged $%.2f for %s%n", amountInDollars, email);
-        return 200; // Success code
-    }
-}
-
-// The Object Adapter
-public class PayPalPaymentAdapter implements PaymentProcessor {
-    private final LegacyPayPalService payPalService;
-    private final String apiToken;
-
-    public PayPalPaymentAdapter(LegacyPayPalService payPalService, String apiToken) {
-        this.payPalService = payPalService;
-        this.apiToken = apiToken;
-    }
-
-    @Override
-    public boolean processPayment(String customerId, long amountInCents) {
-        // Adapt parameters: convert cents to dollars
-        double dollars = amountInCents / 100.0;
-        int responseCode = payPalService.sendMoney(customerId, dollars, apiToken);
-        return responseCode == 200;
-    }
-}`
-          },
-          flowDiagramUrl: "/diagrams/design-patterns/adapter-flow.svg"
-        }
-      ],
-      tradeOffs: [
-        {
-          option: "Adapter Pattern",
-          pros: "Protects business logic from vendor lock-in, enables seamless mocking in unit tests.",
-          cons: "Adds an additional layer of method indirection and small object memory overhead.",
-          bestFor: "Integrating third-party SDKs, payment gateways, cloud vendor storage services."
+          "tag": "Client"
         },
         {
-          option: "Direct SDK Invocation",
-          pros: "Faster to code initially; direct access to all vendor-specific parameters.",
-          cons: "Tightly couples your entire application to external APIs; replacing the SDK requires rewriting all callers.",
-          bestFor: "Disposable prototypes and small internal scripts."
-        }
-      ],
-      interviewTip: "Distinguish between Object Adapter (composition based, wraps the adaptee instance) and Class Adapter (uses multiple inheritance to inherit both interfaces, impossible in Java classes). Always emphasize that Object Adapter is superior because it can adapt any subclass of the adaptee."
-    },
-    {
-      id: "bridge",
-      subtopicNumber: "2.2",
-      title: "Bridge Pattern",
-      subtitle: "Decouples an abstraction from its implementation so that the two can vary independently.",
-      readingTime: "8 min read",
-      difficulty: "Advanced",
-      accent: "#a855f7",
-      keyTakeaways: [
-        "Prevents a Cartesian Product explosion of class hierarchies (e.g. $M$ abstractions $\\times$ $N$ platforms = $M \\times N$ classes) by splitting them into two independent dimensions: Abstraction and Implementation.",
-        "Replaces deep inheritance hierarchies with composition: the Abstraction maintains a reference to the Implementor.",
-        "Widely used in cross-platform rendering engines, driver architectures (JDBC), and multi-channel notification dispatchers."
-      ],
-      ascii: `+-------------------------------------------------------------------------+
-|                          BRIDGE UML CLASS MODEL                         |
-+-------------------------------------------------------------------------+
-    [Abstraction Hierarchy]                    [Implementor Hierarchy]
-  +--------------------------+               +--------------------------+
-  |    RemoteControl (Abs)   |  has-a ---->  |     <<interface>>        |
-  +--------------------------+               |     Device (Impl)        |
-  | # device: Device         |               +--------------------------+
-  | + togglePower(): void    |               | + isEnabled(): boolean   |
-  +------------^-------------+               | + enable(): void         |
-               |                             +------------^-------------+
-  +------------+-------------+                            |
-  |   AdvancedRemoteControl  |               +------------+-------------+
-  +--------------------------+               |                          |
-  | + mute(): void           |     +---------+--------+       +---------+--------+
-  +--------------------------+     |    TvDevice      |       |   RadioDevice    |
-                                   +------------------+       +------------------+`,
-      blockNodes: [
-        { x: 50, y: 110, w: 250, h: 140, stereotype: 'abstraction', title: 'NotificationSender', stroke: '#a855f7', lines: ['# channel: MessageChannel', '+ sendAlert(msg): void'], tag: 'Abstraction' },
-        { x: 50, y: 320, w: 250, h: 130, stereotype: 'refined-abs', title: 'EmergencyNotifier', stroke: '#a855f7', lines: ['+ broadcastUrgent(msg)', '  -> retries & escalates'], tag: 'Refined Abstraction' },
-        { x: 550, y: 110, w: 250, h: 140, stereotype: 'implementor', title: 'MessageChannel', stroke: '#10b981', lines: ['+ deliver(payload): void', '+ getProtocol(): String'], tag: 'Implementor' },
-        { x: 420, y: 320, w: 220, h: 130, stereotype: 'concrete-impl', title: 'TwilioSmsChannel', stroke: '#38bdf8', lines: ['+ deliver(): [SMS Gateway]'], tag: 'Concrete Impl A' },
-        { x: 670, y: 320, w: 220, h: 130, stereotype: 'concrete-impl', title: 'SlackWebhookChannel', stroke: '#f59e0b', lines: ['+ deliver(): [Slack API]'], tag: 'Concrete Impl B' }
-      ],
-      blockConns: [
-        { d: 'M 175 320 L 175 250', lx: 175, ly: 285, label: 'extends' },
-        { d: 'M 300 170 L 550 170', lx: 425, ly: 155, label: 'has-a Bridge' },
-        { d: 'M 530 320 L 630 250', lx: 570, ly: 285, label: 'implements' },
-        { d: 'M 780 320 L 710 250', lx: 755, ly: 285, label: 'implements' }
-      ],
-      flowNodes: [
-        { x: 50, y: 140, w: 200, h: 140, step: '1', title: 'Client Invocation', stroke: '#a855f7', lines: ['Client creates EmergencyNotifier', 'Injects SlackChannel at runtime', 'Calls sendUrgentAlert()'] },
-        { x: 280, y: 140, w: 210, h: 140, step: '2', title: 'Abstraction Logic', stroke: '#f59e0b', lines: ['Applies high-level logic', 'Formats alert markdown', 'Applies retry policies'] },
-        { x: 520, y: 140, w: 210, h: 140, step: '3', title: 'Bridge Delegation', stroke: '#38bdf8', lines: ['Notifier delegates to channel', 'Calls channel.deliver()', 'Agnostic of channel transport'] },
-        { x: 760, y: 140, w: 200, h: 140, step: '4', title: 'Protocol Delivery', stroke: '#10b981', lines: ['SlackWebhook dispatches HTTP', 'Zero inheritance coupling', 'Swap channel in 1 line'] }
-      ],
-      flowConns: [
-        { d: 'M 250 200 L 280 200', lx: 265, ly: 190, label: 'call' },
-        { d: 'M 490 200 L 520 200', lx: 505, ly: 190, label: 'bridge' },
-        { d: 'M 730 200 L 760 200', lx: 745, ly: 190, label: 'execute' }
-      ],
-      sections: [
-        {
-          heading: "Solving Class Explosions via Orthogonal Dimension Decomposition",
-          body: "Consider a UI framework with shapes (Circle, Square) and colors (Red, Blue). In inheritance, adding 1 shape and 1 color requires creating RedCircle, BlueCircle, RedSquare, BlueSquare. If you have 10 shapes and 5 colors, you need 50 subclasses! The Bridge pattern decouples Shape (the abstraction) from Color (the implementation) into two separate class trees connected by object composition.",
-          bullets: [
-            "Eliminates Class Multiplications: With Bridge, $M$ shapes and $N$ colors requires only $M + N$ classes instead of $M \\times N$.",
-            "Runtime Implementation Switching: The client can change the underlying implementor of an abstraction at runtime.",
-            "True Information Hiding: Completely hides platform-dependent hardware/OS details from consumer code."
+          "x": 340,
+          "y": 110,
+          "w": 240,
+          "h": 130,
+          "stereotype": "interface",
+          "title": "PaymentGateway",
+          "stroke": "#10b981",
+          "lines": [
+            "+ pay(cents: long): bool"
           ],
-          codeSnippet: {
-            title: "Decoupled Notification Architecture in Java 21",
-            code: `// Implementor Interface
-public interface DeliveryChannel {
-    void transmit(String recipient, String payload);
-}
-
-// Concrete Implementors
-public class SmsDeliveryChannel implements DeliveryChannel {
-    @Override public void transmit(String recipient, String payload) {
-        System.out.printf("SMS sent to %s: %s%n", recipient, payload);
-    }
-}
-
-public class EmailDeliveryChannel implements DeliveryChannel {
-    @Override public void transmit(String recipient, String payload) {
-        System.out.printf("Email sent to %s: %s%n", recipient, payload);
-    }
-}
-
-// Abstraction
-public abstract class Notification {
-    protected final DeliveryChannel channel; // The Bridge
-    protected Notification(DeliveryChannel channel) { this.channel = channel; }
-    public abstract void notifyUser(String user, String message);
-}
-
-// Refined Abstraction
-public class UrgentAlertNotification extends Notification {
-    public UrgentAlertNotification(DeliveryChannel channel) { super(channel); }
-
-    @Override
-    public void notifyUser(String user, String message) {
-        String formatted = "[URGENT-P0] " + message.toUpperCase();
-        channel.transmit(user, formatted);
-    }
-}`
-          },
-          flowDiagramUrl: "/diagrams/design-patterns/bridge-flow.svg"
-        }
-      ],
-      tradeOffs: [
-        {
-          option: "Bridge Pattern",
-          pros: "Prevents combinatorial subclass explosions; decouples high-level policy from low-level mechanisms.",
-          cons: "Increases structural complexity; high cognitive load if the two dimensions are not truly orthogonal.",
-          bestFor: "Cross-platform graphics engines, database connectivity drivers (JDBC), complex notification engines."
+          "tag": "Target Interface"
         },
         {
-          option: "Monolithic Class Inheritance",
-          pros: "Simple and straightforward for small domains with only 2-3 fixed variants.",
-          cons: "Combinatorial explosion: adding new platforms requires multiplying classes across the entire codebase.",
-          bestFor: "Static domains with zero likelihood of new platform variants."
-        }
-      ],
-      interviewTip: "Interviewers frequently ask candidates to contrast Bridge vs Adapter. Explain: Adapter is applied *after* systems are built to make incompatible third-party interfaces work together. Bridge is designed *up front* to let abstraction and implementation evolve independently."
-    },
-    {
-      id: "composite",
-      subtopicNumber: "2.3",
-      title: "Composite Pattern",
-      subtitle: "Composes objects into tree structures to represent part-whole hierarchies, letting clients treat individual objects and compositions uniformly.",
-      readingTime: "7 min read",
-      difficulty: "Intermediate",
-      accent: "#10b981",
-      keyTakeaways: [
-        "Enables recursive tree data structures where single Leaf nodes and complex Composite branches share the exact same interface.",
-        "Clients do not need to check `if (node instanceof Leaf)` or write nested typecasting loops; calling `execute()` on the root propagates down the entire hierarchy.",
-        "Underpins modern UI DOM trees, organizational hierarchies, file system structures, and financial portfolio valuation calculations."
-      ],
-      ascii: `+-------------------------------------------------------------------------+
-|                        COMPOSITE UML CLASS MODEL                        |
-+-------------------------------------------------------------------------+
-                         +-----------------------------+
-                         |        <<interface>>        |
-                         |          Component          |
-                         +-----------------------------+
-                         | + getPrice(): BigDecimal    |
-                         | + displayHierarchy(): void  |
-                         +--------------^--------------+
-                                        |
-               +------------------------+------------------------+
-               |                                                 |
-+--------------+--------------+                   +--------------+--------------+
-|        Product (Leaf)       |                   |       Box (Composite)       |
-+-----------------------------+                   +-----------------------------+
-| - price: BigDecimal         |                   | - children: List<Component> |
-| + getPrice(): BigDecimal    |                   | + add(c: Component): void   |
-+-----------------------------+                   | + getPrice(): [Recursive]   |
-                                                  +-----------------------------+`,
-      blockNodes: [
-        { x: 320, y: 100, w: 260, h: 140, stereotype: 'interface', title: 'FileSystemItem', stroke: '#10b981', lines: ['+ getSize(): long', '+ printTree(indent): void'], tag: 'Component' },
-        { x: 100, y: 310, w: 250, h: 130, stereotype: 'leaf', title: 'File (Leaf)', stroke: '#38bdf8', lines: ['- sizeInBytes: long', '+ getSize(): long', '  -> returns exact file size'], tag: 'Leaf' },
-        { x: 550, y: 310, w: 270, h: 150, stereotype: 'composite', title: 'Directory (Composite)', stroke: '#f59e0b', lines: ['- items: List<FileSystemItem>', '+ add(item): void', '+ getSize(): long (sum children)'], tag: 'Composite' }
-      ],
-      blockConns: [
-        { d: 'M 225 310 L 370 240', lx: 280, ly: 265, label: 'implements' },
-        { d: 'M 685 310 L 530 240', lx: 635, ly: 265, label: 'implements' },
-        { d: 'M 820 385 C 870 385 870 170 580 170', lx: 870, ly: 270, label: 'contains children' }
-      ],
-      flowNodes: [
-        { x: 50, y: 140, w: 200, h: 140, step: '1', title: 'Root Invocation', stroke: '#10b981', lines: ['Client calls rootDir.getSize()', 'Client has no knowledge of tree depth', 'Treats root as Component'] },
-        { x: 280, y: 140, w: 210, h: 140, step: '2', title: 'Recursive Traversal', stroke: '#f59e0b', lines: ['Directory loops through children', 'Calls item.getSize() on each', 'Branches recurse into subdirectories'] },
-        { x: 520, y: 140, w: 210, h: 140, step: '3', title: 'Leaf Base Case', stroke: '#38bdf8', lines: ['Individual File leaves return size', 'No child loops on leaves', 'Accumulates into branch sum'] },
-        { x: 760, y: 140, w: 200, h: 140, step: '4', title: 'Aggregated Total', stroke: '#a855f7', lines: ['Total bytes returned to root', 'Clean single return value', 'Zero instanceof checks needed'] }
-      ],
-      flowConns: [
-        { d: 'M 250 200 L 280 200', lx: 265, ly: 190, label: 'recurse' },
-        { d: 'M 490 200 L 520 200', lx: 505, ly: 190, label: 'leaf evaluate' },
-        { d: 'M 730 200 L 760 200', lx: 745, ly: 190, label: 'aggregate' }
-      ],
-      sections: [
-        {
-          heading: "Uniform Treatment of Part-Whole Hierarchies",
-          body: "In complex domain trees like e-commerce packaging (boxes containing smaller boxes and individual products) or graphic renderers (groups containing shapes and other nested groups), writing special-cased code for leaves versus containers results in brittle switch statements. The Composite pattern enables clients to treat nested trees as if they were a single object.",
-          bullets: [
-            "Polymorphic Recursion: Complex hierarchies calculate results through natural recursive polymorphism.",
-            "Open/Closed Principle: Introduce new leaf components or container types without changing client code.",
-            "Simplified Client Logic: Eliminates cumbersome typecasting and deep nested iterative loops."
+          "x": 340,
+          "y": 310,
+          "w": 240,
+          "h": 140,
+          "stereotype": "adapter",
+          "title": "StripePaymentAdapter",
+          "stroke": "#f59e0b",
+          "lines": [
+            "- stripeClient: StripeSdk",
+            "+ pay(cents): bool",
+            "  -> adapts dollars & params"
           ],
-          codeSnippet: {
-            title: "Composite File System Architecture in Java 21",
-            code: `// Component Interface
-public interface FileSystemNode {
-    long calculateSizeBytes();
-    void render(int depth);
-}
-
-// Leaf Node
-public record FileLeaf(String name, long size) implements FileSystemNode {
-    @Override public long calculateSizeBytes() { return size; }
-    @Override public void render(int depth) {
-        System.out.printf("%s- File: %s (%d bytes)%n", "  ".repeat(depth), name, size);
-    }
-}
-
-// Composite Node
-public class DirectoryComposite implements FileSystemNode {
-    private final String name;
-    private final List<FileSystemNode> children = new ArrayList<>();
-
-    public DirectoryComposite(String name) { this.name = name; }
-    public void add(FileSystemNode node) { children.add(node); }
-
-    @Override
-    public long calculateSizeBytes() {
-        return children.stream().mapToLong(FileSystemNode::calculateSizeBytes).sum();
-    }
-
-    @Override
-    public void render(int depth) {
-        System.out.printf("%s+ Dir: %s%n", "  ".repeat(depth), name);
-        for (FileSystemNode child : children) child.render(depth + 1);
-    }
-}`
-          },
-          flowDiagramUrl: "/diagrams/design-patterns/composite-flow.svg"
-        }
-      ],
-      tradeOffs: [
-        {
-          option: "Composite Pattern",
-          pros: "Simplifies client code; easy to add new component types; uniform recursive processing.",
-          cons: "Difficult to restrict which child components can be added to specific composite containers at compile time.",
-          bestFor: "UI document trees, AST compilers, nested pricing & packaging systems, organization charts."
+          "tag": "Adapter"
         },
         {
-          option: "Flat Class Hierarchies with Collections",
-          pros: "Strict compile-time type safety; prevents accidental nesting of illegal combinations.",
-          cons: "Requires custom traversal and aggregation logic for every new container type.",
-          bestFor: "Strictly shallow, non-recursive parent-child relationships."
-        }
-      ],
-      interviewTip: "When discussing Composite, address the trade-off between Transparency (defining child management methods like `add()` and `remove()` in the base Component interface) versus Safety (defining them only on the Composite class). Explain why Safety is generally preferred in strongly-typed languages like Java."
-    },
-    {
-      id: "decorator",
-      subtopicNumber: "2.4",
-      title: "Decorator Pattern",
-      subtitle: "Attaches additional responsibilities to an object dynamically, providing a flexible alternative to subclassing for extending functionality.",
-      readingTime: "8 min read",
-      difficulty: "Foundational",
-      accent: "#f59e0b",
-      keyTakeaways: [
-        "Adds behavior to individual objects dynamically at runtime without affecting other instances of the same class.",
-        "Follows the Open/Closed Principle: extend functionality via wrapper layers without modifying existing classes.",
-        "Found throughout Java I/O (`new BufferedReader(new InputStreamReader(new FileInputStream(file)))`) and HTTP middleware filter chains."
-      ],
-      ascii: `+-------------------------------------------------------------------------+
-|                        DECORATOR UML CLASS MODEL                        |
-+-------------------------------------------------------------------------+
-                      +-----------------------------+
-                      |        <<interface>>        |
-                      |          DataSource         |
-                      +-----------------------------+
-                      | + writeData(data): void     |
-                      | + readData(): String        |
-                      +--------------^--------------+
-                                     |
-             +-----------------------+-----------------------+
-             |                                               |
-+------------+------------+                     +------------+------------+
-|     FileDataSource      |                     |   DataSourceDecorator   |
-+-------------------------+                     +-------------------------+
-| + writeData(): [Disk]   |                     | - wrappee: DataSource   |
-+-------------------------+                     | + writeData(): delegate |
-                                                +------------^------------+
-                                                             |
-                                      +----------------------+----------------------+
-                                      |                                             |
-                         +------------+------------+                   +------------+------------+
-                         |   EncryptionDecorator   |                   |   CompressionDecorator  |
-                         +-------------------------+                   +-------------------------+
-                         | + writeData(): encrypt  |                   | + writeData(): compress |
-                         +-------------------------+                   +-------------------------+`,
-      blockNodes: [
-        { x: 300, y: 100, w: 260, h: 130, stereotype: 'interface', title: 'DataStream', stroke: '#f59e0b', lines: ['+ write(data: byte[]): void', '+ read(): byte[]'], tag: 'Component' },
-        { x: 80, y: 290, w: 240, h: 120, stereotype: 'concrete', title: 'FileStream', stroke: '#38bdf8', lines: ['+ write(): raw disk I/O', '+ read(): raw disk read'], tag: 'ConcreteComponent' },
-        { x: 500, y: 280, w: 280, h: 140, stereotype: 'decorator-base', title: 'StreamDecorator', stroke: '#a855f7', lines: ['- wrappee: DataStream', '+ write(data): wrappee.write(data)'], tag: 'BaseDecorator' },
-        { x: 360, y: 460, w: 220, h: 120, stereotype: 'concrete-dec', title: 'GzipCompressor', stroke: '#10b981', lines: ['+ write(): gzip -> wrappee'], tag: 'Decorator A' },
-        { x: 640, y: 460, w: 220, h: 120, stereotype: 'concrete-dec', title: 'AesEncryptor', stroke: '#ef4444', lines: ['+ write(): aes -> wrappee'], tag: 'Decorator B' }
-      ],
-      blockConns: [
-        { d: 'M 200 290 L 370 230', lx: 270, ly: 250, label: 'implements' },
-        { d: 'M 640 280 L 490 230', lx: 580, ly: 250, label: 'implements' },
-        { d: 'M 780 340 C 850 340 850 160 560 160', lx: 850, ly: 240, label: 'wraps (has-a)' },
-        { d: 'M 470 460 L 580 420', lx: 510, ly: 440, label: 'extends' },
-        { d: 'M 750 460 L 680 420', lx: 730, ly: 440, label: 'extends' }
-      ],
-      flowNodes: [
-        { x: 50, y: 140, w: 200, h: 140, step: '1', title: 'Client Invocation', stroke: '#f59e0b', lines: ['Calls stream.write(bytes)', 'Client sees outermost decorator', 'Completely unaware of wrapping chain'] },
-        { x: 280, y: 140, w: 210, h: 140, step: '2', title: 'Encryption Pass', stroke: '#ef4444', lines: ['AesEncryptor executes AES-256', 'Encrypts raw input buffer', 'Passes ciphertext to wrappee'] },
-        { x: 520, y: 140, w: 210, h: 140, step: '3', title: 'Compression Pass', stroke: '#10b981', lines: ['GzipCompressor applies deflate', 'Compresses encrypted stream', 'Passes bytes to inner stream'] },
-        { x: 760, y: 140, w: 200, h: 140, step: '4', title: 'Raw Disk Write', stroke: '#38bdf8', lines: ['FileStream writes bytes to SSD', 'Return unwinds back up stack', 'Zero class inheritance explosion'] }
-      ],
-      flowConns: [
-        { d: 'M 250 200 L 280 200', lx: 265, ly: 190, label: 'encrypt' },
-        { d: 'M 490 200 L 520 200', lx: 505, ly: 190, label: 'compress' },
-        { d: 'M 730 200 L 760 200', lx: 745, ly: 190, label: 'persist' }
-      ],
-      sections: [
-        {
-          heading: "Dynamic Composition Over Static Subclassing",
-          body: "Subclassing creates rigid compile-time behavior: if you have a Logger, and you need TimestampLogging, FileLogging, and SlackLogging, creating subclasses for all permutations requires `TimestampSlackLogger`, `TimestampFileLogger`, etc. Decorator replaces this with nested wrappers that can be stacked arbitrarily in any order at runtime.",
-          bullets: [
-            "Single Responsibility Principle: Each decorator class focuses exclusively on one orthogonal concern (caching, logging, encryption, metrics).",
-            "Transparent Wrapping: Since decorators implement the exact same interface as the wrapped object, the caller cannot tell them apart.",
-            "Dynamic Assembly: Decorator chains can be assembled conditionally depending on feature flags or configuration files."
+          "x": 670,
+          "y": 310,
+          "w": 230,
+          "h": 140,
+          "stereotype": "adaptee",
+          "title": "StripeSdk (External)",
+          "stroke": "#ef4444",
+          "lines": [
+            "+ createCharge(amount: BigDecimal, curr: String)"
           ],
-          codeSnippet: {
-            title: "Resilient HTTP Client Pipeline using Decorators in Java 21",
-            code: `public interface HttpExecution {
-    String send(String request);
-}
-
-// Base Concrete Component
-public class SimpleHttpClient implements HttpExecution {
-    @Override public String send(String request) {
-        return "200 OK: payload for " + request;
-    }
-}
-
-// Abstract Decorator
-public abstract class HttpDecorator implements HttpExecution {
-    protected final HttpExecution inner;
-    protected HttpDecorator(HttpExecution inner) { this.inner = inner; }
-}
-
-// Concrete Decorator 1: Metrics
-public class MetricsHttpDecorator extends HttpDecorator {
-    public MetricsHttpDecorator(HttpExecution inner) { super(inner); }
-    @Override public String send(String request) {
-        long start = System.currentTimeMillis();
-        try {
-            return inner.send(request);
-        } finally {
-            System.out.println("Execution latency: " + (System.currentTimeMillis() - start) + "ms");
-        }
-    }
-}
-
-// Concrete Decorator 2: Retries
-public class RetryHttpDecorator extends HttpDecorator {
-    public RetryHttpDecorator(HttpExecution inner) { super(inner); }
-    @Override public String send(String request) {
-        for (int i = 0; i < 3; i++) {
-            try { return inner.send(request); }
-            catch (Exception e) { System.out.println("Retry attempt " + (i + 1)); }
-        }
-        throw new RuntimeException("All retries exhausted");
-    }
-}`
-          },
-          flowDiagramUrl: "/diagrams/design-patterns/decorator-flow.svg"
+          "tag": "Adaptee"
         }
       ],
-      tradeOffs: [
+      "blockConns": [
         {
-          option: "Decorator Pattern",
-          pros: "High flexibility, dynamic configuration, eliminates subclass combinatorial explosion.",
-          cons: "Debugging deep nested wrappers with stack traces can be tricky; order of decorators matters.",
-          bestFor: "Stream processing, HTTP middleware pipelines, caching & logging wrappers, UI widget overlays."
+          "d": "M 250 170 L 340 170",
+          "lx": 295,
+          "ly": 160,
+          "label": "uses"
         },
         {
-          option: "Subclassing / Inheritance",
-          pros: "Straightforward for fixed static variations with zero runtime configuration.",
-          cons: "Rigid compile-time binding; cannot combine independent behaviors without duplicating code.",
-          bestFor: "Extending classes where behaviors are not composable or stackable."
+          "d": "M 460 310 L 460 240",
+          "lx": 460,
+          "ly": 275,
+          "label": "implements"
+        },
+        {
+          "d": "M 580 380 L 670 380",
+          "lx": 625,
+          "ly": 370,
+          "label": "delegates"
         }
       ],
-      interviewTip: "In interviews, cite `java.io.BufferedReader` and `java.io.InputStream` as the definitive standard library example of the Decorator pattern. Point out that Decorator differs from Proxy because Proxy *controls access* to an object without changing behavior, whereas Decorator *enhances behavior*."
+      "flowNodes": [
+        {
+          "x": 50,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "1",
+          "title": "Client Payment Call",
+          "stroke": "#38bdf8",
+          "lines": [
+            "Client invokes pay(5000)",
+            "Uses domain gateway interface",
+            "Zero vendor details exposed"
+          ]
+        },
+        {
+          "x": 280,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "2",
+          "title": "Adapter Translation",
+          "stroke": "#f59e0b",
+          "lines": [
+            "Translates cents to Dollars",
+            "Constructs vendor payload",
+            "Maps auth tokens & telemetry"
+          ]
+        },
+        {
+          "x": 520,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "3",
+          "title": "Adaptee Execution",
+          "stroke": "#ef4444",
+          "lines": [
+            "Stripe SDK executes RPC",
+            "Processes charge at bank",
+            "Returns proprietary DTO"
+          ]
+        },
+        {
+          "x": 760,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "4",
+          "title": "Normalized Response",
+          "stroke": "#10b981",
+          "lines": [
+            "Adapter catches exceptions",
+            "Translates to domain status",
+            "Returns clean boolean to client"
+          ]
+        }
+      ],
+      "flowConns": [
+        {
+          "d": "M 250 200 L 280 200",
+          "lx": 265,
+          "ly": 190,
+          "label": "pay()"
+        },
+        {
+          "d": "M 490 200 L 520 200",
+          "lx": 505,
+          "ly": 190,
+          "label": "charge()"
+        },
+        {
+          "d": "M 730 200 L 760 200",
+          "lx": 745,
+          "ly": 190,
+          "label": "normalize"
+        }
+      ],
+      "sections": [
+        {
+          "heading": "1. Architectural Intent: Bridging Legacy & Incompatible Interface Boundaries",
+          "body": "In production engineering, third-party libraries, vendor SDKs, and legacy internal subsystems rarely match modern internal domain interfaces. Without an adapter, vendor-specific method names, error codes, and parameters leak directly into core application business logic, locking your architecture to a specific external vendor. The Adapter pattern encapsulates third-party interactions behind a standard internal domain interface.",
+          "bullets": [
+            "Anti-Corruption Layer (ACL): Serves as Domain-Driven Design's primary technical mechanism to isolate core domain entities from external pollution.",
+            "Single Responsibility Principle: Data conversion, currency formatting, and vendor authentication logic is cleanly separated from primary business workflows.",
+            "Open/Closed Principle: Swapping payment providers (e.g., Stripe to Adyen or PayPal) requires introducing a new adapter class without touching existing client code."
+          ]
+        },
+        {
+          "heading": "2. Class Adapter vs Object Adapter & Delegation Mechanics",
+          "body": "The Gang of Four book defines two variants: Class Adapter (which uses multiple inheritance to subclass both the Target and the Adaptee) and Object Adapter (which uses object composition to hold a reference to the Adaptee). In languages like Java, C#, and TypeScript where multiple class inheritance is prohibited, Object Adapter is the standard. Furthermore, Object Adapter is architecturally superior because a single adapter instance can adapt not only the Adaptee class, but any of its subclasses.",
+          "bullets": [
+            "Object Adapter Composition: Holds a private reference to the adaptee and delegates calls to it after parameter transformation.",
+            "Polymorphic Substitution: Clients interact purely with the target interface, unaware of the underlying vendor SDK.",
+            "Two-Way Adapters: In symmetric integration scenarios, a two-way adapter implements both interfaces simultaneously, allowing bidirectional communication between legacy and modern systems."
+          ]
+        },
+        {
+          "heading": "3. Failure Modes: Anti-Corruption Layers vs Leaky Abstractions",
+          "body": "A frequent architectural trap is allowing vendor-specific exceptions or unique semantics to leak through the adapter. If an adapter method throws StripeInvalidCardException or passes raw vendor JSON strings up to the controller, the abstraction has leaked. All vendor-specific errors must be caught, categorized, and translated into canonical domain exceptions.",
+          "bullets": [
+            "Exception Leakage: Callers should never need to import vendor SDK packages to catch exceptions thrown by an adapter.",
+            "Performance Overhead: In high-frequency data pipelines, allocating intermediate adapter objects or performing deep JSON re-serialization per call can introduce GC pressure.",
+            "Semantic Mismatches: When the adaptee requires concepts not present in the domain interface (e.g. multi-step asynchronous webhooks vs synchronous HTTP), forcing a synchronous adapter can cause thread exhaustion."
+          ]
+        },
+        {
+          "heading": "4. Production Implementation Blueprint: High-Scale Payment Gateway Adapter in Java 21",
+          "body": "The following production Java implementation showcases an enterprise Payment Gateway Adapter translating between an internal domain interface and an external third-party SDK with comprehensive exception mapping.",
+          "bullets": [
+            "PaymentProcessor Target: Clean domain contract utilizing Java currency and record types.",
+            "PayPalPaymentAdapter: Encapsulates currency conversion, credential mapping, and exception translation."
+          ],
+          "codeSnippet": {
+            "title": "Production Payment Gateway Adapter in Java 21",
+            "code": "// 1. Internal Domain Target Interface\npublic interface PaymentProcessor {\n    PaymentResult processPayment(String customerId, long amountInCents, String idempotencyKey);\n}\n\npublic record PaymentResult(boolean successful, String transactionId, String failureReason) {}\n\n// 2. Incompatible Third-Party Vendor SDK\npublic class LegacyPayPalService {\n    public int sendMoney(String email, double amountInDollars, String token) {\n        System.out.printf(\"PayPal SDK: Charged $%.2f for %s%n\", amountInDollars, email);\n        return 200; // Legacy HTTP response code\n    }\n}\n\n// 3. Robust Production Object Adapter\npublic class PayPalPaymentAdapter implements PaymentProcessor {\n    private final LegacyPayPalService payPalService;\n    private final String apiToken;\n\n    public PayPalPaymentAdapter(LegacyPayPalService payPalService, String apiToken) {\n        this.payPalService = Objects.requireNonNull(payPalService);\n        this.apiToken = Objects.requireNonNull(apiToken);\n    }\n\n    @Override\n    public PaymentResult processPayment(String customerId, long amountInCents, String idempotencyKey) {\n        try {\n            // Adapt parameters: convert integer cents to floating dollar amount\n            double amountInDollars = amountInCents / 100.0;\n            int responseCode = payPalService.sendMoney(customerId, amountInDollars, this.apiToken);\n\n            if (responseCode == 200) {\n                return new PaymentResult(true, \"PP-\" + UUID.randomUUID(), null);\n            } else {\n                return new PaymentResult(false, null, \"Vendor error code: \" + responseCode);\n            }\n        } catch (Exception ex) {\n            // Translate vendor exception to domain outcome\n            return new PaymentResult(false, null, \"Gateway exception: \" + ex.getMessage());\n        }\n    }\n}"
+          }
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Object Adapter Pattern",
+          "pros": "Protects domain logic from vendor lock-in, enables seamless mocking in unit tests, supports adaptee polymorphism.",
+          "cons": "Adds an additional layer of method indirection and small object memory overhead.",
+          "bestFor": "Integrating third-party SDKs, payment gateways, cloud vendor storage services."
+        },
+        {
+          "option": "Direct SDK Invocation",
+          "pros": "Faster to code initially; direct access to all vendor-specific parameters.",
+          "cons": "Tightly couples your entire application to external APIs; replacing the SDK requires rewriting all callers.",
+          "bestFor": "Disposable prototypes and small internal scripts."
+        },
+        {
+          "option": "Class Adapter (Multiple Inheritance)",
+          "pros": "No separate delegate object needed; can override adaptee behavior directly.",
+          "cons": "Not supported in single-inheritance languages; binds statically to one concrete adaptee class.",
+          "bestFor": "C++ systems requiring fine-grained low-level method overrides."
+        }
+      ],
+      "interviewTip": "Distinguish between Object Adapter (composition based, wraps the adaptee instance) and Class Adapter (uses multiple inheritance, impossible in Java classes). Always emphasize that Object Adapter is superior because it adheres to 'composition over inheritance' and can adapt any subclass of the adaptee."
     },
     {
-      id: "facade",
-      subtopicNumber: "2.5",
-      title: "Facade Pattern",
-      subtitle: "Provides a unified, simplified interface to a complex subsystem, making the subsystem easier to use.",
-      readingTime: "6 min read",
-      difficulty: "Foundational",
-      accent: "#38bdf8",
-      keyTakeaways: [
+      "id": "facade",
+      "subtopicNumber": "2.2",
+      "title": "Facade Pattern",
+      "subtitle": "Provides a unified, simplified interface to a complex subsystem, making the subsystem easier to use.",
+      "readingTime": "8 min read",
+      "difficulty": "Foundational",
+      "accent": "#38bdf8",
+      "keyTakeaways": [
         "Shields client code from the convoluted internal workings and cascading dependencies of complex subsystems.",
         "Does not encapsulate or lock the subsystem: advanced clients that require fine-grained control can still bypass the Facade to interact directly with subsystem classes.",
         "Crucial for reducing architectural coupling between microservice modules and establishing clean API boundaries."
       ],
-      ascii: `+-------------------------------------------------------------------------+
-|                          FACADE UML CLASS MODEL                         |
-+-------------------------------------------------------------------------+
-+------------------+                   +----------------------------------+
-|      Client      |   calls ---->     |          OrderFacade             |
-+------------------+                   +----------------------------------+
-                                       | + placeOrder(cart, card): UUID   |
-                                       +-----------------+----------------+
-                                                         |
-                   +-------------------+-----------------+-------------------+
-                   |                   |                                     |
-         +---------v--------+  +-------v----------+                +---------v--------+
-         | InventoryService |  | PaymentProcessor |                | LogisticsService |
-         +------------------+  +------------------+                +------------------+
-         | - checkStock()   |  | - authorizeCard()|                | - scheduleTruck()|
-         +------------------+  +------------------+                +------------------+`,
-      blockNodes: [
-        { x: 50, y: 150, w: 200, h: 120, stereotype: 'client', title: 'Web Checkout Controller', stroke: '#38bdf8', lines: ['Client layer', 'Calls facade.checkout()'], tag: 'Client' },
-        { x: 340, y: 110, w: 260, h: 170, stereotype: 'facade', title: 'CheckoutFacade', stroke: '#10b981', lines: ['- inventory: StockSvc', '- payment: CardSvc', '- logistics: ShippingSvc', '+ processOrder(): OrderId'], tag: 'Facade' },
-        { x: 680, y: 70, w: 230, h: 90, stereotype: 'subsystem', title: 'Inventory Subsystem', stroke: '#f59e0b', lines: ['Lock SKU inventory'], tag: 'Subsystem A' },
-        { x: 680, y: 180, w: 230, h: 90, stereotype: 'subsystem', title: 'Payment Gateway', stroke: '#ef4444', lines: ['Stripe 3D-Secure auth'], tag: 'Subsystem B' },
-        { x: 680, y: 290, w: 230, h: 90, stereotype: 'subsystem', title: 'FedEx API Shipper', stroke: '#a855f7', lines: ['Generate waybill PDF'], tag: 'Subsystem C' }
-      ],
-      blockConns: [
-        { d: 'M 250 200 L 340 190', lx: 295, ly: 180, label: 'calls simple API' },
-        { d: 'M 600 150 L 680 115', lx: 640, ly: 120, label: 'coordinates' },
-        { d: 'M 600 190 L 680 225', lx: 640, ly: 195, label: 'coordinates' },
-        { d: 'M 600 230 L 680 330', lx: 640, ly: 275, label: 'coordinates' }
-      ],
-      flowNodes: [
-        { x: 50, y: 140, w: 200, h: 140, step: '1', title: '1-Line Checkout', stroke: '#38bdf8', lines: ['Client invokes facade.order()', 'Zero understanding of FedEx/Stripe', 'Single atomic method signature'] },
-        { x: 280, y: 140, w: 210, h: 140, step: '2', title: 'Inventory Lock', stroke: '#f59e0b', lines: ['Facade calls Inventory.reserve()', 'Verifies warehouse stock', 'Rolls back on shortage'] },
-        { x: 520, y: 140, w: 210, h: 140, step: '3', title: 'Payment Capture', stroke: '#ef4444', lines: ['Facade authorizes credit card', 'Validates fraud scoring', 'Handles token exchange'] },
-        { x: 760, y: 140, w: 200, h: 140, step: '4', title: 'Dispatch & OrderId', stroke: '#10b981', lines: ['Generates FedEx shipping label', 'Persists order database record', 'Returns OrderId to client'] }
-      ],
-      flowConns: [
-        { d: 'M 250 200 L 280 200', lx: 265, ly: 190, label: 'reserve' },
-        { d: 'M 490 200 L 520 200', lx: 505, ly: 190, label: 'charge' },
-        { d: 'M 730 200 L 760 200', lx: 745, ly: 190, label: 'fulfill' }
-      ],
-      sections: [
+      "ascii": "+-------------------------------------------------------------------------+\n|                          FACADE UML CLASS MODEL                         |\n+-------------------------------------------------------------------------+\n+------------------+                   +----------------------------------+\n|      Client      |   calls ---->     |          OrderFacade             |\n+------------------+                   +----------------------------------+\n                                       | + placeOrder(cart, card): UUID   |\n                                       +-----------------+----------------+\n                                                         |\n                   +-------------------+-----------------+-------------------+\n                   |                   |                                     |\n         +---------v--------+  +-------v----------+                +---------v--------+\n         | InventoryService |  | PaymentProcessor |                | LogisticsService |\n         +------------------+  +------------------+                +------------------+\n         | - checkStock()   |  | - authorizeCard()|                | - scheduleTruck()|\n         +------------------+  +------------------+                +------------------+",
+      "blockNodes": [
         {
-          heading: "Taming Subsystem Complexity and Establishing Cohesive Boundaries",
-          body: "As enterprise architectures grow, completing a single high-level business requirement often requires orchestrating 5 to 10 independent subsystems. Exposing this orchestration directly to UI controllers creates massive coupling: any change in a subsystem breaks all consumers. A Facade provides an intentional, ergonomic entry point while insulating consumers from lower-level churn.",
-          bullets: [
-            "Encapsulation without Confinement: Simplifies the 95% common use cases while allowing power users to interact with underlying subsystems directly if required.",
-            "Layered Architecture: Facades define natural boundaries between architectural layers in distributed backends.",
-            "Reduced Compilation Dependencies: Changes to internal subsystem classes do not force recompilation of client modules."
+          "x": 50,
+          "y": 150,
+          "w": 200,
+          "h": 120,
+          "stereotype": "client",
+          "title": "Web Checkout Controller",
+          "stroke": "#38bdf8",
+          "lines": [
+            "Client layer",
+            "Calls facade.checkout()"
           ],
-          codeSnippet: {
-            title: "E-Commerce Checkout Facade in Java 21",
-            code: `public record OrderReceipt(UUID orderId, String trackingNumber, boolean successful) {}
-
-public class CheckoutFacade {
-    private final InventorySubsystem inventory;
-    private final PaymentSubsystem payment;
-    private final ShippingSubsystem shipping;
-
-    public CheckoutFacade(InventorySubsystem inventory, PaymentSubsystem payment, ShippingSubsystem shipping) {
-        this.inventory = inventory;
-        this.payment = payment;
-        this.shipping = shipping;
-    }
-
-    public OrderReceipt placeOrder(String sku, int quantity, String creditCard, String address) {
-        // Step 1: Check and reserve stock
-        if (!inventory.reserveStock(sku, quantity)) {
-            throw new IllegalStateException("Insufficient inventory for: " + sku);
-        }
-
-        // Step 2: Charge payment
-        boolean paid = payment.charge(creditCard, inventory.calculatePrice(sku, quantity));
-        if (!paid) {
-            inventory.releaseStock(sku, quantity);
-            throw new PaymentFailedException("Card authorization declined");
-        }
-
-        // Step 3: Dispatch shipping
-        String tracking = shipping.createShipment(sku, quantity, address);
-        return new OrderReceipt(UUID.randomUUID(), tracking, true);
-    }
-}`
-          },
-          flowDiagramUrl: "/diagrams/design-patterns/facade-flow.svg"
-        }
-      ],
-      tradeOffs: [
-        {
-          option: "Facade Pattern",
-          pros: "Reduces client complexity, minimizes coupling between client code and complex subsystems.",
-          cons: "Risk of becoming a 'God Object' if too many disparate responsibilities are crammed into a single facade.",
-          bestFor: "Complex SDKs, multi-step business transactions, microservice boundary orchestrators."
+          "tag": "Client"
         },
         {
-          option: "Direct Subsystem Interfacing",
-          pros: "Maximum fine-grained control; no extra layer between caller and implementation.",
-          cons: "Massive code duplication across clients; high cognitive load on development teams.",
-          bestFor: "Specialized tools where clients genuinely need low-level customization of every single parameter."
-        }
-      ],
-      interviewTip: "Emphasize to interviewers that a Facade provides an *optional* simplified interface; it does not hide or seal the subsystem classes. Contrast Facade with Adapter (Adapter adapts one existing interface to another; Facade creates a completely new, simplified interface over many subsystems)."
-    },
-    {
-      id: "flyweight",
-      subtopicNumber: "2.6",
-      title: "Flyweight Pattern",
-      subtitle: "Minimizes memory usage by sharing as much data as possible with similar objects.",
-      readingTime: "7 min read",
-      difficulty: "Advanced",
-      accent: "#a855f7",
-      keyTakeaways: [
-        "Separates object state into Intrinsic State (invariant, shared across thousands of objects) and Extrinsic State (context-dependent, passed in as method parameters).",
-        "Prevents Out-Of-Memory (OOM) errors in graphics engines, gaming entities (particles, bullets, trees), and document text editors (millions of glyph characters).",
-        "Powering core Java standard libraries: `Integer.valueOf()` caches numbers -128 to 127 using the Flyweight pattern; Java String deduplication/interning is a classic Flyweight."
-      ],
-      ascii: `+-------------------------------------------------------------------------+
-|                        FLYWEIGHT UML CLASS MODEL                        |
-+-------------------------------------------------------------------------+
-+-----------------------+              +----------------------------------+
-|    TreeFactory        |  caches ---> |       TreeType (Flyweight)       |
-+-----------------------+              +----------------------------------+
-| - types: Map<String,  |              | - name: String                   |
-|          TreeType>    |              | - color: Color    [Intrinsic]    |
-| + getTreeType(...)    |              | - texture: byte[]                |
-+-----------------------+              +----------------------------------+
-                                       | + render(x, y, scale) [Extrinsic]|
-                                       +-----------------^----------------+
-                                                         | shared by 1,000,000x
-                                       +-----------------+----------------+
-                                       |         Tree (Context)           |
-                                       +----------------------------------+
-                                       | - x: int, y: int [Extrinsic]     |
-                                       | - type: TreeType [Shared Ref]    |
-                                       +----------------------------------+`,
-      blockNodes: [
-        { x: 50, y: 110, w: 250, h: 140, stereotype: 'factory', title: 'TreeTypeFactory', stroke: '#a855f7', lines: ['- cache: Map<Key, TreeType>', '+ getTreeType(name, color, mesh): TreeType'], tag: 'FlyweightFactory' },
-        { x: 380, y: 100, w: 270, h: 160, stereotype: 'flyweight', title: 'TreeType (Flyweight)', stroke: '#10b981', lines: ['- name: String [Intrinsic]', '- 3D Mesh: 50 MB [Intrinsic]', '- Texture: 20 MB [Intrinsic]', '+ draw(x, y, zoom) [Extrinsic]'], tag: 'Shared Memory' },
-        { x: 740, y: 110, w: 220, h: 150, stereotype: 'context', title: 'TreeInstance (Context)', stroke: '#38bdf8', lines: ['- x: int, y: int [Extrinsic]', '- health: int [Extrinsic]', '- type: TreeType [Pointer]', 'Cost: 16 bytes each!'], tag: '1M+ Instances' }
-      ],
-      blockConns: [
-        { d: 'M 300 170 L 380 170', lx: 340, ly: 155, label: 'caches' },
-        { d: 'M 740 180 L 650 180', lx: 695, ly: 165, label: 'references' }
-      ],
-      flowNodes: [
-        { x: 50, y: 140, w: 200, h: 140, step: '1', title: 'Spawn Request', stroke: '#a855f7', lines: ['Forest generates 1,000,000 trees', 'Requests "Oak" type from factory', 'Calculates random (x, y) coordinates'] },
-        { x: 280, y: 140, w: 210, h: 140, step: '2', title: 'Factory Cache Hit', stroke: '#10b981', lines: ['Factory checks internal map', 'Oak 3D mesh already in memory', 'Returns existing Flyweight pointer'] },
-        { x: 520, y: 140, w: 210, h: 140, step: '3', title: 'Lightweight Allocation', stroke: '#38bdf8', lines: ['Allocates tiny Context record', 'Stores only (x, y) + memory pointer', 'Memory footprint reduced by 99.8%'] },
-        { x: 760, y: 140, w: 200, h: 140, step: '4', title: 'Extrinsic Rendering', stroke: '#f59e0b', lines: ['Renderer invokes type.draw(x, y)', 'Flyweight uses GPU texture', 'Seamless 60 FPS rendering'] }
-      ],
-      flowConns: [
-        { d: 'M 250 200 L 280 200', lx: 265, ly: 190, label: 'lookup' },
-        { d: 'M 490 200 L 520 200', lx: 505, ly: 190, label: 'pointer' },
-        { d: 'M 730 200 L 760 200', lx: 745, ly: 190, label: 'render' }
-      ],
-      sections: [
-        {
-          heading: "Intrinsic vs Extrinsic State: Slashing Memory Footprints by 99%",
-          body: "When rendering a 3D forest with 1,000,000 trees, creating an independent object for each tree that stores its 3D polygon mesh and texture bitmaps requires 100+ Gigabytes of RAM, crashing the JVM. However, 99.9% of that data (the mesh geometry, texture atlas) is identical across all oak trees. Flyweight extracts that invariant data into an immutable shared instance, leaving only coordinates (x, y, z) in the individual tree context.",
-          bullets: [
-            "Intrinsic State: Stored directly inside the Flyweight object. It is immutable, context-independent, and shared.",
-            "Extrinsic State: Belongs to the specific context (position, timestamp, caller ID) and is passed to Flyweight methods on demand.",
-            "Immutable by Contract: Because Flyweights are shared across concurrent threads, their internal state must never mutate."
+          "x": 340,
+          "y": 110,
+          "w": 260,
+          "h": 170,
+          "stereotype": "facade",
+          "title": "CheckoutFacade",
+          "stroke": "#10b981",
+          "lines": [
+            "- inventory: StockSvc",
+            "- payment: CardSvc",
+            "- logistics: ShippingSvc",
+            "+ processOrder(): OrderId"
           ],
-          codeSnippet: {
-            title: "High-Performance Forest Simulator in Java 21",
-            code: `// The Flyweight (Immutable, Intrinsic State)
-public record TreeType(String name, String color, byte[] heavy3dMesh) {
-    public void draw(int x, int y, double windSpeed) {
-        // Extrinsic state passed dynamically as arguments
-        System.out.printf("Rendering %s at (%d, %d) with wind: %.1f%n", name, x, y, windSpeed);
-    }
-}
-
-// Flyweight Factory
-public class TreeTypeFactory {
-    private static final Map<String, TreeType> cache = new HashMap<>();
-
-    public static TreeType getTreeType(String name, String color) {
-        String key = name + "_" + color;
-        return cache.computeIfAbsent(key, k -> {
-            byte[] mesh = new byte[1024 * 1024]; // 1 MB heavy asset
-            return new TreeType(name, color, mesh);
-        });
-    }
-}
-
-// Context Object (Stores tiny Extrinsic State + Flyweight Pointer)
-public record Tree(int x, int y, TreeType type) {
-    public void render(double wind) {
-        type.draw(x, y, wind);
-    }
-}`
-          },
-          flowDiagramUrl: "/diagrams/design-patterns/flyweight-flow.svg"
-        }
-      ],
-      tradeOffs: [
-        {
-          option: "Flyweight Pattern",
-          pros: "Saves massive amounts of heap memory; prevents JVM GC thrashing and Out-Of-Memory crashes.",
-          cons: "Trades RAM for CPU cycles (calculating extrinsic state on the fly); more complex architecture.",
-          bestFor: "Game particle systems, UI text rendering engines, caching financial market order books."
+          "tag": "Facade"
         },
         {
-          option: "Standard Fat Objects",
-          pros: "Simple, highly self-contained objects; state and logic are bundled together.",
-          cons: "Devours memory when scaling to millions of active instances.",
-          bestFor: "Domain models with small instance counts (< 10,000)."
+          "x": 680,
+          "y": 70,
+          "w": 230,
+          "h": 90,
+          "stereotype": "subsystem",
+          "title": "Inventory Subsystem",
+          "stroke": "#f59e0b",
+          "lines": [
+            "Lock SKU inventory"
+          ],
+          "tag": "Subsystem A"
+        },
+        {
+          "x": 680,
+          "y": 180,
+          "w": 230,
+          "h": 90,
+          "stereotype": "subsystem",
+          "title": "Payment Gateway",
+          "stroke": "#ef4444",
+          "lines": [
+            "Stripe 3D-Secure auth"
+          ],
+          "tag": "Subsystem B"
+        },
+        {
+          "x": 680,
+          "y": 290,
+          "w": 230,
+          "h": 90,
+          "stereotype": "subsystem",
+          "title": "FedEx API Shipper",
+          "stroke": "#a855f7",
+          "lines": [
+            "Generate waybill PDF"
+          ],
+          "tag": "Subsystem C"
         }
       ],
-      interviewTip: "In interviews, cite `Integer.valueOf(int)` as Java's built-in Flyweight: Java pre-allocates and caches `Integer` objects from -128 to 127 in memory. Calling `Integer.valueOf(5) == Integer.valueOf(5)` returns `true` because they point to the exact same shared Flyweight instance."
+      "blockConns": [
+        {
+          "d": "M 250 200 L 340 190",
+          "lx": 295,
+          "ly": 180,
+          "label": "calls simple API"
+        },
+        {
+          "d": "M 600 150 L 680 115",
+          "lx": 640,
+          "ly": 120,
+          "label": "coordinates"
+        },
+        {
+          "d": "M 600 190 L 680 225",
+          "lx": 640,
+          "ly": 195,
+          "label": "coordinates"
+        },
+        {
+          "d": "M 600 230 L 680 330",
+          "lx": 640,
+          "ly": 275,
+          "label": "coordinates"
+        }
+      ],
+      "flowNodes": [
+        {
+          "x": 50,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "1",
+          "title": "1-Line Checkout",
+          "stroke": "#38bdf8",
+          "lines": [
+            "Client invokes facade.order()",
+            "Zero understanding of FedEx/Stripe",
+            "Single atomic method signature"
+          ]
+        },
+        {
+          "x": 280,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "2",
+          "title": "Inventory Lock",
+          "stroke": "#f59e0b",
+          "lines": [
+            "Facade calls Inventory.reserve()",
+            "Verifies warehouse stock",
+            "Rolls back on shortage"
+          ]
+        },
+        {
+          "x": 520,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "3",
+          "title": "Payment Capture",
+          "stroke": "#ef4444",
+          "lines": [
+            "Facade authorizes credit card",
+            "Validates fraud scoring",
+            "Handles token exchange"
+          ]
+        },
+        {
+          "x": 760,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "4",
+          "title": "Dispatch & OrderId",
+          "stroke": "#10b981",
+          "lines": [
+            "Generates FedEx shipping label",
+            "Persists order database record",
+            "Returns OrderId to client"
+          ]
+        }
+      ],
+      "flowConns": [
+        {
+          "d": "M 250 200 L 280 200",
+          "lx": 265,
+          "ly": 190,
+          "label": "reserve"
+        },
+        {
+          "d": "M 490 200 L 520 200",
+          "lx": 505,
+          "ly": 190,
+          "label": "charge"
+        },
+        {
+          "d": "M 730 200 L 760 200",
+          "lx": 745,
+          "ly": 190,
+          "label": "fulfill"
+        }
+      ],
+      "sections": [
+        {
+          "heading": "1. Architectural Intent: Taming Subsystem Sprawl & Establishing Cohesive Boundaries",
+          "body": "As enterprise architectures grow, completing a single high-level business requirement often requires orchestrating 5 to 10 independent subsystems. Exposing this orchestration directly to UI controllers or external microservices creates massive coupling: any change in an internal subsystem class breaks all external callers. A Facade provides an intentional, ergonomic entry point while insulating consumers from lower-level churn.",
+          "bullets": [
+            "Coarse-Grained API: Exposes high-level methods tailored to consumer business intents rather than technical implementation details.",
+            "Subsystem Isolation: Changes to internal subsystem dependencies, method signatures, or data structures remain contained behind the facade.",
+            "Reduced Compilation Dependencies: In large monorepos, consumers only depend on the Facade module, speeding up build and test cycles."
+          ]
+        },
+        {
+          "heading": "2. Encapsulation Without Confinement: Subsystem Bypass & Layering",
+          "body": "A crucial distinction between Facade and patterns like Adapter or Proxy is that Facade does not hide or seal the subsystem classes. It simply offers a convenient default workflow for the 90% common use cases. Power users or specialized subsystems that require fine-grained access (e.g., custom batch fulfillment or advanced telemetry) can still bypass the Facade and interact directly with underlying subsystem classes.",
+          "bullets": [
+            "Permeable Boundary: Does not encapsulate subsystems into private black boxes; subsystem classes remain accessible when needed.",
+            "Layered Facades: Multiple facades can be constructed for different domains (e.g., MobileOrderFacade vs WarehouseFulfillmentFacade) over the same underlying subsystem classes.",
+            "Coordination Orchestrator: Facades handle the order of execution, error compensation, and transaction lifecycle across subsystem components."
+          ]
+        },
+        {
+          "heading": "3. Failure Modes: The God-Object Anti-Pattern & Leaky Domain Models",
+          "body": "When teams adopt Facades, a common failure mode is treating the Facade as a dumping ground for all cross-cutting business logic. Over time, the Facade accumulates hundreds of methods, thousands of lines of conditional code, and becomes an untestable God Object. Furthermore, if the Facade leaks internal subsystem entities in its return signatures, consumers become coupled to the subsystem anyway.",
+          "bullets": [
+            "God Object Sprawl: When a single facade orchestrates too many disparate domains, break it down into multiple domain-specific facades.",
+            "Leaky Return Types: Facade methods should return clean DTOs or value objects rather than raw internal subsystem entity models.",
+            "Implicit Rollbacks: If Subsystem 3 fails after Subsystems 1 and 2 succeed, the Facade must orchestrate compensation steps or let a distributed transaction manager handle atomicity."
+          ]
+        },
+        {
+          "heading": "4. Production Blueprint: Enterprise E-Commerce Checkout Facade in TypeScript",
+          "body": "The following production TypeScript implementation demonstrates an enterprise Checkout Facade coordinating inventory reservation, payment processing, and shipment dispatching with robust error compensation.",
+          "bullets": [
+            "CheckoutFacade: Single cohesive entry point for client checkout transactions.",
+            "Compensating Rollbacks: Releases inventory hold if payment authorization fails."
+          ],
+          "codeSnippet": {
+            "title": "Production Checkout Facade in TypeScript",
+            "code": "// Subsystem 1: Inventory\nexport class InventoryService {\n  public async reserve(sku: string, qty: number): Promise<string> {\n    console.log(`[Inventory] Reserved ${qty} units of ${sku}`);\n    return \"RES-9872\";\n  }\n  public async release(reservationId: string): Promise<void> {\n    console.log(`[Inventory] Released reservation ${reservationId}`);\n  }\n}\n\n// Subsystem 2: Payment\nexport class PaymentService {\n  public async charge(customerId: string, amountCents: number): Promise<string> {\n    console.log(`[Payment] Charged ${amountCents} cents to ${customerId}`);\n    return \"TX-55412\";\n  }\n}\n\n// Subsystem 3: Logistics\nexport class LogisticsService {\n  public async scheduleShipment(sku: string, qty: number, address: string): Promise<string> {\n    console.log(`[Logistics] Scheduled dispatch to ${address}`);\n    return \"TRACK-FEDEX-998\";\n  }\n}\n\n// The Unified Facade\nexport class CheckoutFacade {\n  constructor(\n    private readonly inventory: InventoryService,\n    private readonly payment: PaymentService,\n    private readonly logistics: LogisticsService\n  ) {}\n\n  public async placeOrder(\n    customerId: string,\n    sku: string,\n    qty: number,\n    amountCents: number,\n    address: string\n  ): Promise<{ success: boolean; orderId?: string; error?: string }> {\n    let reservationId: string | null = null;\n    try {\n      // Step 1: Reserve Stock\n      reservationId = await this.inventory.reserve(sku, qty);\n\n      // Step 2: Authorize Payment\n      const paymentTx = await this.payment.charge(customerId, amountCents);\n\n      // Step 3: Schedule Logistics\n      const trackingNumber = await this.logistics.scheduleShipment(sku, qty, address);\n\n      const orderId = `ORD-${Date.now()}`;\n      return { success: true, orderId };\n    } catch (err: any) {\n      // Compensating action: Rollback inventory reservation\n      if (reservationId) {\n        await this.inventory.release(reservationId);\n      }\n      return { success: false, error: err.message };\n    }\n  }\n}"
+          }
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Facade Pattern",
+          "pros": "Reduces client complexity, minimizes coupling between client code and complex subsystems.",
+          "cons": "Risk of becoming a 'God Object' if too many disparate responsibilities are crammed into a single facade.",
+          "bestFor": "Complex SDKs, multi-step business transactions, microservice boundary orchestrators."
+        },
+        {
+          "option": "Direct Subsystem Interfacing",
+          "pros": "Maximum fine-grained control; no extra layer between caller and implementation.",
+          "cons": "Massive code duplication across clients; high cognitive load on development teams.",
+          "bestFor": "Specialized internal tools where clients genuinely need low-level customization of every single parameter."
+        },
+        {
+          "option": "Mediator Pattern",
+          "pros": "Decouples subsystem classes from each other by centralizing their mutual communication.",
+          "cons": "Subsystem classes must know about the Mediator, creating bidirectional dependencies.",
+          "bestFor": "GUI component frameworks where sibling widgets must react to each other's state changes."
+        }
+      ],
+      "interviewTip": "Emphasize to interviewers that a Facade provides an *optional* simplified interface; it does not hide or seal the subsystem classes. Contrast Facade with Adapter: Adapter adapts one existing interface to another; Facade creates a completely new, simplified interface over multiple subsystems."
     },
     {
-      id: "proxy",
-      subtopicNumber: "2.7",
-      title: "Proxy Pattern",
-      subtitle: "Provides a placeholder or surrogate for another object to control access to it.",
-      readingTime: "7 min read",
-      difficulty: "Intermediate",
-      accent: "#ef4444",
-      keyTakeaways: [
+      "id": "decorator",
+      "subtopicNumber": "2.3",
+      "title": "Decorator Pattern",
+      "subtitle": "Attaches additional responsibilities to an object dynamically, providing a flexible alternative to subclassing for extending functionality.",
+      "readingTime": "9 min read",
+      "difficulty": "Intermediate",
+      "accent": "#f59e0b",
+      "keyTakeaways": [
+        "Adds behavior to individual objects dynamically at runtime without affecting other instances of the same class.",
+        "Follows the Open/Closed Principle: extend functionality via wrapper layers without modifying existing classes.",
+        "Found throughout Java I/O (`new BufferedReader(new InputStreamReader(fileStream))`) and HTTP middleware filter chains."
+      ],
+      "ascii": "+-------------------------------------------------------------------------+\n|                        DECORATOR UML CLASS MODEL                        |\n+-------------------------------------------------------------------------+\n                      +-----------------------------+\n                      |        <<interface>>        |\n                      |          DataSource         |\n                      +-----------------------------+\n                      | + writeData(data): void     |\n                      | + readData(): String        |\n                      +--------------^--------------+\n                                     |\n             +-----------------------+-----------------------+\n             |                                               |\n+------------+------------+                     +------------+------------+\n|     FileDataSource      |                     |   DataSourceDecorator   |\n+-------------------------+                     +-------------------------+\n| + writeData(): [Disk]   |                     | - wrappee: DataSource   |\n+-------------------------+                     | + writeData(): delegate |\n                                                +------------^------------+\n                                                             |\n                                      +----------------------+----------------------+\n                                      |                                             |\n                         +------------+------------+                   +------------+------------+\n                         |   EncryptionDecorator   |                   |   CompressionDecorator  |\n                         +-------------------------+                   +-------------------------+\n                         | + writeData(): encrypt  |                   | + writeData(): compress |\n                         +-------------------------+                   +-------------------------+",
+      "blockNodes": [
+        {
+          "x": 300,
+          "y": 100,
+          "w": 260,
+          "h": 130,
+          "stereotype": "interface",
+          "title": "DataStream",
+          "stroke": "#f59e0b",
+          "lines": [
+            "+ write(data: byte[]): void",
+            "+ read(): byte[]"
+          ],
+          "tag": "Component"
+        },
+        {
+          "x": 80,
+          "y": 290,
+          "w": 240,
+          "h": 120,
+          "stereotype": "concrete",
+          "title": "FileStream",
+          "stroke": "#38bdf8",
+          "lines": [
+            "+ write(): raw disk I/O",
+            "+ read(): raw disk read"
+          ],
+          "tag": "ConcreteComponent"
+        },
+        {
+          "x": 500,
+          "y": 280,
+          "w": 280,
+          "h": 140,
+          "stereotype": "decorator-base",
+          "title": "StreamDecorator",
+          "stroke": "#a855f7",
+          "lines": [
+            "- wrappee: DataStream",
+            "+ write(data): wrappee.write(data)"
+          ],
+          "tag": "BaseDecorator"
+        },
+        {
+          "x": 360,
+          "y": 460,
+          "w": 220,
+          "h": 120,
+          "stereotype": "concrete-dec",
+          "title": "GzipCompressor",
+          "stroke": "#10b981",
+          "lines": [
+            "+ write(): gzip -> wrappee"
+          ],
+          "tag": "Decorator A"
+        },
+        {
+          "x": 640,
+          "y": 460,
+          "w": 220,
+          "h": 120,
+          "stereotype": "concrete-dec",
+          "title": "AesEncryptor",
+          "stroke": "#ef4444",
+          "lines": [
+            "+ write(): aes -> wrappee"
+          ],
+          "tag": "Decorator B"
+        }
+      ],
+      "blockConns": [
+        {
+          "d": "M 200 290 L 370 230",
+          "lx": 270,
+          "ly": 250,
+          "label": "implements"
+        },
+        {
+          "d": "M 640 280 L 490 230",
+          "lx": 580,
+          "ly": 250,
+          "label": "implements"
+        },
+        {
+          "d": "M 780 340 C 850 340 850 160 560 160",
+          "lx": 850,
+          "ly": 240,
+          "label": "wraps (has-a)"
+        },
+        {
+          "d": "M 470 460 L 580 420",
+          "lx": 510,
+          "ly": 440,
+          "label": "extends"
+        },
+        {
+          "d": "M 750 460 L 680 420",
+          "lx": 730,
+          "ly": 440,
+          "label": "extends"
+        }
+      ],
+      "flowNodes": [
+        {
+          "x": 50,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "1",
+          "title": "Client Invocation",
+          "stroke": "#f59e0b",
+          "lines": [
+            "Calls stream.write(bytes)",
+            "Client sees outermost decorator",
+            "Completely unaware of wrapping chain"
+          ]
+        },
+        {
+          "x": 280,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "2",
+          "title": "Encryption Pass",
+          "stroke": "#ef4444",
+          "lines": [
+            "AesEncryptor executes AES-256",
+            "Encrypts raw input buffer",
+            "Passes ciphertext to wrappee"
+          ]
+        },
+        {
+          "x": 520,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "3",
+          "title": "Compression Pass",
+          "stroke": "#10b981",
+          "lines": [
+            "GzipCompressor applies deflate",
+            "Compresses encrypted stream",
+            "Passes bytes to inner stream"
+          ]
+        },
+        {
+          "x": 760,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "4",
+          "title": "Raw Disk Write",
+          "stroke": "#38bdf8",
+          "lines": [
+            "FileStream writes bytes to SSD",
+            "Return unwinds back up stack",
+            "Zero class inheritance explosion"
+          ]
+        }
+      ],
+      "flowConns": [
+        {
+          "d": "M 250 200 L 280 200",
+          "lx": 265,
+          "ly": 190,
+          "label": "encrypt"
+        },
+        {
+          "d": "M 490 200 L 520 200",
+          "lx": 505,
+          "ly": 190,
+          "label": "compress"
+        },
+        {
+          "d": "M 730 200 L 760 200",
+          "lx": 745,
+          "ly": 190,
+          "label": "persist"
+        }
+      ],
+      "sections": [
+        {
+          "heading": "1. Architectural Intent: Dynamic Composition Over Static Class Inheritance",
+          "body": "Subclassing creates rigid compile-time behavior: if you have a Logger, and you need TimestampLogging, FileLogging, and SlackLogging, creating subclasses for all permutations requires TimestampSlackLogger, TimestampFileLogger, etc. If you have N features, inheritance produces O(2^N) subclasses. Decorator replaces static subclassing with nested wrappers that can be stacked arbitrarily in any order at runtime.",
+          "bullets": [
+            "Single Responsibility Principle: Each decorator class focuses exclusively on one orthogonal concern (caching, logging, encryption, metrics).",
+            "Transparent Wrapping: Because decorators implement the exact same interface as the wrapped object, callers cannot distinguish a raw instance from a wrapped one.",
+            "Dynamic Assembly: Decorator chains can be assembled conditionally based on runtime feature flags, environment configurations, or user permissions."
+          ]
+        },
+        {
+          "heading": "2. Recursive Wrapper Chains & Interceptor Pipeline Mechanics",
+          "body": "At runtime, invoking a method on the outermost decorator initiates a recursive invocation down the wrapper chain. The outermost decorator executes its 'pre-invocation' hooks (e.g., starting a latency timer), delegates to its inner wrappee, which delegates down to the core concrete component. Once the core component returns, the invocation stack unwinds back up, allowing decorators to run 'post-invocation' hooks (e.g., logging duration or caching the return payload).",
+          "bullets": [
+            "Concentric Shell Model: The core concrete object sits at the center, surrounded by concentric layers of decorator behaviors.",
+            "Ordering Sensitivity: The order of decorator wrapping can critically alter behavior: e.g. CompressionDecorator(EncryptionDecorator(stream)) produces very different byte streams than EncryptionDecorator(CompressionDecorator(stream)).",
+            "Transparent Substitution: A decorated instance satisfies all type contracts of the core component, enabling zero-touch retrofitting into existing code."
+          ]
+        },
+        {
+          "heading": "3. Failure Modes: Identity Crisis (this-pointer bypass) & Decorator Ordering",
+          "body": "A notorious subtlety of the Decorator pattern is the 'Self-Call' or 'Identity Crisis' problem. If the core concrete object invokes another of its own internal methods (this.otherMethod()), that call executes directly on the inner instance, completely bypassing the outer decorator's interceptors! Furthermore, developers must be extremely vigilant with object equality: decorator != innerObject even though both implement the same interface.",
+          "bullets": [
+            "Self-Invocation Bypass: Internal helper calls made via 'this' will bypass the decorator pipeline.",
+            "Broken Identity: Equality checks (e.g. inner.equals(decorator)) fail unless equals() and hashCode() are deliberately forwarded down the chain.",
+            "Removal Difficulty: While it is easy to wrap an object, removing an arbitrary decorator from the middle of a deeply nested chain at runtime is exceedingly difficult."
+          ]
+        },
+        {
+          "heading": "4. Production Blueprint: Resilient HTTP Execution Pipeline in Java 21",
+          "body": "The following production Java implementation showcases an enterprise Resilient HTTP Client pipeline utilizing Decorator chains for automatic retries, latency metrics, and circuit-breaker telemetry.",
+          "bullets": [
+            "HttpExecution Contract: Unified interface implemented by base client and all decorators.",
+            "Metrics & Retry Wrappers: Composable middleware stacked at runtime without subclassing."
+          ],
+          "codeSnippet": {
+            "title": "Production Resilient HTTP Pipeline in Java 21",
+            "code": "public interface HttpExecution {\n    String send(String request);\n}\n\n// 1. Core Concrete Component\npublic class SimpleHttpClient implements HttpExecution {\n    @Override public String send(String request) {\n        return \"200 OK: payload for \" + request;\n    }\n}\n\n// 2. Abstract Decorator Base\npublic abstract class HttpDecorator implements HttpExecution {\n    protected final HttpExecution inner;\n    protected HttpDecorator(HttpExecution inner) { \n        this.inner = Objects.requireNonNull(inner); \n    }\n}\n\n// 3. Concrete Decorator A: Latency Telemetry\npublic class MetricsHttpDecorator extends HttpDecorator {\n    public MetricsHttpDecorator(HttpExecution inner) { super(inner); }\n\n    @Override public String send(String request) {\n        long start = System.nanoTime();\n        try {\n            return inner.send(request);\n        } finally {\n            long durationMs = (System.nanoTime() - start) / 1_000_000;\n            System.out.printf(\"[Telemetry] Request latency: %d ms%n\", durationMs);\n        }\n    }\n}\n\n// 4. Concrete Decorator B: Transient Fault Retries\npublic class RetryHttpDecorator extends HttpDecorator {\n    private final int maxRetries;\n\n    public RetryHttpDecorator(HttpExecution inner, int maxRetries) {\n        super(inner);\n        this.maxRetries = maxRetries;\n    }\n\n    @Override public String send(String request) {\n        int attempts = 0;\n        while (true) {\n            try {\n                attempts++;\n                return inner.send(request);\n            } catch (RuntimeException ex) {\n                if (attempts >= maxRetries) {\n                    throw ex;\n                }\n                System.out.printf(\"[Retry] Attempt %d failed. Retrying...%n\", attempts);\n            }\n        }\n    }\n}"
+          }
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Decorator Pattern",
+          "pros": "High flexibility, dynamic runtime configuration, eliminates subclass combinatorial explosion.",
+          "cons": "Debugging deep nested wrappers with stack traces can be tricky; order of decorators matters.",
+          "bestFor": "Stream processing, HTTP middleware pipelines, caching & logging wrappers, UI widget overlays."
+        },
+        {
+          "option": "Subclassing / Inheritance",
+          "pros": "Straightforward for fixed static variations with zero runtime configuration.",
+          "cons": "Rigid compile-time binding; cannot combine independent behaviors without duplicating code.",
+          "bestFor": "Extending classes where behaviors are not composable or stackable."
+        },
+        {
+          "option": "Aspect-Oriented Programming (AOP)",
+          "pros": "Separates concerns declaratively via annotations (@Transactional, @Retryable) without wrapping code.",
+          "cons": "Requires heavy bytecode instrumentation (CGLIB/AspectJ); hard to trace execution flow statically.",
+          "bestFor": "Cross-cutting framework-level concerns across hundreds of business services."
+        }
+      ],
+      "interviewTip": "In interviews, cite `java.io.BufferedReader` and `java.io.InputStream` as the definitive standard library example of Decorator. Point out that Decorator differs from Proxy because Proxy *controls access* to an object without changing behavior, whereas Decorator *enhances behavior*."
+    },
+    {
+      "id": "proxy",
+      "subtopicNumber": "2.4",
+      "title": "Proxy Pattern",
+      "subtitle": "Provides a placeholder or surrogate for another object to control access to it.",
+      "readingTime": "9 min read",
+      "difficulty": "Intermediate",
+      "accent": "#ef4444",
+      "keyTakeaways": [
         "Provides an identical interface to the target service while intercepting method calls to perform auxiliary concerns: lazy initialization, caching, access control, or remote networking.",
         "Canonical variants: Virtual Proxy (lazy loading), Protection Proxy (authorization), Remote Proxy (gRPC/RMI stubs), and Caching Proxy.",
         "Forms the foundational bedrock of Spring `@Transactional`, Hibernate lazy loading collections, and dynamic mock libraries (Mockito)."
       ],
-      ascii: `+-------------------------------------------------------------------------+
-|                          PROXY UML CLASS MODEL                          |
-+-------------------------------------------------------------------------+
-                       +-----------------------------+
-                       |        <<interface>>        |
-                       |       DatabaseService       |
-                       +-----------------------------+
-                       | + query(sql): List<Record>  |
-                       +--------------^--------------+
-                                      |
-              +-----------------------+-----------------------+
-              |                                               |
-+-------------+---------------+               +---------------+-------------+
-|    RealDatabaseService      |               |     CachingSecurityProxy    |
-+-----------------------------+               +-----------------------------+
-| + query(sql): [Heavy Disk]  |               | - realService: DbService    |
-+-----------------------------+               | - cache: Map<String, Cache> |
-                                              | + query(sql): auth & cache  |
-                                              +---------------+-------------+
-                                                              | delegates
-                                                              +-------> Real`,
-      blockNodes: [
-        { x: 300, y: 100, w: 260, h: 130, stereotype: 'interface', title: 'VideoDownloader', stroke: '#ef4444', lines: ['+ getVideo(id: String): byte[]'], tag: 'Subject Interface' },
-        { x: 100, y: 300, w: 260, h: 140, stereotype: 'real-subject', title: 'YouTubeRealService', stroke: '#38bdf8', lines: ['- networkBandwidth: 1Gbps', '+ getVideo(id): download 4K video from YouTube API'], tag: 'Real Subject' },
-        { x: 540, y: 300, w: 280, h: 150, stereotype: 'proxy', title: 'CachingAuthProxy', stroke: '#10b981', lines: ['- realService: YouTubeRealService', '- cache: ConcurrentHashMap', '+ getVideo(id): check ACL & Cache'], tag: 'Proxy' }
-      ],
-      blockConns: [
-        { d: 'M 230 300 L 380 230', lx: 290, ly: 255, label: 'implements' },
-        { d: 'M 680 300 L 510 230', lx: 615, ly: 255, label: 'implements' },
-        { d: 'M 540 370 L 360 370', lx: 450, ly: 355, label: 'controls access to' }
-      ],
-      flowNodes: [
-        { x: 50, y: 140, w: 200, h: 140, step: '1', title: 'Client Invocation', stroke: '#ef4444', lines: ['Client calls proxy.getVideo()', 'Transparent to caller', 'Client believes it is RealService'] },
-        { x: 280, y: 140, w: 210, h: 140, step: '2', title: 'Security Check', stroke: '#f59e0b', lines: ['Proxy validates user JWT token', 'Checks DRM rights', 'Rejects unauthorized callers'] },
-        { x: 520, y: 140, w: 210, h: 140, step: '3', title: 'In-Memory Cache', stroke: '#10b981', lines: ['Checks memory cache for video', 'Cache hit: returns in 1ms', 'Bypasses YouTube download'] },
-        { x: 760, y: 140, w: 200, h: 140, step: '4', title: 'Lazy Real Call', stroke: '#38bdf8', lines: ['Cache miss: delegates to Real', 'Saves response to cache', 'Returns byte array to client'] }
-      ],
-      flowConns: [
-        { d: 'M 250 200 L 280 200', lx: 265, ly: 190, label: 'authorize' },
-        { d: 'M 490 200 L 520 200', lx: 505, ly: 190, label: 'check cache' },
-        { d: 'M 730 200 L 760 200', lx: 745, ly: 190, label: 'fetch & cache' }
-      ],
-      sections: [
+      "ascii": "+-------------------------------------------------------------------------+\n|                          PROXY UML CLASS MODEL                          |\n+-------------------------------------------------------------------------+\n                       +-----------------------------+\n                       |        <<interface>>        |\n                       |       DatabaseService       |\n                       +-----------------------------+\n                       | + query(sql): List<Record>  |\n                       +--------------^--------------+\n                                      |\n              +-----------------------+-----------------------+\n              |                                               |\n+-------------+-------------+                   +-------------+-------------+\n|    RealDatabaseService    |                   |    SecurityCachingProxy   |\n+---------------------------+                   +---------------------------+\n| + query(sql): List<Record>|                   | - realService: DbService  |\n+---------------------------+                   | - cache: Map<String, Res> |\n                                                | - userRole: Role          |\n                                                +---------------------------+\n                                                | + query(sql): checks auth |\n                                                |   checks cache -> real    |\n                                                +---------------------------+",
+      "blockNodes": [
         {
-          heading: "Controlling Access, Lazy Loading, and Framework Interceptors",
-          body: "Direct access to heavyweight resources (database connections, remote RPC servers, large video binaries) is dangerous without rate limiting, authorization, and caching. The Proxy pattern wraps the real service behind the exact same interface, intercepting requests to perform lifecycle management before and after delegating to the target object.",
-          bullets: [
-            "Virtual Proxy: Defers the creation of expensive objects until the exact moment a method is invoked (e.g. Hibernate lazy loading of database child tables).",
-            "Protection Proxy: Verifies authorization credentials and security privileges prior to forwarding calls.",
-            "Open/Closed Principle: You can introduce caching, metric logging, and access control without modifying the actual service."
+          "x": 300,
+          "y": 100,
+          "w": 260,
+          "h": 130,
+          "stereotype": "interface",
+          "title": "DatabaseService",
+          "stroke": "#ef4444",
+          "lines": [
+            "+ query(sql: String): Data",
+            "+ ping(): boolean"
           ],
-          codeSnippet: {
-            title: "Production Caching & Lazy-Loading Proxy in Java 21",
-            code: `public interface VideoService {
-    byte[] fetchVideo(String videoId);
-}
-
-// Heavy Real Service
-public class HeavyVideoService implements VideoService {
-    public HeavyVideoService() {
-        System.out.println("Initializing expensive cloud connection...");
-    }
-    @Override public byte[] fetchVideo(String videoId) {
-        System.out.println("Downloading 500MB from S3: " + videoId);
-        return new byte[]{0x1, 0x2, 0x3};
-    }
-}
-
-// The Proxy
-public class CachingVideoProxy implements VideoService {
-    private VideoService realService; // Lazy-loaded reference
-    private final Map<String, byte[]> cache = new ConcurrentHashMap<>();
-
-    @Override
-    public byte[] fetchVideo(String videoId) {
-        // Fast-path: In-memory cache hit
-        byte[] cached = cache.get(videoId);
-        if (cached != null) {
-            System.out.println("Returning cached video for: " + videoId);
-            return cached;
-        }
-
-        // Lazy initialization of heavy real service
-        if (realService == null) {
-            realService = new HeavyVideoService();
-        }
-
-        byte[] video = realService.fetchVideo(videoId);
-        cache.put(videoId, video);
-        return video;
-    }
-}`
-          },
-          flowDiagramUrl: "/diagrams/design-patterns/proxy-flow.svg"
-        }
-      ],
-      tradeOffs: [
-        {
-          option: "Proxy Pattern",
-          pros: "Manages heavy object lifecycles; enables transparent security, caching, and lazy loading.",
-          cons: "Introduces response latency for interceptor checks; multiple proxy layers can obscure debugging.",
-          bestFor: "Hibernate entity lazy loading, Spring AOP transaction interceptors, RPC network stubs."
+          "tag": "Subject Interface"
         },
         {
-          option: "Direct Object Access",
-          pros: "Maximum direct execution speed with zero wrapper overhead.",
-          cons: "Eager initialization wastes memory; zero centralized enforcement of security or caching policies.",
-          bestFor: "Lightweight local utility classes and pure value records."
+          "x": 80,
+          "y": 300,
+          "w": 260,
+          "h": 140,
+          "stereotype": "real",
+          "title": "PostgresDbService",
+          "stroke": "#38bdf8",
+          "lines": [
+            "- pool: HikariDataSource",
+            "+ query(): executes SQL on DB",
+            "Cost: Heavy TCP handshake"
+          ],
+          "tag": "Real Subject"
+        },
+        {
+          "x": 520,
+          "y": 300,
+          "w": 280,
+          "h": 160,
+          "stereotype": "proxy",
+          "title": "CachingSecurityProxy",
+          "stroke": "#10b981",
+          "lines": [
+            "- real: PostgresDbService",
+            "- cache: LruCache<Sql, Data>",
+            "+ query(): check JWT -> cache hit?"
+          ],
+          "tag": "Proxy Surrogate"
         }
       ],
-      interviewTip: "Distinguish Proxy from Decorator: Although both wrap an object and implement the same interface, their INTENT is fundamentally different. Decorator enhances or adds new behaviors; Proxy controls access to the underlying object (managing its lifecycle, access permissions, or network communication)."
+      "blockConns": [
+        {
+          "d": "M 210 300 L 370 230",
+          "lx": 280,
+          "ly": 260,
+          "label": "implements"
+        },
+        {
+          "d": "M 660 300 L 490 230",
+          "lx": 580,
+          "ly": 260,
+          "label": "implements"
+        },
+        {
+          "d": "M 520 380 L 340 380",
+          "lx": 430,
+          "ly": 370,
+          "label": "controls access & delegates"
+        }
+      ],
+      "flowNodes": [
+        {
+          "x": 50,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "1",
+          "title": "Client Query",
+          "stroke": "#38bdf8",
+          "lines": [
+            "Client invokes db.query(\"SELECT\")",
+            "Client interacts with Proxy",
+            "Identical interface contract"
+          ]
+        },
+        {
+          "x": 280,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "2",
+          "title": "Security Check",
+          "stroke": "#ef4444",
+          "lines": [
+            "Proxy inspects user role",
+            "Rejects unauthorized users",
+            "Throws AccessDeniedException"
+          ]
+        },
+        {
+          "x": 520,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "3",
+          "title": "LRU Cache Audit",
+          "stroke": "#f59e0b",
+          "lines": [
+            "Checks in-memory cache",
+            "Returns cached data if hit",
+            "Zero network socket traffic"
+          ]
+        },
+        {
+          "x": 760,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "4",
+          "title": "Lazy Execution",
+          "stroke": "#10b981",
+          "lines": [
+            "On cache miss: delegates to real DB",
+            "Stores result in cache",
+            "Returns records to caller"
+          ]
+        }
+      ],
+      "flowConns": [
+        {
+          "d": "M 250 200 L 280 200",
+          "lx": 265,
+          "ly": 190,
+          "label": "call"
+        },
+        {
+          "d": "M 490 200 L 520 200",
+          "lx": 505,
+          "ly": 190,
+          "label": "authorize"
+        },
+        {
+          "d": "M 730 200 L 760 200",
+          "lx": 745,
+          "ly": 190,
+          "label": "delegate"
+        }
+      ],
+      "sections": [
+        {
+          "heading": "1. Architectural Intent: Controlled Access & Indirection Semantics",
+          "body": "The Proxy pattern introduces an intermediary surrogate that controls, restricts, or enhances access to an underlying target object without changing the target object's interface. While the Decorator pattern exists to add new responsibilities or features to an object, the Proxy pattern exists primarily to manage the lifecycle, security, network transport, or access costs of the underlying object.",
+          "bullets": [
+            "Protection Proxy: Enforces role-based authorization (RBAC) before allowing calls to reach sensitive backend business logic.",
+            "Virtual Proxy: Defers the creation or loading of expensive objects (e.g. 50MB images, large dataset queries) until the moment a method is actually invoked.",
+            "Remote Proxy: Abstracts RPC/network boundaries, serializing method calls into JSON/Protobuf packets across the wire (e.g., gRPC client stubs).",
+            "Caching Proxy: Intercepts read queries and serves results directly from memory if cached."
+          ]
+        },
+        {
+          "heading": "2. Virtual, Protection, Caching, and Remote Proxy Mechanics",
+          "body": "At runtime, client code holds a reference typed to the Subject interface. When a method is called, the proxy intercepts the invocation. For a Virtual Proxy, if the real subject has not yet been initialized, the proxy instantiates it lazily on demand. For a Protection Proxy, it inspects security credentials and aborts execution if authorization fails. In Spring Boot, Spring creates dynamic proxies (via JDK dynamic proxies or ByteBuddy/CGLIB) to wrap beans with transaction management (@Transactional) and security checks (@PreAuthorize).",
+          "bullets": [
+            "JDK Dynamic Proxies: Generates proxy classes at runtime using java.lang.reflect.Proxy for any interface.",
+            "CGLIB / ByteBuddy: Generates proxy subclasses by subclassing concrete classes directly, bypassing the requirement for an interface.",
+            "Lazy Loading Lifecycle: The client remains completely agnostic to whether the underlying real subject is loaded in memory, situated in a remote cloud cluster, or lazily fetched."
+          ]
+        },
+        {
+          "heading": "3. Failure Modes: Self-Invocation Bypass in Spring AOP & LazyInitializationException",
+          "body": "The single most common bug in modern enterprise Java arises from misunderstanding Proxies. In Spring, if method A() calls method B() on the *same class* ('this.B()'), and B() is annotated with @Transactional or @Cacheable, the transaction or cache will NOT work! Because the call is internal via 'this', it completely bypasses the Spring proxy wrapper. Another classic proxy failure is Hibernate's LazyInitializationException when accessing a lazy proxy after the database session has closed.",
+          "bullets": [
+            "Spring AOP Self-Invocation Pitfall: Internal method calls do not pass through the dynamic proxy; @Transactional annotations on internal calls are silently ignored.",
+            "Hibernate LazyInitializationException: Occurs when accessing a Virtual Proxy entity outside the active persistence context/transaction boundary.",
+            "Memory Leaks in Caching Proxies: Proxies that cache method return values without an eviction policy (LRU / TTL) will eventually trigger JVM Out-Of-Memory errors."
+          ]
+        },
+        {
+          "heading": "4. Production Blueprint: Dynamic Caching & Security Proxy in Java 21",
+          "body": "The following production Java implementation showcases a Caching and Protection Proxy safeguarding an expensive database service with role-based access control and LRU result caching.",
+          "bullets": [
+            "DatabaseService Contract: Interface implemented by both real database and proxy.",
+            "CachingSecurityProxy: Validates caller permissions and intercepts queries via concurrent cache."
+          ],
+          "codeSnippet": {
+            "title": "Production Caching & Security Proxy in Java 21",
+            "code": "public interface DatabaseService {\n    String query(String sql);\n}\n\n// Real Subject (Expensive Resource)\npublic class PostgresDatabaseService implements DatabaseService {\n    public PostgresDatabaseService() {\n        System.out.println(\"[Postgres] Heavy connection pool initialized\");\n    }\n\n    @Override\n    public String query(String sql) {\n        System.out.println(\"[Postgres] Executing SQL over TCP: \" + sql);\n        return \"Records for [\" + sql + \"]\";\n    }\n}\n\n// Protection and Caching Proxy\npublic class CachingSecurityProxy implements DatabaseService {\n    private final DatabaseService realService;\n    private final Map<String, String> cache = new ConcurrentHashMap<>();\n    private final Set<String> authorizedRoles;\n\n    public CachingSecurityProxy(DatabaseService realService, Set<String> authorizedRoles) {\n        this.realService = Objects.requireNonNull(realService);\n        this.authorizedRoles = Set.copyOf(authorizedRoles);\n    }\n\n    @Override\n    public String query(String sql) {\n        // 1. Protection Proxy: Security Check\n        String currentRole = SecurityContext.getCurrentRole();\n        if (!authorizedRoles.contains(currentRole)) {\n            throw new SecurityException(\"Access denied for role: \" + currentRole);\n        }\n\n        // 2. Caching Proxy: Memory Lookup\n        return cache.computeIfAbsent(sql, queryKey -> {\n            System.out.println(\"[Proxy] Cache miss. Delegating to real subject...\");\n            return realService.query(queryKey);\n        });\n    }\n}"
+          }
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Proxy Pattern",
+          "pros": "Separates security, caching, and network mechanics from business logic; enables lazy loading.",
+          "cons": "Introduces latency overhead; debugging dynamic proxies can produce confusing stack traces.",
+          "bestFor": "Hibernate lazy loading, Spring declarative transactions, API rate limiting, remote RPC stubs."
+        },
+        {
+          "option": "Direct Object Invocations",
+          "pros": "Zero indirection, crystal clear stack traces, trivial to step-debug.",
+          "cons": "Couples business logic directly with security, network, and caching code.",
+          "bestFor": "Pure domain entities without cross-cutting security or remote requirements."
+        },
+        {
+          "option": "Decorator Pattern",
+          "pros": "Focuses on dynamically augmenting or modifying the behavior of the component.",
+          "cons": "Does not typically manage the lifecycle or restrict access to the target object.",
+          "bestFor": "Stream transformations, middleware interceptor pipelines."
+        }
+      ],
+      "interviewTip": "When interviewers ask 'How does Spring @Transactional work under the hood?', explain: 'Spring wraps the bean in a dynamic proxy (JDK dynamic proxy if interface-based, or CGLIB subclass). When a client calls a transactional method, the proxy intercepts the call, begins a JDBC transaction, delegates to the target method, and commits or rolls back based on exceptions. This is also why calling another transactional method on the same class via `this` bypasses the transaction!'"
+    },
+    {
+      "id": "composite",
+      "subtopicNumber": "2.5",
+      "title": "Composite Pattern",
+      "subtitle": "Composes objects into tree structures to represent part-whole hierarchies, letting clients treat individual objects and compositions uniformly.",
+      "readingTime": "8 min read",
+      "difficulty": "Intermediate",
+      "accent": "#10b981",
+      "keyTakeaways": [
+        "Enables recursive tree data structures where single Leaf nodes and complex Composite branches share the exact same interface.",
+        "Clients do not need to check `if (node instanceof Leaf)` or write nested typecasting loops; calling `execute()` on the root propagates down the entire hierarchy.",
+        "Underpins modern UI DOM trees, organizational hierarchies, file system structures, and financial portfolio valuation calculations."
+      ],
+      "ascii": "+-------------------------------------------------------------------------+\n|                        COMPOSITE UML CLASS MODEL                        |\n+-------------------------------------------------------------------------+\n                         +-----------------------------+\n                         |        <<interface>>        |\n                         |          Component          |\n                         +-----------------------------+\n                         | + getPrice(): BigDecimal    |\n                         | + displayHierarchy(): void  |\n                         +--------------^--------------+\n                                        |\n               +------------------------+------------------------+\n               |                                                 |\n+--------------+--------------+                   +--------------+--------------+\n|        Product (Leaf)       |                   |       Box (Composite)       |\n+-----------------------------+                   +-----------------------------+\n| - price: BigDecimal         |                   | - children: List<Component> |\n| + getPrice(): BigDecimal    |                   | + add(c: Component): void   |\n+-----------------------------+                   | + getPrice(): [Recursive]   |\n                                                  +-----------------------------+",
+      "blockNodes": [
+        {
+          "x": 320,
+          "y": 100,
+          "w": 260,
+          "h": 140,
+          "stereotype": "interface",
+          "title": "FileSystemItem",
+          "stroke": "#10b981",
+          "lines": [
+            "+ getSize(): long",
+            "+ printTree(indent): void"
+          ],
+          "tag": "Component"
+        },
+        {
+          "x": 100,
+          "y": 310,
+          "w": 250,
+          "h": 130,
+          "stereotype": "leaf",
+          "title": "File (Leaf)",
+          "stroke": "#38bdf8",
+          "lines": [
+            "- sizeInBytes: long",
+            "+ getSize(): long",
+            "  -> returns exact file size"
+          ],
+          "tag": "Leaf"
+        },
+        {
+          "x": 550,
+          "y": 310,
+          "w": 270,
+          "h": 150,
+          "stereotype": "composite",
+          "title": "Directory (Composite)",
+          "stroke": "#f59e0b",
+          "lines": [
+            "- items: List<FileSystemItem>",
+            "+ add(item): void",
+            "+ getSize(): long (sum children)"
+          ],
+          "tag": "Composite"
+        }
+      ],
+      "blockConns": [
+        {
+          "d": "M 225 310 L 370 240",
+          "lx": 280,
+          "ly": 265,
+          "label": "implements"
+        },
+        {
+          "d": "M 685 310 L 530 240",
+          "lx": 635,
+          "ly": 265,
+          "label": "implements"
+        },
+        {
+          "d": "M 820 385 C 870 385 870 170 580 170",
+          "lx": 870,
+          "ly": 270,
+          "label": "contains children"
+        }
+      ],
+      "flowNodes": [
+        {
+          "x": 50,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "1",
+          "title": "Root Invocation",
+          "stroke": "#10b981",
+          "lines": [
+            "Client calls rootDir.getSize()",
+            "Client has no knowledge of tree depth",
+            "Treats root as Component"
+          ]
+        },
+        {
+          "x": 280,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "2",
+          "title": "Recursive Traversal",
+          "stroke": "#f59e0b",
+          "lines": [
+            "Directory loops through children",
+            "Calls item.getSize() on each",
+            "Branches recurse into subdirectories"
+          ]
+        },
+        {
+          "x": 520,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "3",
+          "title": "Leaf Base Case",
+          "stroke": "#38bdf8",
+          "lines": [
+            "Individual File leaves return size",
+            "No child loops on leaves",
+            "Accumulates into branch sum"
+          ]
+        },
+        {
+          "x": 760,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "4",
+          "title": "Aggregated Total",
+          "stroke": "#a855f7",
+          "lines": [
+            "Total bytes returned to root",
+            "Clean single return value",
+            "Zero instanceof checks needed"
+          ]
+        }
+      ],
+      "flowConns": [
+        {
+          "d": "M 250 200 L 280 200",
+          "lx": 265,
+          "ly": 190,
+          "label": "recurse"
+        },
+        {
+          "d": "M 490 200 L 520 200",
+          "lx": 505,
+          "ly": 190,
+          "label": "leaf evaluate"
+        },
+        {
+          "d": "M 730 200 L 760 200",
+          "lx": 745,
+          "ly": 190,
+          "label": "aggregate"
+        }
+      ],
+      "sections": [
+        {
+          "heading": "1. Architectural Intent: Uniform Treatment of Part-Whole Hierarchies",
+          "body": "In complex domain trees like e-commerce packaging (boxes containing smaller boxes and individual products) or graphic renderers (groups containing shapes and other nested groups), writing special-cased code for leaves versus containers results in brittle switch statements. The Composite pattern enables clients to treat nested trees as if they were a single uniform object.",
+          "bullets": [
+            "Polymorphic Recursion: Complex hierarchies calculate results through natural recursive polymorphism.",
+            "Open/Closed Principle: Introduce new leaf components or container types without changing client code.",
+            "Simplified Client Logic: Eliminates cumbersome typecasting and deep nested iterative loops."
+          ]
+        },
+        {
+          "heading": "2. Recursive Polymorphism & Tree Traversal Execution Mechanics",
+          "body": "In a Composite tree, when an operation (like calculateSize() or render()) is invoked on a composite node, that node simply iterates over its internal collection of child components and invokes the identical method on each child. For Leaf nodes, the method executes the concrete calculation (the base case). For sub-composite nodes, it triggers another nested iteration. The client initiating the root call has zero knowledge of whether the tree is 1 node deep or 1,000 nodes deep.",
+          "bullets": [
+            "Uniform Interface: Both Leaf and Composite implement the same root Component interface.",
+            "Implicit Recursion: Eliminates the need for external tree visitor loops or stack management.",
+            "Composite as Leaf: A Composite can be added as a child of another Composite without changing any logic."
+          ]
+        },
+        {
+          "heading": "3. Transparency vs Safety: Interface Segregation in Component Trees",
+          "body": "A classic design debate in Composite is Transparency versus Safety. In the Transparency approach, child management methods (add(), remove(), getChild()) are defined on the base Component interface, allowing clients to treat leaves and composites with 100% uniformity; however, calling add() on a Leaf either does nothing or throws an exception (violating Liskov Substitution). In the Safety approach, child management methods are defined exclusively on the Composite class, requiring clients to cast or distinguish composites when building the tree.",
+          "bullets": [
+            "Safety Preferred: In strongly typed languages (Java, TypeScript), the Safety approach is generally preferred to catch illegal child additions at compile time.",
+            "Cyclic Graph Hazards: If a composite node accidentally adds one of its ancestors as a child, recursive operations will trigger an infinite loop and StackOverflowError.",
+            "Parent References: Maintaining a parent pointer in each child simplifies upwards traversal, but requires synchronized two-way updates during additions and removals."
+          ]
+        },
+        {
+          "heading": "4. Production Blueprint: Enterprise File System & AST Node Evaluator in Java 21",
+          "body": "The following production Java implementation showcases an enterprise File System tree hierarchy featuring recursive size calculation, structural rendering, and safety-oriented child management.",
+          "bullets": [
+            "FileSystemNode Contract: Defines uniform size calculation and hierarchy rendering.",
+            "DirectoryComposite: Manages children safely and computes aggregate disk footprint."
+          ],
+          "codeSnippet": {
+            "title": "Production Composite File System Architecture in Java 21",
+            "code": "// Component Interface\npublic interface FileSystemNode {\n    long calculateSizeBytes();\n    void render(int depth);\n}\n\n// Leaf Node\npublic record FileLeaf(String name, long size) implements FileSystemNode {\n    @Override public long calculateSizeBytes() { return size; }\n    @Override public void render(int depth) {\n        System.out.printf(\"%s- File: %s (%d bytes)%n\", \"  \".repeat(depth), name, size);\n    }\n}\n\n// Composite Node\npublic class DirectoryComposite implements FileSystemNode {\n    private final String name;\n    private final List<FileSystemNode> children = new ArrayList<>();\n\n    public DirectoryComposite(String name) { this.name = name; }\n    public void add(FileSystemNode node) { children.add(Objects.requireNonNull(node)); }\n    public void remove(FileSystemNode node) { children.remove(node); }\n\n    @Override\n    public long calculateSizeBytes() {\n        return children.stream().mapToLong(FileSystemNode::calculateSizeBytes).sum();\n    }\n\n    @Override\n    public void render(int depth) {\n        System.out.printf(\"%s+ Dir: %s%n\", \"  \".repeat(depth), name);\n        for (FileSystemNode child : children) {\n            child.render(depth + 1);\n        }\n    }\n}"
+          }
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Composite Pattern",
+          "pros": "Simplifies client code; easy to add new component types; uniform recursive processing.",
+          "cons": "Difficult to restrict which child components can be added to specific composite containers at compile time.",
+          "bestFor": "UI document trees, AST compilers, nested pricing & packaging systems, organization charts."
+        },
+        {
+          "option": "Flat Class Hierarchies with Collections",
+          "pros": "Strict compile-time type safety; prevents accidental nesting of illegal combinations.",
+          "cons": "Requires custom traversal and aggregation logic for every new container type.",
+          "bestFor": "Strictly shallow, non-recursive parent-child relationships."
+        },
+        {
+          "option": "Decorator Pattern",
+          "pros": "Wraps a single component to add behavior without tree hierarchy mechanics.",
+          "cons": "Cannot represent multiple children or part-whole trees.",
+          "bestFor": "Single-item interceptor wrapping rather than multi-item branch trees."
+        }
+      ],
+      "interviewTip": "When discussing Composite, address the trade-off between Transparency (defining child management methods like add() and remove() in the base Component interface) versus Safety (defining them only on the Composite class). Explain why Safety is generally preferred in strongly typed enterprise codebases to uphold the Liskov Substitution Principle."
+    },
+    {
+      "id": "bridge",
+      "subtopicNumber": "2.6",
+      "title": "Bridge Pattern",
+      "subtitle": "Decouples an abstraction from its implementation so that the two can vary independently.",
+      "readingTime": "9 min read",
+      "difficulty": "Advanced",
+      "accent": "#a855f7",
+      "keyTakeaways": [
+        "Prevents a Cartesian Product explosion of class hierarchies (e.g. M abstractions * N platforms = M * N classes) by splitting them into two independent dimensions: Abstraction and Implementation.",
+        "Replaces deep inheritance hierarchies with composition: the Abstraction maintains a reference to the Implementor.",
+        "Widely used in cross-platform rendering engines, driver architectures (JDBC), and multi-channel notification dispatchers."
+      ],
+      "ascii": "+-------------------------------------------------------------------------+\n|                          BRIDGE UML CLASS MODEL                         |\n+-------------------------------------------------------------------------+\n    [Abstraction Hierarchy]                    [Implementor Hierarchy]\n  +--------------------------+               +--------------------------+\n  |    RemoteControl (Abs)   |  has-a ---->  |     <<interface>>        |\n  +--------------------------+               |     Device (Impl)        |\n  | # device: Device         |               +--------------------------+\n  | + togglePower(): void    |               | + isEnabled(): boolean   |\n  +------------^-------------+               | + enable(): void         |\n               |                             +------------^-------------+\n  +------------+-------------+                            |\n  |   AdvancedRemoteControl  |               +------------+-------------+\n  +--------------------------+               |                          |\n  | + mute(): void           |     +---------+--------+       +---------+--------+\n  +--------------------------+     |    TvDevice      |       |   RadioDevice    |\n                                   +------------------+       +------------------+",
+      "blockNodes": [
+        {
+          "x": 50,
+          "y": 110,
+          "w": 250,
+          "h": 140,
+          "stereotype": "abstraction",
+          "title": "NotificationSender",
+          "stroke": "#a855f7",
+          "lines": [
+            "# channel: MessageChannel",
+            "+ sendAlert(msg): void"
+          ],
+          "tag": "Abstraction"
+        },
+        {
+          "x": 50,
+          "y": 320,
+          "w": 250,
+          "h": 130,
+          "stereotype": "refined-abs",
+          "title": "EmergencyNotifier",
+          "stroke": "#a855f7",
+          "lines": [
+            "+ broadcastUrgent(msg)",
+            "  -> retries & escalates"
+          ],
+          "tag": "Refined Abstraction"
+        },
+        {
+          "x": 550,
+          "y": 110,
+          "w": 250,
+          "h": 140,
+          "stereotype": "implementor",
+          "title": "MessageChannel",
+          "stroke": "#10b981",
+          "lines": [
+            "+ deliver(payload): void",
+            "+ getProtocol(): String"
+          ],
+          "tag": "Implementor"
+        },
+        {
+          "x": 420,
+          "y": 320,
+          "w": 220,
+          "h": 130,
+          "stereotype": "concrete-impl",
+          "title": "TwilioSmsChannel",
+          "stroke": "#38bdf8",
+          "lines": [
+            "+ deliver(): [SMS Gateway]"
+          ],
+          "tag": "Concrete Impl A"
+        },
+        {
+          "x": 670,
+          "y": 320,
+          "w": 220,
+          "h": 130,
+          "stereotype": "concrete-impl",
+          "title": "SlackWebhookChannel",
+          "stroke": "#f59e0b",
+          "lines": [
+            "+ deliver(): [Slack API]"
+          ],
+          "tag": "Concrete Impl B"
+        }
+      ],
+      "blockConns": [
+        {
+          "d": "M 175 320 L 175 250",
+          "lx": 175,
+          "ly": 285,
+          "label": "extends"
+        },
+        {
+          "d": "M 300 170 L 550 170",
+          "lx": 425,
+          "ly": 155,
+          "label": "has-a Bridge"
+        },
+        {
+          "d": "M 530 320 L 630 250",
+          "lx": 570,
+          "ly": 285,
+          "label": "implements"
+        },
+        {
+          "d": "M 780 320 L 710 250",
+          "lx": 755,
+          "ly": 285,
+          "label": "implements"
+        }
+      ],
+      "flowNodes": [
+        {
+          "x": 50,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "1",
+          "title": "Client Invocation",
+          "stroke": "#a855f7",
+          "lines": [
+            "Client creates EmergencyNotifier",
+            "Injects SlackChannel at runtime",
+            "Calls sendUrgentAlert()"
+          ]
+        },
+        {
+          "x": 280,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "2",
+          "title": "Abstraction Logic",
+          "stroke": "#f59e0b",
+          "lines": [
+            "Applies high-level logic",
+            "Formats alert markdown",
+            "Applies retry policies"
+          ]
+        },
+        {
+          "x": 520,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "3",
+          "title": "Bridge Delegation",
+          "stroke": "#38bdf8",
+          "lines": [
+            "Notifier delegates to channel",
+            "Calls channel.deliver()",
+            "Agnostic of channel transport"
+          ]
+        },
+        {
+          "x": 760,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "4",
+          "title": "Protocol Delivery",
+          "stroke": "#10b981",
+          "lines": [
+            "SlackWebhook dispatches HTTP",
+            "Zero inheritance coupling",
+            "Swap channel in 1 line"
+          ]
+        }
+      ],
+      "flowConns": [
+        {
+          "d": "M 250 200 L 280 200",
+          "lx": 265,
+          "ly": 190,
+          "label": "call"
+        },
+        {
+          "d": "M 490 200 L 520 200",
+          "lx": 505,
+          "ly": 190,
+          "label": "bridge"
+        },
+        {
+          "d": "M 730 200 L 760 200",
+          "lx": 745,
+          "ly": 190,
+          "label": "execute"
+        }
+      ],
+      "sections": [
+        {
+          "heading": "1. Architectural Intent: Orthogonal Dimension Decomposition & Cartesian Explosion Avoidance",
+          "body": "Consider a UI framework with shapes (Circle, Square) and colors (Red, Blue). In traditional inheritance, adding 1 shape and 1 color requires creating RedCircle, BlueCircle, RedSquare, BlueSquare. If you have 10 shapes and 5 platforms, you need 50 subclasses! The Bridge pattern decouples Shape (the abstraction) from Platform/Renderer (the implementation) into two separate orthogonal class hierarchies connected by object composition.",
+          "bullets": [
+            "Eliminates Class Multiplications: With Bridge, M abstractions and N implementors requires only M + N classes instead of M * N.",
+            "Runtime Implementation Switching: The client can change the underlying implementor of an abstraction dynamically at runtime.",
+            "True Information Hiding: Completely isolates platform-dependent hardware/OS details from consumer code."
+          ]
+        },
+        {
+          "heading": "2. Decoupling Abstraction from Implementation: Runtime Bridge Binding",
+          "body": "The Abstraction class defines high-level business control logic and maintains a reference to an Implementor interface. The Implementor interface defines low-level primitive operations (e.g. drawLine(), openSocket()). The refined abstractions formulate high-level concepts by orchestrating the implementor's primitive methods. This allows driver developers to write concrete implementors for Windows, Linux, or WebGL without knowing how shapes or windows are structured.",
+          "bullets": [
+            "Abstraction: Controls high-level business policy and user-facing APIs.",
+            "Implementor: Provides concrete low-level primitive operations tailored to underlying platforms.",
+            "Decoupled Evolution: Adding a new 3D graphics API (e.g., Vulkan) requires zero edits to existing shape abstraction classes."
+          ]
+        },
+        {
+          "heading": "3. Failure Modes: Over-Engineering Trivial Hierarchies & State Synchronization",
+          "body": "The Bridge pattern introduces a significant architectural abstraction tax. If your application only runs on a single platform and will never support multiple rendering backends, applying Bridge introduces unnecessary indirection and cognitive load. Furthermore, if the Abstraction requires deep knowledge of the Implementor's internal hardware state, tight coupling re-emerges through leaky methods.",
+          "bullets": [
+            "Cognitive Overhead: Harder for junior engineers to trace through dual-hierarchy method calls compared to single-class inheritance.",
+            "Premature Generalization: Applying Bridge to domains that only have a single implementation creates useless boilerplate.",
+            "Granularity Mismatch: If abstraction operations require too many round-trip calls across the bridge, performance degrades."
+          ]
+        },
+        {
+          "heading": "4. Production Blueprint: Enterprise Cross-Platform Notification Engine in TypeScript",
+          "body": "The following production TypeScript implementation demonstrates an enterprise Notification Delivery system decoupling alert priority policies (Abstraction) from transport channels (Implementor).",
+          "bullets": [
+            "MessageChannel Implementor: Transports payloads across Twilio, Slack, and Email.",
+            "AlertNotification Abstraction: Enforces urgent escalation, logging, and retry semantics."
+          ],
+          "codeSnippet": {
+            "title": "Production Notification Engine with Bridge in TypeScript",
+            "code": "// 1. Implementor Interface\nexport interface MessageChannel {\n  deliver(recipient: string, body: string): Promise<boolean>;\n  getChannelName(): string;\n}\n\n// 2. Concrete Implementors\nexport class TwilioSmsChannel implements MessageChannel {\n  async deliver(recipient: string, body: string): Promise<boolean> {\n    console.log(`[Twilio SMS] Sending to ${recipient}: ${body}`);\n    return true;\n  }\n  getChannelName(): string { return \"SMS\"; }\n}\n\nexport class SlackWebhookChannel implements MessageChannel {\n  async deliver(recipient: string, body: string): Promise<boolean> {\n    console.log(`[Slack Webhook] Sending to ${recipient}: ${body}`);\n    return true;\n  }\n  getChannelName(): string { return \"SLACK\"; }\n}\n\n// 3. Abstraction\nexport abstract class AlertNotification {\n  protected channel: MessageChannel; // The Bridge\n\n  constructor(channel: MessageChannel) {\n    this.channel = channel;\n  }\n\n  public setChannel(channel: MessageChannel): void {\n    this.channel = channel;\n  }\n\n  public abstract sendAlert(recipient: string, message: string): Promise<void>;\n}\n\n// 4. Refined Abstraction\nexport class UrgentCriticalAlert extends AlertNotification {\n  public async sendAlert(recipient: string, message: string): Promise<void> {\n    const formatted = `[CRITICAL P0 ALERT] ${message.toUpperCase()} - ACK REQUIRED`;\n    console.log(`[Audit] Escalating alert via ${this.channel.getChannelName()}`);\n    await this.channel.deliver(recipient, formatted);\n  }\n}"
+          }
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Bridge Pattern",
+          "pros": "Prevents combinatorial subclass explosions; decouples high-level policy from low-level mechanisms.",
+          "cons": "Increases structural complexity; high cognitive load if the two dimensions are not truly orthogonal.",
+          "bestFor": "Cross-platform graphics engines, database connectivity drivers (JDBC), complex notification engines."
+        },
+        {
+          "option": "Monolithic Class Inheritance",
+          "pros": "Simple and straightforward for small domains with only 2-3 fixed variants.",
+          "cons": "Combinatorial explosion: adding new platforms requires multiplying classes across the entire codebase.",
+          "bestFor": "Static domains with zero likelihood of new platform variants."
+        },
+        {
+          "option": "Adapter Pattern",
+          "pros": "Converts an existing incompatible interface into a target interface after code is already written.",
+          "cons": "Does not split orthogonal design dimensions up front.",
+          "bestFor": "Retrofitting third-party SDKs into an existing system."
+        }
+      ],
+      "interviewTip": "Interviewers frequently ask candidates to contrast Bridge vs Adapter. Explain: 'Adapter is applied *after* systems are built to make incompatible third-party interfaces work together. Bridge is designed *up front* to let abstraction and implementation evolve independently along orthogonal dimensions.'"
+    },
+    {
+      "id": "flyweight",
+      "subtopicNumber": "2.7",
+      "title": "Flyweight Pattern",
+      "subtitle": "Minimizes memory usage by sharing as much data as possible with similar objects.",
+      "readingTime": "9 min read",
+      "difficulty": "Advanced",
+      "accent": "#a855f7",
+      "keyTakeaways": [
+        "Separates object state into Intrinsic State (invariant, shared across thousands of objects) and Extrinsic State (context-dependent, passed in as method parameters).",
+        "Prevents Out-Of-Memory (OOM) errors in graphics engines, gaming entities (particles, bullets, trees), and document text editors (millions of glyph characters).",
+        "Powering core Java standard libraries: `Integer.valueOf()` caches numbers -128 to 127 using the Flyweight pattern; Java String deduplication/interning is a classic Flyweight."
+      ],
+      "ascii": "+-------------------------------------------------------------------------+\n|                        FLYWEIGHT UML CLASS MODEL                        |\n+-------------------------------------------------------------------------+\n+-----------------------+              +----------------------------------+\n|    TreeFactory        |  caches ---> |       TreeType (Flyweight)       |\n+-----------------------+              +----------------------------------+\n| - types: Map<String,  |              | - name: String                   |\n|          TreeType>    |              | - color: Color    [Intrinsic]    |\n| + getTreeType(...)    |              | - texture: byte[]                |\n+-----------------------+              +----------------------------------+\n                                       | + render(x, y, scale) [Extrinsic]|\n                                       +-----------------^----------------+\n                                                         | shared by 1,000,000x\n                                       +-----------------+----------------+\n                                       |         Tree (Context)           |\n                                       +----------------------------------+\n                                       | - x: int, y: int [Extrinsic]     |\n                                       | - type: TreeType [Shared Ref]    |\n                                       +----------------------------------+",
+      "blockNodes": [
+        {
+          "x": 50,
+          "y": 110,
+          "w": 250,
+          "h": 140,
+          "stereotype": "factory",
+          "title": "TreeTypeFactory",
+          "stroke": "#a855f7",
+          "lines": [
+            "- cache: Map<Key, TreeType>",
+            "+ getTreeType(name, color, mesh): TreeType"
+          ],
+          "tag": "FlyweightFactory"
+        },
+        {
+          "x": 380,
+          "y": 100,
+          "w": 270,
+          "h": 160,
+          "stereotype": "flyweight",
+          "title": "TreeType (Flyweight)",
+          "stroke": "#10b981",
+          "lines": [
+            "- name: String [Intrinsic]",
+            "- 3D Mesh: 50 MB [Intrinsic]",
+            "- Texture: 20 MB [Intrinsic]",
+            "+ draw(x, y, zoom) [Extrinsic]"
+          ],
+          "tag": "Shared Memory"
+        },
+        {
+          "x": 740,
+          "y": 110,
+          "w": 220,
+          "h": 150,
+          "stereotype": "context",
+          "title": "TreeInstance (Context)",
+          "stroke": "#38bdf8",
+          "lines": [
+            "- x: int, y: int [Extrinsic]",
+            "- health: int [Extrinsic]",
+            "- type: TreeType [Pointer]",
+            "Cost: 16 bytes each!"
+          ],
+          "tag": "1M+ Instances"
+        }
+      ],
+      "blockConns": [
+        {
+          "d": "M 300 170 L 380 170",
+          "lx": 340,
+          "ly": 155,
+          "label": "caches"
+        },
+        {
+          "d": "M 740 180 L 650 180",
+          "lx": 695,
+          "ly": 165,
+          "label": "references"
+        }
+      ],
+      "flowNodes": [
+        {
+          "x": 50,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "1",
+          "title": "Spawn Request",
+          "stroke": "#a855f7",
+          "lines": [
+            "Forest generates 1,000,000 trees",
+            "Requests \"Oak\" type from factory",
+            "Calculates random (x, y) coordinates"
+          ]
+        },
+        {
+          "x": 280,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "2",
+          "title": "Factory Cache Hit",
+          "stroke": "#10b981",
+          "lines": [
+            "Factory checks internal map",
+            "Oak 3D mesh already in memory",
+            "Returns existing Flyweight pointer"
+          ]
+        },
+        {
+          "x": 520,
+          "y": 140,
+          "w": 210,
+          "h": 140,
+          "step": "3",
+          "title": "Lightweight Allocation",
+          "stroke": "#38bdf8",
+          "lines": [
+            "Allocates tiny Context record",
+            "Stores only (x, y) + memory pointer",
+            "Memory footprint reduced by 99.8%"
+          ]
+        },
+        {
+          "x": 760,
+          "y": 140,
+          "w": 200,
+          "h": 140,
+          "step": "4",
+          "title": "Extrinsic Rendering",
+          "stroke": "#f59e0b",
+          "lines": [
+            "Renderer invokes type.draw(x, y)",
+            "Flyweight uses GPU texture",
+            "Seamless 60 FPS rendering"
+          ]
+        }
+      ],
+      "flowConns": [
+        {
+          "d": "M 250 200 L 280 200",
+          "lx": 265,
+          "ly": 190,
+          "label": "lookup"
+        },
+        {
+          "d": "M 490 200 L 520 200",
+          "lx": 505,
+          "ly": 190,
+          "label": "pointer"
+        },
+        {
+          "d": "M 730 200 L 760 200",
+          "lx": 745,
+          "ly": 190,
+          "label": "render"
+        }
+      ],
+      "sections": [
+        {
+          "heading": "1. Architectural Intent: Slashing Heap Memory Footprints via Intrinsic State Deduplication",
+          "body": "When rendering a 3D forest with 1,000,000 trees or a rich-text document with 5,000,000 characters, creating an independent heap object for each entity that stores its font geometry, textures, or polygon meshes requires gigabytes of RAM, triggering constant Garbage Collection thrashing and OOM crashes. Flyweight extracts invariant, shareable data (Intrinsic state) into a single immutable instance, leaving only unique coordinates or context (Extrinsic state) in lightweight structures.",
+          "bullets": [
+            "Intrinsic State: Heavy, invariant, read-only data stored directly inside the Flyweight object. Shared safely across all instances.",
+            "Extrinsic State: Transient, contextual data (coordinates, timestamps, specific colors) held by client contexts and passed as method arguments.",
+            "Immutability Requirement: Flyweight instances must be strictly immutable to avoid cross-context race conditions and data corruption."
+          ]
+        },
+        {
+          "heading": "2. Intrinsic vs Extrinsic State: Memory Layout & JVM Allocation Mechanics",
+          "body": "In standard object layouts (such as the HotSpot 64-bit JVM with compressed oops), each object header consumes 12–16 bytes plus field alignment padding. If each tree stores an 8-byte pointer to a 20MB texture, 1,000,000 trees sharing that single texture pointer consume only 24MB of context memory in total. If the 20MB texture were duplicated per tree, the application would require 20 Terabytes of RAM! Flyweight turns an impossible memory problem into a trivial in-memory array.",
+          "bullets": [
+            "Flyweight Factory: Acts as a cache manager (Map<Key, Flyweight>) ensuring existing shared instances are reused rather than newly allocated.",
+            "String Interning & Number Caches: Java's String.intern() and Integer.valueOf(-128 to 127) are textbook production Flyweight implementations.",
+            "Context Structs: In languages like C# or Go, context objects can be allocated as flat value types / structs on the stack, eliminating heap allocation completely."
+          ]
+        },
+        {
+          "heading": "3. Failure Modes: Thread-Safety Violations in Mutated Flyweights & Cache Thrashing",
+          "body": "The most dangerous defect in a Flyweight implementation occurs when a developer inadvertently adds mutable fields to the Flyweight class. If Thread A calls flyweight.setIntensity(10) thinking it affects only its own entity, that mutation instantly corrupts the visual appearance or behavior of all 1,000,000 other instances in the system! Flyweights must be enforced as strictly immutable records.",
+          "bullets": [
+            "Mutable State Bleed: Never store extrinsic context in flyweight instance fields; always pass it into methods as parameters.",
+            "Cache Memory Leaks: If the Flyweight Factory creates unique flyweights for unbounded dynamic keys without eviction or weak references, the factory itself will leak memory.",
+            "CPU vs RAM Trade-Off: Passing extrinsic parameters through multiple call stacks slightly increases CPU register usage to achieve dramatic memory savings."
+          ]
+        },
+        {
+          "heading": "4. Production Blueprint: High-Scale Financial Market Depth & Particle Engine in Java 21",
+          "body": "The following production Java implementation demonstrates an ultra-high throughput Market Order Particle simulator sharing immutable instrument metadata across millions of tick records.",
+          "bullets": [
+            "InstrumentMetadata (Flyweight): Immutable shareable financial product specifications.",
+            "FlyweightFactory: Concurrent registry deduplicating market symbols.",
+            "MarketTick (Context): Ultra-lightweight record holding timestamp, price, and flyweight reference."
+          ],
+          "codeSnippet": {
+            "title": "Production Flyweight Financial Order Book in Java 21",
+            "code": "// 1. The Flyweight (Immutable, Intrinsic State)\npublic record InstrumentMetadata(\n    String symbol,\n    String exchange,\n    Currency currency,\n    BigDecimal tickSize\n) {\n    public void printMarketDepth(long priceInCents, int quantity, long timestamp) {\n        // Extrinsic state passed dynamically as arguments\n        System.out.printf(\"[%s] %s: %d units @ %s (Exchange: %s)%n\",\n            Instant.ofEpochMilli(timestamp),\n            symbol,\n            quantity,\n            new BigDecimal(priceInCents).movePointLeft(2),\n            exchange\n        );\n    }\n}\n\n// 2. Flyweight Factory\npublic class InstrumentFactory {\n    private static final Map<String, InstrumentMetadata> registry = new ConcurrentHashMap<>();\n\n    public static InstrumentMetadata getInstrument(String symbol, String exchange, Currency currency, BigDecimal tickSize) {\n        return registry.computeIfAbsent(symbol, s -> \n            new InstrumentMetadata(s, exchange, currency, tickSize)\n        );\n    }\n}\n\n// 3. Context Object (Lightweight Extrinsic State + Flyweight Pointer)\npublic record MarketTick(long timestamp, long priceInCents, int quantity, InstrumentMetadata instrument) {\n    public void display() {\n        instrument.printMarketDepth(priceInCents, quantity, timestamp);\n    }\n}"
+          }
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Flyweight Pattern",
+          "pros": "Saves massive amounts of heap memory; prevents JVM GC thrashing and Out-Of-Memory crashes.",
+          "cons": "Trades RAM for CPU cycles (passing extrinsic state on the fly); more complex architecture.",
+          "bestFor": "Game particle systems, UI text rendering engines, caching financial market order books."
+        },
+        {
+          "option": "Standard Fat Objects",
+          "pros": "Simple, highly self-contained objects; state and logic are bundled together.",
+          "cons": "Devours memory when scaling to millions of active instances.",
+          "bestFor": "Domain models with small instance counts (< 10,000)."
+        },
+        {
+          "option": "Object Pooling",
+          "pros": "Reuses mutable objects to avoid allocation costs; objects have exclusive ownership while checked out.",
+          "cons": "Requires checking objects in and out; concurrency contention on pool locks.",
+          "bestFor": "Heavyweight mutable resources like database socket connections or thread pools."
+        }
+      ],
+      "interviewTip": "In interviews, cite `Integer.valueOf(int)` as Java's built-in Flyweight: Java pre-allocates and caches `Integer` objects from -128 to 127 in memory. Calling `Integer.valueOf(5) == Integer.valueOf(5)` returns `true` because they point to the exact same shared Flyweight instance."
     }
   ]
 };

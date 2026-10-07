@@ -36,7 +36,7 @@ export interface CompanyProblem {
   title: string;
   company: string;
   companyCategory: string;
-  difficulty: "Foundational" | "Intermediate" | "Advanced" | "Staff+";
+  difficulty: "Foundational" | "Intermediate" | "Advanced" | "Expert";
   frequency: "Very High" | "High" | "Medium";
   summary: string;
   tags: string[];
@@ -103,7 +103,7 @@ export const COMPANY_PROBLEMS: CompanyProblem[] = [
     title: "Live Stream Interactive Comments & Reaction Broadcast (Instagram Live)",
     company: "Meta (Instagram)",
     companyCategory: "Meta",
-    difficulty: "Staff+",
+    difficulty: "Expert",
     frequency: "High",
     summary:
       "Design a live streaming chatroom supporting 100k+ concurrent viewers with hierarchical pub/sub broker trees, message rate sampling, and client backpressure flow control.",
@@ -131,7 +131,7 @@ export const COMPANY_PROBLEMS: CompanyProblem[] = [
     title: "Planet-Scale Video Upload, Transcoding & Delivery (YouTube)",
     company: "Google (YouTube)",
     companyCategory: "Google",
-    difficulty: "Staff+",
+    difficulty: "Expert",
     frequency: "Very High",
     summary:
       "Design planet-scale video upload pipelines, DAG-based GOP chunk parallel transcoding, Adaptive Bitrate (ABR) streaming via HLS/DASH, and global Edge CDN distribution.",
@@ -183,7 +183,7 @@ export const COMPANY_PROBLEMS: CompanyProblem[] = [
     title: "Planet-Scale TSDB Metrics & Logging Platform (Monarch / Borg)",
     company: "Google (Monarch / Borg)",
     companyCategory: "Google",
-    difficulty: "Staff+",
+    difficulty: "Expert",
     frequency: "High",
     summary:
       "Designing a planet-scale observability engine featuring Gorilla XOR floating-point TSDB compression, inverted label index posting lists, and streaming alert evaluation.",
@@ -196,7 +196,7 @@ export const COMPANY_PROBLEMS: CompanyProblem[] = [
     title: "Distributed Planet-Scale Web Crawler & Indexer (Googlebot)",
     company: "Google",
     companyCategory: "Google",
-    difficulty: "Staff+",
+    difficulty: "Expert",
     frequency: "High",
     summary:
       "Design a planetary web crawler: URL frontier with politeness constraints, DNS resolution cache, Robottxt evaluation, content deduplication using SimHash, and distributed worker queues.",
@@ -211,7 +211,7 @@ export const COMPANY_PROBLEMS: CompanyProblem[] = [
     title: "Flash-Sale E-Commerce Checkout & Inventory (Amazon Prime Day)",
     company: "Amazon",
     companyCategory: "Amazon",
-    difficulty: "Staff+",
+    difficulty: "Expert",
     frequency: "Very High",
     summary:
       "Amazon Prime Day checkout architecture: Saga Orchestration, Striped inventory slots for flash-sale stock decrement, immutable price snapshots, and payment handoffs.",
@@ -278,7 +278,7 @@ export const COMPANY_PROBLEMS: CompanyProblem[] = [
     title: "Real-Time Geospatial Ride Matching & Dispatch (Uber)",
     company: "Uber",
     companyCategory: "Uber",
-    difficulty: "Staff+",
+    difficulty: "Expert",
     frequency: "Very High",
     summary:
       "Designing a real-time geospatial ride-dispatch engine with Uber H3 hexagonal hierarchical spatial indexing, real-time driver telemetry streams, and transactional driver locking.",
@@ -291,7 +291,7 @@ export const COMPANY_PROBLEMS: CompanyProblem[] = [
     title: "Real-Time Dynamic Surge Pricing Engine (Uber / Lyft)",
     company: "Uber / Lyft",
     companyCategory: "Uber",
-    difficulty: "Staff+",
+    difficulty: "Expert",
     frequency: "High",
     summary:
       "Design an automated dynamic pricing engine calculating supply/demand imbalances aggregated across H3 hexagonal spatial buckets over 15-second sliding windows.",
@@ -317,7 +317,7 @@ export const COMPANY_PROBLEMS: CompanyProblem[] = [
     title: "Real-Time Food Delivery Dispatch & Courier Batching (UberEats)",
     company: "Uber (UberEats)",
     companyCategory: "Uber",
-    difficulty: "Staff+",
+    difficulty: "Expert",
     frequency: "High",
     summary:
       "Three-sided marketplace orchestration: customer ordering, restaurant prep scheduling, and multi-order courier route batching with dynamic delivery windows.",
@@ -332,7 +332,7 @@ export const COMPANY_PROBLEMS: CompanyProblem[] = [
     title: "Global Video Transcoding & Open Connect CDN Delivery",
     company: "Netflix",
     companyCategory: "Netflix",
-    difficulty: "Staff+",
+    difficulty: "Expert",
     frequency: "Very High",
     summary:
       "High-scale media asset processing: parallelized chunk encoding, per-title bitrate ladders, Open Connect storage appliances, and resilient edge delivery.",
@@ -373,7 +373,7 @@ export const COMPANY_PROBLEMS: CompanyProblem[] = [
     title: "Apple Push Notification service for Billions of Devices (APNs)",
     company: "Apple",
     companyCategory: "Apple",
-    difficulty: "Staff+",
+    difficulty: "Expert",
     frequency: "Very High",
     summary:
       "Design a planetary notification broker maintaining persistent TLS connections to billions of iOS/macOS devices with priority tiers, collapse keys, and battery efficiency.",
@@ -399,7 +399,7 @@ export const COMPANY_PROBLEMS: CompanyProblem[] = [
     title: "Global In-App Purchases, Digital Receipts & Billing (App Store)",
     company: "Apple",
     companyCategory: "Apple",
-    difficulty: "Staff+",
+    difficulty: "Expert",
     frequency: "High",
     summary:
       "Cryptographic receipt verification, double-entry ledger bookkeeping, developer revenue split calculation, and idempotent transaction processing with zero duplicates.",
@@ -453,7 +453,7 @@ export const COMPANY_PROBLEMS: CompanyProblem[] = [
     title: "Social Graph & 2nd-Degree Connection Traversals (LinkedIn Graph)",
     company: "LinkedIn",
     companyCategory: "LinkedIn",
-    difficulty: "Staff+",
+    difficulty: "Expert",
     frequency: "Very High",
     summary:
       "Design LinkedIn's connection graph: storing 1B+ professional relationships, sub-second bidirectional BFS 2nd/3rd-degree queries, and 'People You May Know' recommendations.",
@@ -494,7 +494,7 @@ export const COMPANY_PROBLEMS: CompanyProblem[] = [
     title: "Real-Time Trending Topics & Hashtags (Top-K Heavy Hitters)",
     company: "Twitter / X",
     companyCategory: "Twitter / X",
-    difficulty: "Staff+",
+    difficulty: "Expert",
     frequency: "Very High",
     summary:
       "Design a streaming pipeline to detect real-time trending topics and hashtags over 5-minute sliding windows with Count-Min Sketch, decay factors, and anti-spam filters.",
@@ -522,7 +522,7 @@ export const COMPANY_PROBLEMS: CompanyProblem[] = [
     title: "TikTok Short Video Personalized Feed & Real-Time Ranking",
     company: "ByteDance (TikTok)",
     companyCategory: "ByteDance",
-    difficulty: "Staff+",
+    difficulty: "Expert",
     frequency: "Very High",
     summary:
       "Design TikTok's 'For You' video feed: multi-stage recommendation architecture (Recall, Coarse Rank, Fine Rank), real-time watch-time feedback loops, and video pre-fetching.",
@@ -535,7 +535,7 @@ export const COMPANY_PROBLEMS: CompanyProblem[] = [
     title: "TikTok Live Stream Chat & Real-Time Comments (100k+ Viewers)",
     company: "ByteDance (TikTok)",
     companyCategory: "ByteDance",
-    difficulty: "Staff+",
+    difficulty: "Expert",
     frequency: "Very High",
     summary:
       "High-throughput live chat system during massive influencer broadcasts: message rate sampling, client backpressure, distributed broadcast pub/sub, and WebRTC streaming.",
@@ -589,7 +589,7 @@ export const COMPANY_PROBLEMS: CompanyProblem[] = [
     title: "Listing Availability Calendar & Dynamic Seasonal Pricing",
     company: "Airbnb",
     companyCategory: "Airbnb",
-    difficulty: "Staff+",
+    difficulty: "Expert",
     frequency: "High",
     summary:
       "High-scale availability calendar using bitmask representations per year, high-write host price rule updates, seasonal surge recalculations, and tier caching.",
@@ -604,7 +604,7 @@ export const COMPANY_PROBLEMS: CompanyProblem[] = [
     title: "Idempotent Double-Entry Payment Ledger & Billing Engine (Stripe)",
     company: "Stripe",
     companyCategory: "Stripe",
-    difficulty: "Staff+",
+    difficulty: "Expert",
     frequency: "Very High",
     summary:
       "Financial transaction engine: Idempotency keys, immutable double-entry bookkeeping ledger, Payment Service Provider (PSP) orchestration, and automated T+1 settlement reconciliation.",
@@ -645,7 +645,7 @@ export const COMPANY_PROBLEMS: CompanyProblem[] = [
     title: "Ultra-Low-Latency Stock Trading & Order Matching Engine",
     company: "Robinhood / Citadel / Zerodha",
     companyCategory: "Fintech",
-    difficulty: "Staff+",
+    difficulty: "Expert",
     frequency: "Very High",
     summary:
       "Design an ultra-low-latency electronic exchange with LMAX Disruptor lock-free ring buffers, single-threaded deterministic Limit Order Books, and Raft event journals.",
@@ -703,7 +703,7 @@ export const COMPANY_PROBLEMS: CompanyProblem[] = [
     title: "Distributed Time-Series Metric & Log Aggregation Engine (Datadog)",
     company: "Datadog / Prometheus",
     companyCategory: "Observability",
-    difficulty: "Staff+",
+    difficulty: "Expert",
     frequency: "Very High",
     summary:
       "Planet-scale metrics collector: Gorilla TSDB XOR floating-point compression, Lucene-style inverted label posting lists, distributed LSM log storage, and streaming threshold alerts.",
@@ -731,7 +731,7 @@ export const COMPANY_CATEGORIES = [
   "Observability",
 ];
 
-export const DIFFICULTY_LEVELS = ["All Levels", "Foundational", "Intermediate", "Advanced", "Staff+"];
+export const DIFFICULTY_LEVELS = ["All Levels", "Foundational", "Intermediate", "Advanced", "Expert"];
 
 export default function CompanyWiseProblemsPage() {
   const { mode, theme, toggleThemeMode } = useHandbookTheme();
@@ -1053,7 +1053,7 @@ export default function CompanyWiseProblemsPage() {
                             height: 22,
                             borderRadius: 1.5,
                             bgcolor:
-                              problem.difficulty === "Staff+"
+                              problem.difficulty === "Expert"
                                 ? "rgba(239, 68, 68, 0.15)"
                                 : problem.difficulty === "Advanced"
                                 ? "rgba(245, 158, 11, 0.15)"
@@ -1061,7 +1061,7 @@ export default function CompanyWiseProblemsPage() {
                                 ? "rgba(56, 189, 248, 0.15)"
                                 : "rgba(34, 197, 94, 0.15)",
                             color:
-                              problem.difficulty === "Staff+"
+                              problem.difficulty === "Expert"
                                 ? "#ef4444"
                                 : problem.difficulty === "Advanced"
                                 ? "#f59e0b"

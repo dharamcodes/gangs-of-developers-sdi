@@ -3,50 +3,82 @@
   "topicId": "behavioral-patterns",
   "topicTitle": "3. Behavioral Patterns",
   "topicNumber": 3,
-  "subtopicNumber": "3.10",
+  "subtopicNumber": "3.4",
   "title": "Template Method Pattern",
   "subtitle": "Defines the skeleton of an algorithm in an operation, deferring some steps to subclasses without changing the algorithm's structure.",
-  "readingTime": "7 min read",
-  "difficulty": "Foundational",
+  "readingTime": "8 min read",
+  "difficulty": "Intermediate",
   "keyTakeaways": [
-    "Defines an algorithm's invariant steps in a `final` base class method, allowing subclasses to override specific hook steps.",
-    "Enforces the 'Hollywood Principle' ('Don't call us, we'll call you'): the base class calls the subclass methods, never the reverse.",
-    "Underpins build automation pipelines (CI/CD), data miners (parse -> extract -> load), and Spring `JdbcTemplate`."
+    "Defines an invariant algorithmic workflow in a base class, allowing derived classes to customize specific primitive steps or hook methods.",
+    "Enforces the Hollywood Principle: 'Don't call us, we'll call you.' The parent class controls the execution flow, calling into the subclass hooks.",
+    "Found across framework base classes: Spring's `JdbcTemplate`, React class component lifecycles, and JUnit test fixtures."
   ],
   "architectureDiagram": "+-------------------------------------------------------------------------+\n|                      TEMPLATE METHOD UML CLASS MODEL                    |\n+-------------------------------------------------------------------------+\n                     +----------------------------------+\n                     |           <<abstract>>           |\n                     |         DataMiner (Base)         |\n                     +----------------------------------+\n                     | + mineData(): void {final}       |  <-- Invariant Skeleton\n                     | # openFile(): void               |\n                     | # extractData(): void {abstract} |  <-- Subclass Hook\n                     | # closeFile(): void              |\n                     +-----------------^----------------+\n                                       |\n             +-------------------------+-------------------------+\n             |                                                   |\n+------------+------------+                         +------------+------------+\n|      PdfDataMiner       |                         |       CsvDataMiner      |\n+-------------------------+                         +-------------------------+\n| # extractData(): PDF    |                         | # extractData(): CSV    |\n+-------------------------+                         +-------------------------+",
   "diagramImageUrl": "/diagrams/design-patterns/template-method-block.svg",
   "flowDiagramUrl": "/diagrams/design-patterns/template-method-flow.svg",
   "sections": [
     {
-      "heading": "Inversion of Control and Invariant Algorithm Skeletons",
-      "body": "When multiple classes implement the same algorithmic workflow with only small differences in specific steps (e.g. data mining pipelines where opening files and closing files is identical, but data parsing differs), duplicating the algorithm creates severe maintenance hazards. The Template Method marks the skeleton method `final` and leaves specific steps `abstract`.",
+      "heading": "1. Architectural Intent: Enforcing Algorithmic Invariants with Subclass Hooks",
+      "body": "In enterprise software, many business algorithms share an identical multi-step execution structure—such as reading a file, parsing its contents, validating records, persisting to a database, and closing resource handles. If every developer writes their own implementation, critical steps (like closing database connections or auditing failures) are frequently omitted. The Template Method pattern encapsulates the invariant algorithm skeleton into a final base method, leaving only domain-specific steps abstract.",
       "bullets": [
-        "DRY (Don't Repeat Yourself): Consolidates duplicate boilerplate workflow code into a single shared superclass.",
-        "Guaranteed Cleanup: Invariant steps like database connection closing, telemetry emission, or transaction commit are guaranteed to run.",
-        "Liskov Substitution Principle: Subclasses preserve the overarching behavior of the superclass while refining details."
+        "Hollywood Principle ('Don't call us, we'll call you'): The abstract parent class orchestrates the execution flow, calling subclass hooks as needed.",
+        "Code Duplication Elimination: Shared boilerplate (opening sockets, measuring latency, error recovery) is written exactly once in the base class.",
+        "Enforced Invariants: The template method is marked 'final' so subclasses cannot accidentally reorder or bypass security steps."
+      ],
+      "diagramImageUrl": "/diagrams/design-patterns/template-method-block.svg",
+      "flowDiagramUrl": "/diagrams/design-patterns/template-method-flow.svg"
+    },
+    {
+      "heading": "2. Hook Methods, Abstract Primitives & Inversion of Control",
+      "body": "A robust Template Method pattern utilizes three types of methods: 1) Abstract Primitives, which subclasses MUST implement; 2) Concrete Operations, which provide shared invariant logic and cannot be overridden; and 3) Hook Methods, which provide default empty or fallback behavior that subclasses MAY optionally override (e.g. shouldSendAlert() returning false by default).",
+      "bullets": [
+        "Abstract Primitives: Mandatory domain-specific steps that vary by implementation (e.g. parsePayload()).",
+        "Hook Methods: Optional interception points allowing subclasses to extend behavior without breaking base contracts.",
+        "Strict Invariant Guarantees: Steps such as auditing and security sanitization cannot be skipped by subclass authors."
+      ]
+    },
+    {
+      "heading": "3. Failure Modes: Fragile Base Class Pitfall & Inheritance Coupling",
+      "body": "The primary weakness of Template Method is its reliance on inheritance. Modifying the base class's template method can inadvertently break existing subclasses (the Fragile Base Class problem). Furthermore, subclasses are tightly coupled to the base class hierarchy: they cannot inherit from any other class in single-inheritance languages, and mocking base class dependencies during unit tests can be painful.",
+      "bullets": [
+        "Fragile Base Class: Changing the sequence of steps in the base class can silently corrupt subclasses that made assumptions about call order.",
+        "Inheritance Overhead: If a subclass only needs to customize one tiny step, forcing it to inherit an entire heavy base class is poor design; prefer Strategy composition if variations are purely algorithmic.",
+        "Liskov Substitution Violations: Subclasses overriding hooks must never throw unexpected exceptions that break the template method's contract."
+      ]
+    },
+    {
+      "heading": "4. Production Blueprint: Enterprise ETL Data Pipeline in Java 21",
+      "body": "The following production Java implementation showcases an enterprise ETL (Extract, Transform, Load) Pipeline using Template Method with optional hooks and resource cleanup.",
+      "bullets": [
+        "DataPipelineTemplate: Base class defining the final invariant process() algorithm.",
+        "CsvDataPipeline & JsonDataPipeline: Concrete subclasses customizing parsing and validation."
       ],
       "codeSnippet": {
-        "title": "ETL Pipeline Template Method in Java 21",
-        "code": "public abstract class EtlPipeline {\n    // The Template Method (sealed with final)\n    public final void runPipeline(String source) {\n        connect(source);\n        byte[] rawData = extract();\n        String transformed = transform(rawData);\n        load(transformed);\n        disconnect();\n    }\n\n    private void connect(String source) { System.out.println(\"Connecting to: \" + source); }\n    private void disconnect() { System.out.println(\"Disconnected cleanly.\"); }\n\n    // Abstract hooks for subclasses\n    protected abstract byte[] extract();\n    protected abstract String transform(byte[] rawData);\n    protected abstract void load(String processedData);\n}\n\npublic class S3EtlPipeline extends EtlPipeline {\n    @Override protected byte[] extract() { return \"s3_raw_bytes\".getBytes(); }\n    @Override protected String transform(byte[] raw) { return new String(raw).toUpperCase(); }\n    @Override protected void load(String data) { System.out.println(\"Loaded to Snowflake: \" + data); }\n}"
-      },
-      "flowDiagramUrl": "/diagrams/design-patterns/template-method-flow.svg",
-      "diagramImageUrl": "/diagrams/design-patterns/template-method-block.svg"
+        "title": "Production ETL Pipeline with Template Method in Java 21",
+        "code": "public abstract class DataPipelineTemplate {\n    // Invariant algorithm skeleton marked final to prevent tampering\n    public final void process(Path filePath) throws IOException {\n        System.out.println(\"[Pipeline] Starting data pipeline for: \" + filePath);\n        byte[] rawBytes = readFile(filePath);\n        List<String> records = parseRecords(rawBytes); // Abstract hook\n        validateRecords(records);                       // Abstract hook\n        \n        if (shouldSanitize()) {                         // Optional hook\n            records = sanitize(records);\n        }\n        \n        persistToDatabase(records);\n        auditPipelineCompletion(records.size());\n    }\n\n    private byte[] readFile(Path path) throws IOException {\n        return Files.readAllBytes(path);\n    }\n\n    private void persistToDatabase(List<String> records) {\n        System.out.printf(\"[Database] Persisting %d validated records%n\", records.size());\n    }\n\n    private void auditPipelineCompletion(int count) {\n        System.out.printf(\"[Audit] Pipeline finished. %d rows processed%n\", count);\n    }\n\n    // Abstract Primitive Operations (Mandatory for subclasses)\n    protected abstract List<String> parseRecords(byte[] rawData);\n    protected abstract void validateRecords(List<String> records);\n\n    // Hook Method (Optional override)\n    protected boolean shouldSanitize() { return false; }\n    protected List<String> sanitize(List<String> records) { return records; }\n}"
+      }
     }
   ],
   "tradeOffs": [
     {
-      "option": "Template Method Pattern",
-      "pros": "Eliminates duplicate workflow logic; guarantees invariant steps run in exact order.",
-      "cons": "Tightly bound by inheritance; subclasses cannot alter the ordering of steps.",
-      "bestFor": "Build systems, ETL pipelines, standard web request lifecycles."
+      "option": "Template Method",
+      "pros": "Enforces algorithm invariants, eliminates code duplication, provides structured hooks for extension.",
+      "cons": "Coupled via class inheritance; susceptible to the Fragile Base Class problem; harder to test.",
+      "bestFor": "Framework lifecycles, ETL pipelines, standard database access workflows (JdbcTemplate)."
     },
     {
-      "option": "Strategy Pattern with Composition",
-      "pros": "More flexible; steps can be swapped independently at runtime without subclassing.",
-      "cons": "Requires instantiating and coordinating multiple strategy objects.",
-      "bestFor": "Workflows where individual steps vary completely independently."
+      "option": "Strategy Pattern",
+      "pros": "Composition over inheritance; strategies can be swapped dynamically at runtime; trivial to mock.",
+      "cons": "Does not enforce an overarching step-by-step skeleton across multiple stages.",
+      "bestFor": "Swapping standalone interchangeable algorithms without shared multi-step lifecycle phases."
+    },
+    {
+      "option": "Duplicated Procedural Scripts",
+      "pros": "Completely independent code with zero inheritance hierarchies.",
+      "cons": "Severe code duplication; developers forget to implement security, auditing, or resource cleanup.",
+      "bestFor": "Throwaway test scripts."
     }
   ],
-  "interviewTip": "Be ready to explain the 'Hollywood Principle' ('Don't call us, we'll call you') in the context of Template Method vs Strategy: Template Method uses Inheritance (superclass calls subclass methods); Strategy uses Composition (context calls interface methods).",
+  "interviewTip": "When comparing Template Method vs Strategy in an interview, say: 'Template Method uses inheritance to vary parts of an algorithm while keeping the overall skeleton invariant at compile time. Strategy uses composition to vary an entire algorithm at runtime. In production, prefer Strategy unless you specifically need to mandate a strict multi-step invariant lifecycle (like a framework build pipeline).'",
   "jsonUrl": "/api/design-patterns/subtopics/behavioral-patterns/template-method.json"
 }

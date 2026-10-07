@@ -3,50 +3,83 @@
   "topicId": "structural-patterns",
   "topicTitle": "2. Structural Patterns",
   "topicNumber": 2,
-  "subtopicNumber": "2.7",
+  "subtopicNumber": "2.4",
   "title": "Proxy Pattern",
   "subtitle": "Provides a placeholder or surrogate for another object to control access to it.",
-  "readingTime": "7 min read",
+  "readingTime": "9 min read",
   "difficulty": "Intermediate",
   "keyTakeaways": [
     "Provides an identical interface to the target service while intercepting method calls to perform auxiliary concerns: lazy initialization, caching, access control, or remote networking.",
     "Canonical variants: Virtual Proxy (lazy loading), Protection Proxy (authorization), Remote Proxy (gRPC/RMI stubs), and Caching Proxy.",
     "Forms the foundational bedrock of Spring `@Transactional`, Hibernate lazy loading collections, and dynamic mock libraries (Mockito)."
   ],
-  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                          PROXY UML CLASS MODEL                          |\n+-------------------------------------------------------------------------+\n                       +-----------------------------+\n                       |        <<interface>>        |\n                       |       DatabaseService       |\n                       +-----------------------------+\n                       | + query(sql): List<Record>  |\n                       +--------------^--------------+\n                                      |\n              +-----------------------+-----------------------+\n              |                                               |\n+-------------+---------------+               +---------------+-------------+\n|    RealDatabaseService      |               |     CachingSecurityProxy    |\n+-----------------------------+               +-----------------------------+\n| + query(sql): [Heavy Disk]  |               | - realService: DbService    |\n+-----------------------------+               | - cache: Map<String, Cache> |\n                                              | + query(sql): auth & cache  |\n                                              +---------------+-------------+\n                                                              | delegates\n                                                              +-------> Real",
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                          PROXY UML CLASS MODEL                          |\n+-------------------------------------------------------------------------+\n                       +-----------------------------+\n                       |        <<interface>>        |\n                       |       DatabaseService       |\n                       +-----------------------------+\n                       | + query(sql): List<Record>  |\n                       +--------------^--------------+\n                                      |\n              +-----------------------+-----------------------+\n              |                                               |\n+-------------+-------------+                   +-------------+-------------+\n|    RealDatabaseService    |                   |    SecurityCachingProxy   |\n+---------------------------+                   +---------------------------+\n| + query(sql): List<Record>|                   | - realService: DbService  |\n+---------------------------+                   | - cache: Map<String, Res> |\n                                                | - userRole: Role          |\n                                                +---------------------------+\n                                                | + query(sql): checks auth |\n                                                |   checks cache -> real    |\n                                                +---------------------------+",
   "diagramImageUrl": "/diagrams/design-patterns/proxy-block.svg",
   "flowDiagramUrl": "/diagrams/design-patterns/proxy-flow.svg",
   "sections": [
     {
-      "heading": "Controlling Access, Lazy Loading, and Framework Interceptors",
-      "body": "Direct access to heavyweight resources (database connections, remote RPC servers, large video binaries) is dangerous without rate limiting, authorization, and caching. The Proxy pattern wraps the real service behind the exact same interface, intercepting requests to perform lifecycle management before and after delegating to the target object.",
+      "heading": "1. Architectural Intent: Controlled Access & Indirection Semantics",
+      "body": "The Proxy pattern introduces an intermediary surrogate that controls, restricts, or enhances access to an underlying target object without changing the target object's interface. While the Decorator pattern exists to add new responsibilities or features to an object, the Proxy pattern exists primarily to manage the lifecycle, security, network transport, or access costs of the underlying object.",
       "bullets": [
-        "Virtual Proxy: Defers the creation of expensive objects until the exact moment a method is invoked (e.g. Hibernate lazy loading of database child tables).",
-        "Protection Proxy: Verifies authorization credentials and security privileges prior to forwarding calls.",
-        "Open/Closed Principle: You can introduce caching, metric logging, and access control without modifying the actual service."
+        "Protection Proxy: Enforces role-based authorization (RBAC) before allowing calls to reach sensitive backend business logic.",
+        "Virtual Proxy: Defers the creation or loading of expensive objects (e.g. 50MB images, large dataset queries) until the moment a method is actually invoked.",
+        "Remote Proxy: Abstracts RPC/network boundaries, serializing method calls into JSON/Protobuf packets across the wire (e.g., gRPC client stubs).",
+        "Caching Proxy: Intercepts read queries and serves results directly from memory if cached."
+      ],
+      "diagramImageUrl": "/diagrams/design-patterns/proxy-block.svg",
+      "flowDiagramUrl": "/diagrams/design-patterns/proxy-flow.svg"
+    },
+    {
+      "heading": "2. Virtual, Protection, Caching, and Remote Proxy Mechanics",
+      "body": "At runtime, client code holds a reference typed to the Subject interface. When a method is called, the proxy intercepts the invocation. For a Virtual Proxy, if the real subject has not yet been initialized, the proxy instantiates it lazily on demand. For a Protection Proxy, it inspects security credentials and aborts execution if authorization fails. In Spring Boot, Spring creates dynamic proxies (via JDK dynamic proxies or ByteBuddy/CGLIB) to wrap beans with transaction management (@Transactional) and security checks (@PreAuthorize).",
+      "bullets": [
+        "JDK Dynamic Proxies: Generates proxy classes at runtime using java.lang.reflect.Proxy for any interface.",
+        "CGLIB / ByteBuddy: Generates proxy subclasses by subclassing concrete classes directly, bypassing the requirement for an interface.",
+        "Lazy Loading Lifecycle: The client remains completely agnostic to whether the underlying real subject is loaded in memory, situated in a remote cloud cluster, or lazily fetched."
+      ]
+    },
+    {
+      "heading": "3. Failure Modes: Self-Invocation Bypass in Spring AOP & LazyInitializationException",
+      "body": "The single most common bug in modern enterprise Java arises from misunderstanding Proxies. In Spring, if method A() calls method B() on the *same class* ('this.B()'), and B() is annotated with @Transactional or @Cacheable, the transaction or cache will NOT work! Because the call is internal via 'this', it completely bypasses the Spring proxy wrapper. Another classic proxy failure is Hibernate's LazyInitializationException when accessing a lazy proxy after the database session has closed.",
+      "bullets": [
+        "Spring AOP Self-Invocation Pitfall: Internal method calls do not pass through the dynamic proxy; @Transactional annotations on internal calls are silently ignored.",
+        "Hibernate LazyInitializationException: Occurs when accessing a Virtual Proxy entity outside the active persistence context/transaction boundary.",
+        "Memory Leaks in Caching Proxies: Proxies that cache method return values without an eviction policy (LRU / TTL) will eventually trigger JVM Out-Of-Memory errors."
+      ]
+    },
+    {
+      "heading": "4. Production Blueprint: Dynamic Caching & Security Proxy in Java 21",
+      "body": "The following production Java implementation showcases a Caching and Protection Proxy safeguarding an expensive database service with role-based access control and LRU result caching.",
+      "bullets": [
+        "DatabaseService Contract: Interface implemented by both real database and proxy.",
+        "CachingSecurityProxy: Validates caller permissions and intercepts queries via concurrent cache."
       ],
       "codeSnippet": {
-        "title": "Production Caching & Lazy-Loading Proxy in Java 21",
-        "code": "public interface VideoService {\n    byte[] fetchVideo(String videoId);\n}\n\n// Heavy Real Service\npublic class HeavyVideoService implements VideoService {\n    public HeavyVideoService() {\n        System.out.println(\"Initializing expensive cloud connection...\");\n    }\n    @Override public byte[] fetchVideo(String videoId) {\n        System.out.println(\"Downloading 500MB from S3: \" + videoId);\n        return new byte[]{0x1, 0x2, 0x3};\n    }\n}\n\n// The Proxy\npublic class CachingVideoProxy implements VideoService {\n    private VideoService realService; // Lazy-loaded reference\n    private final Map<String, byte[]> cache = new ConcurrentHashMap<>();\n\n    @Override\n    public byte[] fetchVideo(String videoId) {\n        // Fast-path: In-memory cache hit\n        byte[] cached = cache.get(videoId);\n        if (cached != null) {\n            System.out.println(\"Returning cached video for: \" + videoId);\n            return cached;\n        }\n\n        // Lazy initialization of heavy real service\n        if (realService == null) {\n            realService = new HeavyVideoService();\n        }\n\n        byte[] video = realService.fetchVideo(videoId);\n        cache.put(videoId, video);\n        return video;\n    }\n}"
-      },
-      "flowDiagramUrl": "/diagrams/design-patterns/proxy-flow.svg",
-      "diagramImageUrl": "/diagrams/design-patterns/proxy-block.svg"
+        "title": "Production Caching & Security Proxy in Java 21",
+        "code": "public interface DatabaseService {\n    String query(String sql);\n}\n\n// Real Subject (Expensive Resource)\npublic class PostgresDatabaseService implements DatabaseService {\n    public PostgresDatabaseService() {\n        System.out.println(\"[Postgres] Heavy connection pool initialized\");\n    }\n\n    @Override\n    public String query(String sql) {\n        System.out.println(\"[Postgres] Executing SQL over TCP: \" + sql);\n        return \"Records for [\" + sql + \"]\";\n    }\n}\n\n// Protection and Caching Proxy\npublic class CachingSecurityProxy implements DatabaseService {\n    private final DatabaseService realService;\n    private final Map<String, String> cache = new ConcurrentHashMap<>();\n    private final Set<String> authorizedRoles;\n\n    public CachingSecurityProxy(DatabaseService realService, Set<String> authorizedRoles) {\n        this.realService = Objects.requireNonNull(realService);\n        this.authorizedRoles = Set.copyOf(authorizedRoles);\n    }\n\n    @Override\n    public String query(String sql) {\n        // 1. Protection Proxy: Security Check\n        String currentRole = SecurityContext.getCurrentRole();\n        if (!authorizedRoles.contains(currentRole)) {\n            throw new SecurityException(\"Access denied for role: \" + currentRole);\n        }\n\n        // 2. Caching Proxy: Memory Lookup\n        return cache.computeIfAbsent(sql, queryKey -> {\n            System.out.println(\"[Proxy] Cache miss. Delegating to real subject...\");\n            return realService.query(queryKey);\n        });\n    }\n}"
+      }
     }
   ],
   "tradeOffs": [
     {
       "option": "Proxy Pattern",
-      "pros": "Manages heavy object lifecycles; enables transparent security, caching, and lazy loading.",
-      "cons": "Introduces response latency for interceptor checks; multiple proxy layers can obscure debugging.",
-      "bestFor": "Hibernate entity lazy loading, Spring AOP transaction interceptors, RPC network stubs."
+      "pros": "Separates security, caching, and network mechanics from business logic; enables lazy loading.",
+      "cons": "Introduces latency overhead; debugging dynamic proxies can produce confusing stack traces.",
+      "bestFor": "Hibernate lazy loading, Spring declarative transactions, API rate limiting, remote RPC stubs."
     },
     {
-      "option": "Direct Object Access",
-      "pros": "Maximum direct execution speed with zero wrapper overhead.",
-      "cons": "Eager initialization wastes memory; zero centralized enforcement of security or caching policies.",
-      "bestFor": "Lightweight local utility classes and pure value records."
+      "option": "Direct Object Invocations",
+      "pros": "Zero indirection, crystal clear stack traces, trivial to step-debug.",
+      "cons": "Couples business logic directly with security, network, and caching code.",
+      "bestFor": "Pure domain entities without cross-cutting security or remote requirements."
+    },
+    {
+      "option": "Decorator Pattern",
+      "pros": "Focuses on dynamically augmenting or modifying the behavior of the component.",
+      "cons": "Does not typically manage the lifecycle or restrict access to the target object.",
+      "bestFor": "Stream transformations, middleware interceptor pipelines."
     }
   ],
-  "interviewTip": "Distinguish Proxy from Decorator: Although both wrap an object and implement the same interface, their INTENT is fundamentally different. Decorator enhances or adds new behaviors; Proxy controls access to the underlying object (managing its lifecycle, access permissions, or network communication).",
+  "interviewTip": "When interviewers ask 'How does Spring @Transactional work under the hood?', explain: 'Spring wraps the bean in a dynamic proxy (JDK dynamic proxy if interface-based, or CGLIB subclass). When a client calls a transactional method, the proxy intercepts the call, begins a JDBC transaction, delegates to the target method, and commits or rolls back based on exceptions. This is also why calling another transactional method on the same class via `this` bypasses the transaction!'",
   "jsonUrl": "/api/design-patterns/subtopics/structural-patterns/proxy.json"
 }

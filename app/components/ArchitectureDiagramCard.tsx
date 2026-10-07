@@ -51,7 +51,16 @@ export default function ArchitectureDiagramCard({
     ? "flow"
     : "ascii";
 
-  const [activeTab, setActiveTab] = useState<TabMode>(defaultTab);
+  const [selectedTab, setSelectedTab] = useState<TabMode | null>(null);
+  const [prevKey, setPrevKey] = useState<string>(`${diagramImageUrl || ""}_${flowDiagramUrl || ""}`);
+
+  const currentKey = `${diagramImageUrl || ""}_${flowDiagramUrl || ""}`;
+  if (prevKey !== currentKey) {
+    setPrevKey(currentKey);
+    setSelectedTab(null);
+  }
+
+  const activeTab: TabMode = selectedTab ?? defaultTab;
   const [zoomOpen, setZoomOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -174,7 +183,7 @@ export default function ArchitectureDiagramCard({
               {hasBlockImage && (
                 <Button
                   className={activeTab === "block" ? "active-tab" : ""}
-                  onClick={() => setActiveTab("block")}
+                  onClick={() => setSelectedTab("block")}
                   startIcon={<AccountTreeOutlinedIcon sx={{ fontSize: "14px !important" }} />}
                 >
                   Topology
@@ -184,7 +193,7 @@ export default function ArchitectureDiagramCard({
               {hasFlowImage && (
                 <Button
                   className={activeTab === "flow" ? "active-tab" : ""}
-                  onClick={() => setActiveTab("flow")}
+                  onClick={() => setSelectedTab("flow")}
                   startIcon={<AltRouteOutlinedIcon sx={{ fontSize: "14px !important" }} />}
                 >
                   Execution Flow
@@ -194,7 +203,7 @@ export default function ArchitectureDiagramCard({
               {hasAscii && (
                 <Button
                   className={activeTab === "ascii" ? "active-tab" : ""}
-                  onClick={() => setActiveTab("ascii")}
+                  onClick={() => setSelectedTab("ascii")}
                   startIcon={<TerminalRoundedIcon sx={{ fontSize: "14px !important" }} />}
                 >
                   ASCII Art

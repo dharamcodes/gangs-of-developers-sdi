@@ -3,50 +3,82 @@
   "topicId": "behavioral-patterns",
   "topicTitle": "3. Behavioral Patterns",
   "topicNumber": 3,
-  "subtopicNumber": "3.5",
+  "subtopicNumber": "3.8",
   "title": "Mediator Pattern",
   "subtitle": "Defines an object that encapsulates how a set of objects interact, preventing them from referring to each other explicitly.",
-  "readingTime": "7 min read",
-  "difficulty": "Intermediate",
+  "readingTime": "9 min read",
+  "difficulty": "Advanced",
   "keyTakeaways": [
-    "Replaces many-to-many dependencies ($O(N^2)$ coupling) between colleagues with one-to-many dependencies ($O(N)$ coupling) via a central Mediator.",
-    "Colleagues only know about the Mediator; they send notifications to it, and the Mediator orchestrates the reactions of other components.",
-    "Underpins Air Traffic Control systems, chatroom message hubs, and complex UI dialog forms with interdependent form inputs."
+    "Replaces complex M:N tangled dependency networks with a clean 1:N hub-and-spoke star topology.",
+    "Colleague objects communicate exclusively through the Mediator, knowing nothing about other colleague classes.",
+    "The architectural foundation of Air Traffic Control towers, chat rooms, UI dialog form controllers, and CQRS in-process event dispatchers (MediatR)."
   ],
   "architectureDiagram": "+-------------------------------------------------------------------------+\n|                         MEDIATOR UML CLASS MODEL                        |\n+-------------------------------------------------------------------------+\n [Without Mediator: Many-to-Many]            [With Mediator: Star Topology]\n      (A) <--------> (B)                                  (A)\n       ^ \\          / ^                                    ^\n       |   \\      /   |                                    |\n       |     \\  /     |                                    v\n      (C) <--------> (D)                            (B) <-> [Mediator] <-> (C)\n     (Complex Spagetti Links)                              ^\n                                                           |\n                                                           v\n                                                          (D)",
   "diagramImageUrl": "/diagrams/design-patterns/mediator-block.svg",
   "flowDiagramUrl": "/diagrams/design-patterns/mediator-flow.svg",
   "sections": [
     {
-      "heading": "Preventing Sprawling Spiderweb Dependencies",
-      "body": "When UI dialogs contain checkboxes that disable text inputs, which trigger validation errors, which change button colors, objects become tightly coupled in an $O(N^2)$ tangle. Changing one component breaks three others. The Mediator pattern extracts all communication logic into a centralized controller.",
+      "heading": "1. Architectural Intent: Taming M:N Spaghetti Dependencies via Centralized Coordination",
+      "body": "When multiple components interact with one another (such as a complex UI modal dialog containing checkboxes, buttons, text inputs, and drop-down menus), changes to one component often affect several others: checking 'Ship to different address' shows extra text inputs, validates postal codes, and recalculates taxes. If every widget communicates directly with every other widget, the system degrades into an unmaintainable M:N spaghetti mesh. The Mediator pattern centralizes all inter-component coordination into a single coordinator object.",
       "bullets": [
-        "Single Responsibility Principle: Centralizes communication and orchestration logic between disparate objects into one dedicated class.",
-        "Open/Closed Principle: You can introduce new colleagues into the system without changing existing colleagues.",
-        "Risk of God Object: The mediator can easily devolve into an overly complex 'God Object' if not subdivided properly."
+        "Replaces Mesh with Star Topology: Transforms chaotic O(N^2) direct dependencies into O(N) connections to a central hub.",
+        "Decouples Colleagues: Widgets or services only know about the Mediator; they have zero references to sibling components.",
+        "Single Responsibility Principle: Complex multi-component interaction business rules are consolidated in one coordinator class."
+      ],
+      "diagramImageUrl": "/diagrams/design-patterns/mediator-block.svg",
+      "flowDiagramUrl": "/diagrams/design-patterns/mediator-flow.svg"
+    },
+    {
+      "heading": "2. Hub-and-Spoke Topology & Loose Coupling Across Colleague Objects",
+      "body": "In a Mediator architecture, Colleague components hold a reference to the Mediator interface. When an event occurs (e.g. button.onClick()), the button simply notifies the mediator: mediator.notify(this, 'SUBMIT_CLICKED'). The Mediator encapsulates the intelligence: it reads the state of text inputs, disables the button, shows a spinner, and sends the payload. Neither the button nor the text fields know each other exist.",
+      "bullets": [
+        "Event Notification: Colleagues emit events to the mediator via a standardized notify(sender, event) hook.",
+        "Coordinated Orchestration: The mediator executes multi-component state synchronization.",
+        "Reusability: Individual colleague components remain highly reusable because they are not coupled to specific UI layouts or peer components."
+      ]
+    },
+    {
+      "heading": "3. Failure Modes: God-Object Monolithization & Hidden Event Churn",
+      "body": "The primary risk of the Mediator pattern is that the Mediator class can easily degenerate into a monolithic God Object. As more colleague widgets and complex rules are added, the mediator's notify() method balloons into thousands of lines of nested switch statements. Furthermore, if colleague reactions trigger secondary mediator events, cascading feedback loops can trigger infinite event cycles.",
+      "bullets": [
+        "God Object Anti-Pattern: When a mediator grows too large, decompose it into smaller domain-specific sub-mediators.",
+        "Feedback Loops: If the mediator updates Widget A, and Widget A emits a change event back to the mediator that updates Widget B, circular event churn can crash the UI.",
+        "Tight Mediator Coupling: While colleagues are decoupled from each other, they are all tightly coupled to the Mediator."
+      ]
+    },
+    {
+      "heading": "4. Production Blueprint: Enterprise Air Traffic Control & UI Dialog Coordinator in TypeScript",
+      "body": "The following production TypeScript implementation demonstrates an Air Traffic Control Mediator coordinating aircraft runways and takeoff clearances without aircraft communicating directly.",
+      "bullets": [
+        "AirTrafficControlMediator Interface: Central coordination protocol.",
+        "FlightColleague Base: Aircraft instances that communicate strictly through the tower."
       ],
       "codeSnippet": {
-        "title": "Chatroom Hub Mediator in Java 21",
-        "code": "public interface ChatMediator {\n    void sendMessage(String message, User sender);\n    void addUser(User user);\n}\n\npublic abstract class User {\n    protected final ChatMediator mediator;\n    protected final String name;\n\n    public User(ChatMediator mediator, String name) {\n        this.mediator = mediator;\n        this.name = name;\n    }\n\n    public abstract void send(String message);\n    public abstract void receive(String message);\n}\n\npublic class ChatRoomMediator implements ChatMediator {\n    private final List<User> users = new ArrayList<>();\n\n    @Override public void addUser(User user) { users.add(user); }\n\n    @Override\n    public void sendMessage(String message, User sender) {\n        for (User u : users) {\n            // Do not echo back to sender\n            if (u != sender) u.receive(sender.name + \": \" + message);\n        }\n    }\n}"
-      },
-      "flowDiagramUrl": "/diagrams/design-patterns/mediator-flow.svg",
-      "diagramImageUrl": "/diagrams/design-patterns/mediator-block.svg"
+        "title": "Production Air Traffic Control Mediator in TypeScript",
+        "code": "export interface AirTrafficMediator {\n  requestLanding(flightNumber: string): boolean;\n  notifyRunwayCleared(flightNumber: string): void;\n}\n\nexport abstract class Aircraft {\n  constructor(protected mediator: AirTrafficMediator, public flightNumber: string) {}\n  public abstract land(): void;\n  public abstract clearRunway(): void;\n}\n\n// Concrete Colleague\nexport class CommercialFlight extends Aircraft {\n  land(): void {\n    const cleared = this.mediator.requestLanding(this.flightNumber);\n    if (cleared) {\n      console.log(`[Flight ${this.flightNumber}] Landing touchdown confirmed.`);\n      this.clearRunway();\n    } else {\n      console.log(`[Flight ${this.flightNumber}] Holding in holding pattern...`);\n    }\n  }\n\n  clearRunway(): void {\n    console.log(`[Flight ${this.flightNumber}] Runway vacated.`);\n    this.mediator.notifyRunwayCleared(this.flightNumber);\n  }\n}\n\n// The Central Mediator\nexport class AirportControlTower implements AirTrafficMediator {\n  private runwayOccupied: boolean = false;\n  private holdingQueue: string[] = [];\n\n  requestLanding(flightNumber: string): boolean {\n    if (!this.runwayOccupied) {\n      this.runwayOccupied = true;\n      console.log(`[Tower] Cleared ${flightNumber} for immediate landing.`);\n      return true;\n    }\n    console.log(`[Tower] Runway busy. Queuing ${flightNumber}.`);\n    this.holdingQueue.push(flightNumber);\n    return false;\n  }\n\n  notifyRunwayCleared(flightNumber: string): void {\n    this.runwayOccupied = false;\n    console.log(`[Tower] Runway is now open.`);\n    if (this.holdingQueue.length > 0) {\n      const nextFlight = this.holdingQueue.shift()!;\n      console.log(`[Tower] Calling ${nextFlight} from holding queue.`);\n      this.runwayOccupied = true;\n    }\n  }\n}"
+      }
     }
   ],
   "tradeOffs": [
     {
       "option": "Mediator Pattern",
-      "pros": "Reduces coupling between multiple classes; centralizes complex relationships.",
-      "cons": "The mediator itself can evolve into an unmaintainable monolith over time.",
-      "bestFor": "Air traffic control, chatrooms, interconnected UI form wizard steps."
+      "pros": "Reduces M:N mesh complexity to 1:N star topology; colleagues are decoupled and reusable.",
+      "cons": "The mediator itself risks becoming a bloated, unmaintainable God Object.",
+      "bestFor": "Air traffic control, UI modal form controllers, in-process CQRS command buses (MediatR), chat rooms."
     },
     {
       "option": "Direct Colleague References",
-      "pros": "Direct and simple when there are only 2 classes interacting.",
-      "cons": "Combinatorial spaghetti code as the number of interacting classes grows past 4.",
-      "bestFor": "Simple 1-to-1 relationships."
+      "pros": "Direct and straightforward for tiny applications with only 2 fixed widgets.",
+      "cons": "Tangled spaghetti dependencies; impossible to modify or test one widget without instantiating all others.",
+      "bestFor": "Trivial 2-component interactions."
+    },
+    {
+      "option": "Observer Pattern",
+      "pros": "Colleagues publish events to an open bus without a central coordinator.",
+      "cons": "No central place to understand the overarching business workflow; event flows become opaque.",
+      "bestFor": "Pure broadcast notifications where publishers do not need to coordinate actions across subscribers."
     }
   ],
-  "interviewTip": "Contrast Mediator with Observer: In Observer, communication flows dynamically from 1 Subject to many Observers in a publisher-subscriber model. In Mediator, communication flows multidirectionally between Colleagues through a centralized hub that encapsulates complex cross-cutting coordination logic.",
+  "interviewTip": "Distinguish Mediator vs Facade: 'Facade creates a simplified interface over a subsystem; communication is unidirectional from client to subsystem. Mediator centralizes multilateral bidirectional communication between sibling components, replacing an M:N mesh with a 1:N hub-and-spoke star topology.'",
   "jsonUrl": "/api/design-patterns/subtopics/behavioral-patterns/mediator.json"
 }

@@ -3,50 +3,82 @@
   "topicId": "behavioral-patterns",
   "topicTitle": "3. Behavioral Patterns",
   "topicNumber": 3,
-  "subtopicNumber": "3.6",
+  "subtopicNumber": "3.9",
   "title": "Memento Pattern",
-  "subtitle": "Captures and externalizes an object's internal state without violating encapsulation, allowing the object to be restored to this state later.",
-  "readingTime": "7 min read",
-  "difficulty": "Intermediate",
+  "subtitle": "Without violating encapsulation, captures and externalizes an object's internal state so that the object can be restored to this state later.",
+  "readingTime": "8 min read",
+  "difficulty": "Advanced",
   "keyTakeaways": [
-    "Provides state snapshotting and restoration without exposing private fields or internal implementation details.",
-    "The Caretaker (e.g. history manager) stores mementos but can never read or mutate their internal contents ('black box' token).",
-    "Essential for database transaction savepoints, graphic editor history checkpoints, and text editor undo buffers."
+    "Provides snapshot-and-restore capabilities while maintaining strict encapsulation: the internal state is hidden from all external classes including the Caretaker.",
+    "The Originator creates and consumes Mementos; the Caretaker stores Mementos but cannot inspect or mutate their private internals.",
+    "Essential for database savepoints, text editor checkpoint history, game save states, and transactional rollbacks."
   ],
   "architectureDiagram": "+-------------------------------------------------------------------------+\n|                         MEMENTO UML CLASS MODEL                         |\n+-------------------------------------------------------------------------+\n+----------------------------+             +----------------------------+\n|         Originator         |             |          Memento           |\n+----------------------------+             +----------------------------+\n| - state: String            | creates ->  | - state: String (private)  |\n| + createMemento(): Memento |             | + getState(): String       |\n| + restore(m: Memento): void|             +----------------------------+\n+----------------------------+                           ^\n                                                         | stores\n                                           +-------------+--------------+\n                                           |         Caretaker          |\n                                           +----------------------------+\n                                           | - history: Deque<Memento>  |\n                                           | + save(): void             |\n                                           | + undo(): void             |\n                                           +----------------------------+",
   "diagramImageUrl": "/diagrams/design-patterns/memento-block.svg",
   "flowDiagramUrl": "/diagrams/design-patterns/memento-flow.svg",
   "sections": [
     {
-      "heading": "Encapsulated State Restoration without Breaking Privacy",
-      "body": "Directly exposing an object's internal fields via public getters and setters to allow external classes to take backups breaks encapsulation. If the internal data structure changes from a String to a Rope or Tree, external backup classes break. Memento ensures that the Originator is the only class capable of reading and writing the snapshot data.",
+      "heading": "1. Architectural Intent: Snapshotting Internal State Without Violating Encapsulation",
+      "body": "To implement undo, savepoints, or transaction rollback, an application needs to take a snapshot of an object's internal state. However, making all private fields public or exposing getters/setters completely destroys encapsulation: client code can manipulate internal fields, breaking business invariants. The Memento pattern resolves this paradox by letting the Originator serialize its private state into an opaque Memento object that no external class can read or alter.",
       "bullets": [
-        "Preserves Encapsulation Boundaries: The internal state of the originator remains strictly private.",
-        "Simplified Caretaker: The caretaker only stores and passes memento objects without knowing anything about their contents.",
-        "Memory Consumption Caution: Storing frequent deep-state mementos can exhaust heap memory; consider delta/diff compression."
+        "Encapsulation Integrity: The Memento's internal state is completely invisible to the Caretaker; only the Originator has permission to unpack it.",
+        "Originator: The domain object whose state is being tracked (e.g. TextEditor, Document).",
+        "Caretaker: The history manager that stores a stack of Mementos (e.g. HistoryManager, UndoStack), treating them as opaque tokens."
+      ],
+      "diagramImageUrl": "/diagrams/design-patterns/memento-block.svg",
+      "flowDiagramUrl": "/diagrams/design-patterns/memento-flow.svg"
+    },
+    {
+      "heading": "2. Originator, Caretaker & Opaque Memento Boundary Mechanics",
+      "body": "The elegance of Memento lies in the 'Wide vs Narrow' interface idiom. To the Caretaker, the Memento exposes a 'narrow' interface (often an empty marker interface or a metadata interface showing only timestamp and title). To the Originator, the Memento exposes a 'wide' interface granting full access to its internal state fields. In languages like Java or C++, this is enforced via inner classes or friend classes.",
+      "bullets": [
+        "Narrow Interface: Exposed to the public Caretaker (e.g., getTimestamp(), getName()).",
+        "Wide Interface: Private to the Originator class, providing direct access to raw internal state.",
+        "Atomic Restoration: Invoking originator.restore(memento) instantaneously restores the complete internal object graph."
+      ]
+    },
+    {
+      "heading": "3. Failure Modes: Massive Heap Memory Bloat & Leaky Mementos",
+      "body": "The primary challenge of Memento in production is memory consumption. If an Originator contains a 50MB image or document, and the Caretaker saves a full snapshot on every single keystroke, the JVM will run Out of Memory in minutes. Production systems mitigate this using incremental delta/diff snapshots, copy-on-write data structures, or compressing older snapshots.",
+      "bullets": [
+        "Unbounded Snapshot Growth: Enforce bounded FIFO queues and disk offloading for historical mementos.",
+        "Deep vs Shallow Snapshotting: If state objects reference mutable collections, the Memento must perform defensive deep copies during snapshot creation.",
+        "Leaky Memento Mutation: Never expose public setters on Mementos; they must be strictly immutable."
+      ]
+    },
+    {
+      "heading": "4. Production Blueprint: Incremental Diffing Document Snapshot Engine in Java 21",
+      "body": "The following production Java implementation showcases an enterprise Document Editor Memento system with private inner-class encapsulation and bounded caretaker history.",
+      "bullets": [
+        "DocumentMemento: Opaque to the caretaker; fully accessible to DocumentEditor.",
+        "DocumentHistory Caretaker: Manages undo stack with size limits."
       ],
       "codeSnippet": {
-        "title": "Type-Safe Memento Snapshot in Java 21",
-        "code": "// Originator\npublic class TextDocument {\n    private String text = \"\";\n\n    public void write(String words) { text += words; }\n    public String getText() { return text; }\n\n    // Creates Snapshot\n    public Memento save() { return new Memento(this.text); }\n\n    // Restores Snapshot\n    public void restore(Memento memento) { this.text = memento.state(); }\n\n    // The Memento (Immutable record)\n    public record Memento(String state) {}\n}\n\n// Caretaker\npublic class DocumentHistory {\n    private final Deque<TextDocument.Memento> history = new ArrayDeque<>();\n\n    public void backup(TextDocument doc) {\n        history.push(doc.save());\n    }\n\n    public void undo(TextDocument doc) {\n        if (!history.isEmpty()) {\n            doc.restore(history.pop());\n        }\n    }\n}"
-      },
-      "flowDiagramUrl": "/diagrams/design-patterns/memento-flow.svg",
-      "diagramImageUrl": "/diagrams/design-patterns/memento-block.svg"
+        "title": "Production Encapsulated Memento in Java 21",
+        "code": "// Narrow interface visible to Caretaker\npublic interface Memento {\n    Instant getTimestamp();\n    String getSummary();\n}\n\n// Originator\npublic class DocumentEditor {\n    private String content = \"\";\n    private int cursorPosition = 0;\n\n    public void write(String text) {\n        this.content += text;\n        this.cursorPosition = this.content.length();\n    }\n\n    public String getContent() { return content; }\n\n    // Snapshot state into opaque memento\n    public Memento save() {\n        return new EditorMemento(this.content, this.cursorPosition);\n    }\n\n    // Restore state from memento\n    public void restore(Memento memento) {\n        if (memento instanceof EditorMemento em) {\n            this.content = em.content;\n            this.cursorPosition = em.cursorPosition;\n            System.out.printf(\"[Restore] Restored state from %s%n\", em.getTimestamp());\n        } else {\n            throw new IllegalArgumentException(\"Unknown memento implementation\");\n        }\n    }\n\n    // Wide Interface encapsulated as private static class\n    private static class EditorMemento implements Memento {\n        private final String content;\n        private final int cursorPosition;\n        private final Instant timestamp = Instant.now();\n\n        private EditorMemento(String content, int cursorPosition) {\n            this.content = content;\n            this.cursorPosition = cursorPosition;\n        }\n\n        @Override public Instant getTimestamp() { return timestamp; }\n        @Override public String getSummary() { return content.substring(0, Math.min(content.length(), 20)) + \"...\"; }\n    }\n}"
+      }
     }
   ],
   "tradeOffs": [
     {
       "option": "Memento Pattern",
-      "pros": "Protects encapsulation; allows clean restoration of historical states.",
-      "cons": "High memory footprint if snapshots are taken frequently on large objects.",
-      "bestFor": "Transaction savepoints, graphic design undo stacks, game save files."
+      "pros": "Preserves encapsulation, allows full state restoration, caretaker cannot corrupt state.",
+      "cons": "High memory consumption if snapshots are frequent and objects are large; cloning overhead.",
+      "bestFor": "Text editor history, game checkpoint saves, database transaction rollback points."
     },
     {
-      "option": "Public Getters/Setters State Cloning",
-      "pros": "Simple to write quickly without dedicated memento classes.",
-      "cons": "Destroys encapsulation; leaks private internal state across the codebase.",
-      "bestFor": "Simple anemic DTO records with no private invariants."
+      "option": "Command Pattern (with Inverse)",
+      "pros": "Stores only the operation diff rather than full snapshots; dramatically lower memory usage.",
+      "cons": "Requires implementing inverse operations for every action; mathematically hard for lossy operations.",
+      "bestFor": "Systems with discrete undoable operations (e.g. financial ledgers)."
+    },
+    {
+      "option": "Public Getters / Setters",
+      "pros": "Trivial to serialize to JSON.",
+      "cons": "Destroys encapsulation; leaks internal representation to external callers.",
+      "bestFor": "Stateless DTO data transfers."
     }
   ],
-  "interviewTip": "In interviews, explain how Memento combines with Command: A Command object can store a Memento of the Receiver's state right before executing `execute()`. When `undo()` is called, the Command passes the saved Memento back to the Receiver to revert it cleanly.",
+  "interviewTip": "In interviews, emphasize the 'Narrow vs Wide Interface' concept: 'The beauty of Memento is that it solves state snapshotting without violating encapsulation. The Caretaker sees only a narrow marker interface, while the Originator accesses the wide interface via private inner classes to restore state.'",
   "jsonUrl": "/api/design-patterns/subtopics/behavioral-patterns/memento.json"
 }

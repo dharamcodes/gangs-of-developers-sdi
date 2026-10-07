@@ -115,7 +115,7 @@ export default function HomePageView() {
                     fontSize: { xs: "0.72rem", sm: "0.78rem" },
                   }}
                 >
-                  Gangs of Developers • Staff Engineering Knowledge Base
+                  Gangs of Developers • Distributed Systems & Architecture Knowledge Base
                 </Typography>
               </Box>
 
@@ -143,7 +143,7 @@ export default function HomePageView() {
                     display: "inline-block",
                   }}
                 >
-                  Think Like a Staff Engineer.
+                  Master Distributed Systems Design.
                 </Box>
               </Typography>
 
@@ -1134,7 +1134,7 @@ export default function HomePageView() {
                 <Tab icon={<HubRoundedIcon sx={{ fontSize: 18 }} />} iconPosition="start" label="1. Dual Architecture SVGs" />
                 <Tab icon={<TerminalRoundedIcon sx={{ fontSize: 18 }} />} iconPosition="start" label="2. ASCII Blueprint View" />
                 <Tab icon={<CompareArrowsRoundedIcon sx={{ fontSize: 18 }} />} iconPosition="start" label="3. Decision Matrix (Trade-Offs)" />
-                <Tab icon={<LightbulbOutlinedIcon sx={{ fontSize: 18 }} />} iconPosition="start" label="4. Staff+ Interview Pro-Tips" />
+                <Tab icon={<LightbulbOutlinedIcon sx={{ fontSize: 18 }} />} iconPosition="start" label="4. Interview Pro-Tips" />
               </Tabs>
             </Box>
 
@@ -1259,7 +1259,7 @@ export default function HomePageView() {
                       Architectural Decision Matrix
                     </Typography>
                     <Typography variant="body2" sx={{ color: "text.secondary", lineHeight: 1.7, mb: 2.5 }}>
-                      Staff-level engineers don&apos;t memorize buzzwords; they reason about trade-offs.
+                      Great systems engineers don&apos;t memorize buzzwords; they reason rigorously about trade-offs.
                       Every chapter features a 4-column matrix evaluating competing approaches,
                       their advantages, performance bottlenecks, and exact production recommendations.
                     </Typography>
@@ -1318,11 +1318,11 @@ export default function HomePageView() {
                   <Grid size={{ xs: 12, md: 5 }}>
                     <Chip label="INTERVIEW WAR ROOM" size="small" color="secondary" sx={{ fontWeight: 800, mb: 1.5 }} />
                     <Typography variant="h5" sx={{ fontWeight: 850, mb: 1.5 }}>
-                      Staff+ System Design Pro-Tips
+                      System Design Interview Pro-Tips
                     </Typography>
                     <Typography variant="body2" sx={{ color: "text.secondary", lineHeight: 1.7, mb: 2.5 }}>
                       Every chapter ends with an exact verbal script and architectural framing tip
-                      vetted by engineers who conduct L6/L7 system design loops at Google, Meta, and Uber.
+                      vetted by experienced engineers who conduct top-tier system design interview loops.
                     </Typography>
                     <Button
                       component={Link}
@@ -1450,7 +1450,7 @@ export default function HomePageView() {
                   <Box
                     component="img"
                     src="/author.jpg"
-                    alt="Dharam - Staff Software Engineer"
+                    alt="Dharam - Systems Architect & Engineer"
                     sx={{
                       width: 140,
                       height: 140,
@@ -1465,7 +1465,7 @@ export default function HomePageView() {
                     Dharam
                   </Typography>
                   <Typography variant="caption" sx={{ color: "primary.main", fontWeight: 750, display: "block" }}>
-                    Staff Software Engineer
+                    Systems Architect &amp; Engineer
                   </Typography>
                 </Grid>
 
@@ -1474,9 +1474,9 @@ export default function HomePageView() {
                     Curated by Practicing Systems Architects
                   </Typography>
                   <Typography variant="body2" sx={{ color: "text.secondary", lineHeight: 1.7, mb: 2.5 }}>
-                    Gangs of Developers is maintained by Dharmendra Awasthi (Dharam), a Staff Software Engineer
-                    specializing in distributed systems, high-throughput backend architecture, resilient event streaming,
-                    and technical leadership. No generated spam; only tested engineering wisdom.
+                    Gangs of Developers is maintained by Dharmendra Awasthi (Dharam), a Distributed Systems Engineer &amp; Architect
+                    specializing in high-throughput backend architecture, resilient event streaming, and large-scale data systems.
+                    No generated spam; only tested engineering wisdom.
                   </Typography>
 
                   <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
@@ -1552,7 +1552,7 @@ export default function HomePageView() {
               sx={{ color: "text.secondary", maxWidth: 620, mx: "auto", mb: 4, lineHeight: 1.7 }}
             >
               Join thousands of engineers who use Gangs of Developers to master distributed architectures,
-              excel in technical interviews, and grow into senior and staff-level roles. 100% free.
+              excel in technical interviews, and design resilient high-scale systems. 100% free.
             </Typography>
             <Stack
               direction={{ xs: "column", sm: "row" }}

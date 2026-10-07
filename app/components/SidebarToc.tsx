@@ -59,6 +59,26 @@ export default function SidebarToc({
   onSelectSubtopic,
 }: SidebarTocProps) {
   const isSearching = searchQuery.trim().length > 0;
+  const [difficultyFilter, setDifficultyFilter] = React.useState<string>("ALL");
+
+  const displayGroups = React.useMemo(() => {
+    if (difficultyFilter === "ALL") return filteredGroups;
+    return filteredGroups
+      .map((group) => {
+        const matchingSubtopics = group.subtopics.filter((sub) => {
+          if (!sub.difficulty) return false;
+          const diff = sub.difficulty.toLowerCase();
+          const target = difficultyFilter.toLowerCase();
+          if (target === "expert") return diff === "expert" || diff === "staff+";
+          return diff === target;
+        });
+        return {
+          ...group,
+          subtopics: matchingSubtopics,
+        };
+      })
+      .filter((group) => group.subtopics.length > 0);
+  }, [filteredGroups, difficultyFilter]);
 
   return (
     <Box
@@ -143,20 +163,75 @@ export default function SidebarToc({
             },
           }}
         />
+
+        {/* Difficulty Filter Chips (Easy -> Hard Progression) */}
+        <Stack
+          direction="row"
+          spacing={0.5}
+          sx={{
+            mt: 1.25,
+            overflowX: "auto",
+            pb: 0.25,
+            "&::-webkit-scrollbar": { display: "none" },
+          }}
+        >
+          {[
+            { id: "ALL", label: "All" },
+            { id: "Foundational", label: "🟢 Easy", color: "#10b981" },
+            { id: "Intermediate", label: "🔵 Medium", color: "#0284c7" },
+            { id: "Advanced", label: "🟣 Hard", color: "#8b5cf6" },
+            { id: "Expert", label: "🟠 Expert", color: "#f59e0b" },
+          ].map((lvl) => {
+            const active = difficultyFilter === lvl.id;
+            return (
+              <Chip
+                key={lvl.id}
+                label={lvl.label}
+                size="small"
+                onClick={() => setDifficultyFilter(lvl.id)}
+                sx={{
+                  height: 22,
+                  fontSize: "0.68rem",
+                  fontWeight: active ? 800 : 600,
+                  cursor: "pointer",
+                  bgcolor: active
+                    ? lvl.color || "primary.main"
+                    : mode === "light"
+                    ? "rgba(15,23,42,0.05)"
+                    : "rgba(255,255,255,0.06)",
+                  color: active
+                    ? "#ffffff"
+                    : "text.secondary",
+                  border: "1px solid",
+                  borderColor: active
+                    ? "transparent"
+                    : "divider",
+                  "&:hover": {
+                    bgcolor: active
+                      ? lvl.color || "primary.main"
+                      : mode === "light"
+                      ? "rgba(15,23,42,0.08)"
+                      : "rgba(255,255,255,0.1)",
+                  },
+                }}
+              />
+            );
+          })}
+        </Stack>
       </Box>
 
       <Divider />
 
       {/* Scrollable Topic & Subtopic Tree */}
       <Box sx={{ flex: 1, overflowY: "auto", pb: 2 }}>
-        {filteredGroups.length === 0 ? (
+        {displayGroups.length === 0 ? (
           <Box sx={{ p: 4, textAlign: "center" }}>
             <Typography variant="body2" color="text.secondary">
               {ui.noResultsText}
             </Typography>
           </Box>
         ) : (
-          filteredGroups.map((group) => {
+          displayGroups.map((group) => {
             const isOpen = isSearching || Boolean(expandedTopics[group.id]);
             const isGroupActive = group.id === activeSubtopic.topicId;
 
@@ -247,6 +322,16 @@ export default function SidebarToc({
                   <List dense disablePadding sx={{ py: 0.5 }}>
                     {group.subtopics.map((subtopic) => {
                       const isSelected = subtopic.id === activeSubtopic.id;
+                      const diffBadge = subtopic.difficulty
+                        ? subtopic.difficulty.toLowerCase() === "foundational"
+                          ? { label: "Easy", color: "#059669", bg: "rgba(16,185,129,0.12)" }
+                          : subtopic.difficulty.toLowerCase() === "intermediate"
+                          ? { label: "Med", color: "#0284c7", bg: "rgba(2,132,199,0.12)" }
+                          : subtopic.difficulty.toLowerCase() === "advanced"
+                          ? { label: "Hard", color: "#8b5cf6", bg: "rgba(139,92,246,0.12)" }
+                          : { label: "Expert", color: "#d97706", bg: "rgba(245,158,11,0.12)" }
+                        : null;
+
                       return (
                         <ListItemButton
                           key={subtopic.id}
@@ -311,6 +396,23 @@ export default function SidebarToc({
                               },
                             }}
                           />
+                          {diffBadge && (
+                            <Chip
+                              label={diffBadge.label}
+                              size="small"
+                              sx={{
+                                height: 17,
+                                fontSize: "0.6rem",
+                                fontWeight: 800,
+                                color: diffBadge.color,
+                                bgcolor: diffBadge.bg,
+                                borderRadius: 1,
+                                ml: 0.75,
+                                mt: 0.35,
+                                flexShrink: 0,
+                              }}
+                            />
+                          )}
                         </ListItemButton>
                       );
                     })}

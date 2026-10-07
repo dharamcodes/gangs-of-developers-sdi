@@ -86,25 +86,31 @@ const DIFFICULTY_STYLE: Record<
   { label: string; color: string; bg: string; border: string }
 > = {
   Foundational: {
-    label: "Foundational",
+    label: "🟢 Easy • Foundational",
     color: "#059669",
     bg: "rgba(16, 185, 129, 0.1)",
     border: "rgba(16, 185, 129, 0.25)",
   },
   Intermediate: {
-    label: "Intermediate",
+    label: "🔵 Medium • Intermediate",
     color: "#0284c7",
     bg: "rgba(2, 132, 199, 0.1)",
     border: "rgba(2, 132, 199, 0.25)",
   },
   Advanced: {
-    label: "Advanced",
+    label: "🟣 Hard • Advanced",
     color: "#8b5cf6",
     bg: "rgba(139, 92, 246, 0.1)",
     border: "rgba(139, 92, 246, 0.25)",
   },
+  Expert: {
+    label: "🟠 Expert",
+    color: "#d97706",
+    bg: "rgba(245, 158, 11, 0.1)",
+    border: "rgba(245, 158, 11, 0.25)",
+  },
   "Staff+": {
-    label: "Staff+",
+    label: "🟠 Expert",
     color: "#d97706",
     bg: "rgba(245, 158, 11, 0.1)",
     border: "rgba(245, 158, 11, 0.25)",
@@ -356,6 +362,16 @@ export default function SubtopicContentView({
   const [showBackToTop, setShowBackToTop] = useState<boolean>(false);
   const scaleConfig = FONT_SIZE_MAP[fontScale];
 
+  // Check if any section already contains an architecture diagram (e.g. Section 5 "High-Level Architecture Blueprint & Component Topology")
+  const hasSectionArchitectureDiagram = Boolean(
+    subtopic.sections?.some(
+      (sec, idx) =>
+        idx > 0 &&
+        ((Boolean(sec.diagramImageUrl) && !sec.flowDiagramUrl) ||
+          sec.heading.toLowerCase().includes("high-level architecture"))
+    )
+  );
+
   const diffStyle =
     DIFFICULTY_STYLE[subtopic.difficulty] || DIFFICULTY_STYLE["Intermediate"];
 
@@ -556,13 +572,13 @@ export default function SubtopicContentView({
                   variant="subtitle2"
                   sx={{ fontWeight: 800, lineHeight: 1.2, color: "text.primary" }}
                 >
-                  Gangs of Developers Staff
+                  Gangs of Developers Editorial Team
                 </Typography>
                 <Typography
                   variant="caption"
                   sx={{ color: "text.secondary", fontSize: "0.75rem" }}
                 >
-                  Distributed Systems &amp; Senior Interview Blueprint Series
+                  Distributed Systems &amp; Software Architecture Blueprint Series
                 </Typography>
               </Box>
             </Stack>
@@ -728,11 +744,12 @@ export default function SubtopicContentView({
         {/* ========================================================= */}
         {/* PRIMARY ARCHITECTURAL BLUEPRINT & EXECUTION PIPELINE     */}
         {/* ========================================================= */}
-        {(Boolean(subtopic.diagramImageUrl) ||
-          Boolean(subtopic.sections?.[0]?.diagramImageUrl) ||
-          Boolean(subtopic.architectureDiagram) ||
-          Boolean(subtopic.flowDiagramUrl) ||
-          Boolean(subtopic.sections?.[0]?.flowDiagramUrl)) && (
+        {!hasSectionArchitectureDiagram &&
+          (Boolean(subtopic.diagramImageUrl) ||
+            Boolean(subtopic.sections?.[0]?.diagramImageUrl) ||
+            Boolean(subtopic.architectureDiagram) ||
+            Boolean(subtopic.flowDiagramUrl) ||
+            Boolean(subtopic.sections?.[0]?.flowDiagramUrl)) && (
           <Box sx={{ maxWidth: PROSE_MAX_WIDTH, mb: 6 }}>
             <ArchitectureDiagramCard
               ui={ui}
@@ -987,15 +1004,21 @@ export default function SubtopicContentView({
                   </Box>
                 )}
 
-                {/* System Architecture Diagram (renders strictly when visual diagram image exists and not on section 0) */}
-                {Boolean(section.diagramImageUrl) && !section.flowDiagramUrl && idx > 0 && (
+                {/* System Architecture Diagram (renders strictly under Section 5 / High-Level Architecture section and not on section 0) */}
+                {Boolean(
+                  (section.diagramImageUrl && !section.flowDiagramUrl) ||
+                  (hasSectionArchitectureDiagram &&
+                    section.heading.toLowerCase().includes("high-level architecture") &&
+                    (section.diagramImageUrl || subtopic.diagramImageUrl))
+                ) &&
+                  idx > 0 && (
                   <Box sx={{ my: 3.5 }}>
                     <ArchitectureDiagramCard
                       ui={ui}
                       mode={mode}
-                      diagramImageUrl={section.diagramImageUrl}
+                      diagramImageUrl={section.diagramImageUrl || subtopic.diagramImageUrl}
                       asciiDiagram={
-                        section.asciiDiagram || ""
+                        section.asciiDiagram || subtopic.architectureDiagram || ""
                       }
                       altText={`${subtopic.subtopicNumber} ${subtopic.title}`}
                     />
@@ -1261,7 +1284,7 @@ export default function SubtopicContentView({
         )}
 
         {/* ========================================================= */}
-        {/* 5. STAFF+ ARCHITECT INTERVIEW FIELD GUIDE                */}
+        {/* 5. ARCHITECTURAL INTERVIEW FIELD GUIDE                    */}
         {/* ========================================================= */}
         <Box
           id="section-interview-tip"

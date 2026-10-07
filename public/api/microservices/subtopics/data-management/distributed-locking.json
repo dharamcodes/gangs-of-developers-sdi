@@ -3,50 +3,82 @@
   "topicId": "data-management",
   "topicTitle": "3. Distributed Data & Consistency",
   "topicNumber": 3,
-  "subtopicNumber": "3.5",
-  "title": "Distributed Locking & Concurrency",
-  "subtitle": "Redlock algorithm, Redis SETNX with lease expiry, ZooKeeper ephemeral nodes, and optimistic locking.",
-  "readingTime": "8 min read",
-  "difficulty": "Staff+",
+  "subtopicNumber": "3.6",
+  "title": "Distributed Locking: Redlock vs Database Locks",
+  "subtitle": "Preventing race conditions across multi-instance clusters using Redis Redlock and ZooKeeper fences.",
+  "readingTime": "10 min read",
+  "difficulty": "Expert",
   "keyTakeaways": [
-    "In a distributed system with multiple autoscaled service instances, in-memory mutex locks (`synchronized`, `sync.Mutex`) fail; coordination requires a **Distributed Lock**.",
-    "Redis `SET resource_id token NX PX 30000` provides high-performance atomic locking with an automatic TTL lease to prevent deadlocks on process crashes.",
-    "Always use a randomized unique token for the lock value, and release locks via atomic Lua scripts to prevent deleting another client's acquired lock."
+    "In a multi-node cluster, in-memory language locks (`synchronized`, `mutex`) only protect a single container; concurrent worker pods will bypass them.",
+    "Use **Distributed Locks** for efficiency (avoiding redundant duplicate background work) or correctness (preventing concurrent billing fraud).",
+    "Martin Kleppmann's critique: Distributed locks without **Fencing Tokens** are unsafe for correctness because GC pauses and network lag cause lock leases to expire silently."
   ],
-  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                   DISTRIBUTED LOCK WITH LEASE & RENEWAL                 |\n+-------------------------------------------------------------------------+\n  [Instance A] ===(SET lock_key tokenA NX PX 10000)===> [Redis Cluster]\n  (Acquires Lock: Success!)                                    |\n       |                                                       |\n  [Instance B] ===(SET lock_key tokenB NX PX 10000)============+\n  (Fails: Key Exists! Backs off)                               |\n       |                                                       |\n  [Instance A Finishes] ===(Atomic Lua Script Release)========+'",
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                DISTRIBUTED LOCK WITH FENCING TOKEN BLUEPRINT            |\n+-------------------------------------------------------------------------+\n [Client 1]               [Redis / ZooKeeper Lock]           [Storage Service]\n     |                               |                              |\n     |-- AcquireLock() ------------->|                              |\n     |<- Lock Granted (Token: 34) ---|                              |\n     |                               |                              |\n     | (Client 1 Suffers 20s GC Stop-The-World Pause! Lease Expires)|\n     |                               |                              |\n     | [Client 2]                    |                              |\n     |-- AcquireLock() ------------->|                              |\n     |<- Lock Granted (Token: 35) ---|                              |\n     |-- WriteData(Token: 35) ------------------------------------->| (Accepted: 35 > 0)\n     |                               |                              |\n     | (Client 1 Awakens from GC Pause!)                            |\n     |-- WriteData(Token: 34) ------------------------------------->| (REJECTED: 34 < 35!)\n                                                                      (Data Corruption Prevented!)",
   "diagramImageUrl": "/diagrams/microservices/distributed-locking-block.svg",
   "flowDiagramUrl": "/diagrams/microservices/distributed-locking-flow.svg",
   "sections": [
     {
-      "heading": "The Danger of Naive Releases: Why Atomic Lua Scripts Are Mandatory",
-      "body": "If Client A acquires a lock with a 5-second TTL, but suffers a long GC pause lasting 6 seconds, Redis will automatically expire the lock. Client B now legitimately acquires the lock. When Client A wakes up from its GC pause, if it executes a simple `DEL lock_key`, it will accidentally delete Client B's lock! This opens a race condition where Client C acquires the lock, leading to catastrophic double-processing. To solve this, always execute an atomic Lua script that verifies the token before deletion.",
+      "heading": "1. The Inadequacy of In-Memory Mutexes in Clustered Environments",
+      "body": "In a single monolithic server, threads synchronize shared memory using language-level mutexes (like Java's synchronized or Go's sync.Mutex). But in modern cloud architectures, applications run across dozens of independent container pods. Each container has its own private heap memory: a lock acquired on Pod 1 is completely invisible to Pod 2. Without a centralized distributed lock coordinator, concurrent pods will mutate the same bank account or inventory row concurrently.",
       "bullets": [
-        "Fencing Tokens: Pass a monotonically increasing number with every write; datastores reject writes with outdated tokens.",
-        "Redlock Algorithm: For high reliability across independent Redis nodes, acquire locks in majority (N/2 + 1) nodes.",
-        "Optimistic Locking Alternative: Prefer database version columns (`WHERE version = 5`) for relational data instead of heavy distributed locks."
+        "Efficiency vs Correctness Locks: Efficiency locks prevent duplicate work (e.g. generating the same report twice); Correctness locks prevent data corruption (e.g. charging a user twice).",
+        "Redis Single-Instance Lock: Using 'SET resource_name my_random_value NX PX 30000' acquires an atomic lease.",
+        "Atomic Release via Lua: Releasing a Redis lock requires checking that my_random_value matches before deleting, executed atomically via a Lua script to prevent releasing someone else's lock."
       ],
-      "codeSnippet": {
-        "title": "Safe Atomic Distributed Lock Release via Redis Lua Script",
-        "code": "String luaScript =\n    \"if redis.call('get', KEYS[1]) == ARGV[1] then \" +\n    \"    return redis.call('del', KEYS[1]) \" +\n    \"else \" +\n    \"    return 0 \" +\n    \"end\";\n\n// Guarantees we only delete the lock if we still own the original token!\nredisTemplate.execute(new DefaultRedisScript<>(luaScript, Long.class),\n    Collections.singletonList(lockKey), clientIdToken);"
-      },
       "diagramImageUrl": "/diagrams/microservices/distributed-locking-block.svg",
       "flowDiagramUrl": "/diagrams/microservices/distributed-locking-flow.svg"
+    },
+    {
+      "heading": "2. The Fencing Token Solution to Garbage Collection Pauses",
+      "body": "In a famous distributed systems analysis, Martin Kleppmann revealed why simple leased locks (like Redis or ZooKeeper) cannot guarantee correctness on their own. Suppose Client 1 acquires a 10-second lock. Client 1 experiences an unexpected 15-second JVM Stop-The-World Garbage Collection pause or OS page fault. While Client 1 is paused, its lock lease expires. Client 2 acquires the lock and begins writing. Client 1 awakens from the pause, unaware that time has passed, and executes its write—corrupting Client 2's data! The solution is Fencing Tokens.",
+      "bullets": [
+        "Fencing Token Protocol: Every time a lock is acquired, the lock server issues a strictly monotonically increasing token (e.g. 34, 35, 36).",
+        "Storage-Side Validation: The storage layer remembers the highest token it has processed. When Client 1 presents token 34 after Client 2 used 35, the storage engine rejects token 34.",
+        "Watchdog Timer (Redisson): In Java, Redisson uses a background thread to continually refresh the lock TTL while the worker is actively running, preventing premature lease expiration."
+      ]
+    },
+    {
+      "heading": "3. Redlock Multi-Master Algorithm & Split-Brain Controversies",
+      "body": "For multi-node Redis deployments, Redis creator Salvatore Sanfilippo designed the Redlock algorithm. A client attempts to acquire the lock across 5 independent Redis master nodes sequentially. If it acquires the lock on at least a quorum (3 out of 5 nodes) within a strict timeout budget, the lock is considered held. However, because Redlock relies on physical system clock synchronicity, NTP clock jumps can invalidate lease correctness.",
+      "bullets": [
+        "Quorum Requirement: Must acquire (N/2 + 1) master nodes to succeed.",
+        "NTP Clock Drift Vulnerability: If server clocks jump forward due to NTP updates, leases expire prematurely across nodes.",
+        "Consensus-Backed Alternatives: For critical correctness, systems prefer consensus-backed engines like ZooKeeper, etcd (Raft), or Google Chubby (Paxos)."
+      ]
+    },
+    {
+      "heading": "4. Production Blueprint: Atomic Redis Lock with Lua Script in TypeScript",
+      "body": "The following production TypeScript implementation demonstrates an enterprise Distributed Lock utilizing Redis SETNX and atomic Lua script verification for release.",
+      "bullets": [
+        "Random Lock Identifier: Prevents accidental release of locks held by other concurrent workers.",
+        "Atomic Lua Script: Performs GET and DEL atomically to prevent race condition release."
+      ],
+      "codeSnippet": {
+        "title": "Production Distributed Lock in TypeScript",
+        "code": "import crypto from 'crypto';\nimport { Redis } from 'ioredis';\n\nexport class DistributedLock {\n  private lockValue: string;\n\n  constructor(\n    private redis: Redis,\n    private lockKey: string,\n    private ttlSeconds: number = 10\n  ) {\n    this.lockValue = crypto.randomUUID();\n  }\n\n  public async acquire(): Promise<boolean> {\n    // SET resource_name uuid NX EX ttl\n    const result = await this.redis.set(\n      this.lockKey,\n      this.lockValue,\n      'EX',\n      this.ttlSeconds,\n      'NX'\n    );\n    return result === 'OK';\n  }\n\n  public async release(): Promise<boolean> {\n    // Atomic Lua script: only delete if value matches our UUID\n    const luaScript = `\n      if redis.call(\"get\", KEYS[1]) == ARGV[1] then\n        return redis.call(\"del\", KEYS[1])\n      else\n        return 0\n      end\n    `;\n\n    const result = await this.redis.eval(luaScript, 1, this.lockKey, this.lockValue);\n    return result === 1;\n  }\n}"
+      }
     }
   ],
   "tradeOffs": [
     {
-      "option": "Redis Distributed Lock (Redisson / SETNX)",
-      "pros": "Sub-millisecond acquisition latency, automatic TTL expiration, very high throughput.",
-      "cons": "Subject to clock skew and long GC pauses; not 100% formal consensus.",
-      "bestFor": "Deduplicating scheduled jobs, preventing double ticket booking, rate limiting."
+      "option": "Redis Distributed Lock (Redlock)",
+      "pros": "Extremely high throughput (100,000+ ops/sec); low sub-millisecond acquisition latency.",
+      "cons": "Relies on synchronized clocks; vulnerable to NTP jumps and long GC pauses without fencing tokens.",
+      "bestFor": "Efficiency locks, preventing duplicate batch processing, rate-limiting locks."
     },
     {
-      "option": "Database Optimistic Locking (versioning)",
-      "pros": "ACID safety, zero extra infrastructure, no clock skew vulnerabilities.",
-      "cons": "High conflict abort rate under heavy write contention.",
-      "bestFor": "Relational records where updates occasionally conflict."
+      "option": "Consensus-Backed Lock (ZooKeeper / etcd)",
+      "pros": "Mathematically proven safety via Raft/Paxos; ephemerality cleans locks on node crash; built-in monotonic zxid tokens.",
+      "cons": "Lower throughput than Redis; complex cluster management.",
+      "bestFor": "Strict correctness, leader election, master node failover coordination."
+    },
+    {
+      "option": "Database Row Lock (SELECT FOR UPDATE)",
+      "pros": "Zero extra infrastructure; 100% durable ACID transaction integration.",
+      "cons": "Consumes expensive DB connection pool slots; scales poorly under heavy contention.",
+      "bestFor": "Simple low-concurrency database row updates."
     }
   ],
-  "interviewTip": "In interviews, distinguish between locks for efficiency (speeding things up, avoiding duplicate work) and locks for correctness (financial double spending). For correctness, mention fencing tokens or database optimistic locking.",
+  "interviewTip": "In advanced system design interviews, reference Martin Kleppmann's critique of distributed locks: 'A distributed lock alone cannot guarantee safety in the presence of GC pauses or network delays. If a client pauses while holding a lock lease, the lock expires and another client acquires it. When the first client awakens, it will write stale data unless the storage layer enforces Monotonic Fencing Tokens to reject out-of-order writes.'",
   "jsonUrl": "/api/microservices/subtopics/data-management/distributed-locking.json"
 }

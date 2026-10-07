@@ -3,50 +3,82 @@
   "topicId": "behavioral-patterns",
   "topicTitle": "3. Behavioral Patterns",
   "topicNumber": 3,
-  "subtopicNumber": "3.9",
+  "subtopicNumber": "3.1",
   "title": "Strategy Pattern",
   "subtitle": "Defines a family of algorithms, encapsulates each one, and makes them interchangeable at runtime.",
-  "readingTime": "7 min read",
+  "readingTime": "8 min read",
   "difficulty": "Foundational",
   "keyTakeaways": [
-    "Enables selecting an algorithm's implementation dynamically at runtime without modifying the client that uses it.",
-    "Replaces bloated conditional statements (`if-else` blocks based on customer tier or payment method) with clean polymorphism.",
-    "In modern Java 8+, strategies can be passed directly as concise Lambda expressions (`Comparator.comparing(...)`)."
+    "Replaces giant conditional switch statements with clean object composition, upholding the Open/Closed Principle.",
+    "Allows swapping algorithms (sorting, payment processing, routing, compression) dynamically at runtime based on caller parameters.",
+    "Modern languages can represent stateless strategies cleanly as first-class functions or lambdas."
   ],
   "architectureDiagram": "+-------------------------------------------------------------------------+\n|                         STRATEGY UML CLASS MODEL                        |\n+-------------------------------------------------------------------------+\n   +-----------------------------+               +-----------------------------+\n   |       CheckoutService       |               |        <<interface>>        |\n   |          (Context)          |  has-a ---->  |       PricingStrategy       |\n   +-----------------------------+               +-----------------------------+\n   | - strategy: PricingStrategy |               | + calculate(cents): long    |\n   | + setStrategy(s: Strategy)  |               +--------------^--------------+\n   | + calculateTotal(): long    |                              |\n   +-----------------------------+               +--------------+--------------+\n                                                 |                             |\n                                  +--------------+--------------+     +--------+--------+\n                                  |    VipDiscountStrategy      |     | BlackFridayStrat|\n                                  +-----------------------------+     +-----------------+\n                                  | + calculate(): 20% off      |     | + calculate():  |\n                                  +-----------------------------+     |   50% off       |\n                                                                      +-----------------+",
   "diagramImageUrl": "/diagrams/design-patterns/strategy-block.svg",
   "flowDiagramUrl": "/diagrams/design-patterns/strategy-flow.svg",
   "sections": [
     {
-      "heading": "Runtime Algorithm Swapping and Lambda Modernization",
-      "body": "When business logic requires computing shipping rates (FedEx vs UPS vs DHL) or applying discounts (Black Friday vs Student vs VIP), hardcoding algorithms with nested if-else branches creates high cyclomatic complexity. The Strategy pattern isolates each algorithm into a standalone class sharing a common interface.",
+      "heading": "1. Architectural Intent: Eliminating Conditional Branch Hell via Algorithmic Polymorphism",
+      "body": "When an application needs to execute different variations of an algorithm depending on runtime context (such as calculating shipping fees via FedEx, UPS, or DHL, or charging via Stripe, PayPal, or Crypto), naive implementations rely on sprawling 'switch' or 'if-else' statements. Every new payment provider requires modifying the core billing service, risking regression bugs. The Strategy pattern extracts each algorithm into a standalone class implementing a common interface.",
       "bullets": [
-        "Open/Closed Principle: Introduce brand new pricing or routing strategies without touching the context class.",
-        "Functional Programming Bridge: In Java 21, single-method strategy interfaces (`@FunctionalInterface`) can be implemented as lambda expressions, cutting boilerplate to 1 line.",
-        "Testability: Algorithms can be isolated and unit-tested in isolation without mocking the entire context."
+        "Open/Closed Principle: Introduce new algorithm strategies without altering existing context or client classes.",
+        "Single Responsibility Principle: Isolates algorithm-specific calculation and dependencies away from the context orchestrator.",
+        "Composition Over Inheritance: Swaps behaviors dynamically at runtime via dependency injection rather than locking behavior into static subclass hierarchies."
+      ],
+      "diagramImageUrl": "/diagrams/design-patterns/strategy-block.svg",
+      "flowDiagramUrl": "/diagrams/design-patterns/strategy-flow.svg"
+    },
+    {
+      "heading": "2. Runtime Strategy Swapping & Execution Lifecycle",
+      "body": "The Context class maintains a private reference to the Strategy interface. When client code invokes a business operation on the Context, the Context simply forwards execution to its configured strategy. The client can swap strategies on the fly (e.g., switching from HighSpeedDelivery to EconomyDelivery when a customer changes their shopping cart options).",
+      "bullets": [
+        "Dynamic Polymorphic Dispatch: The context operates purely against the interface abstraction.",
+        "Strategy Parameterization: The context can pass itself ('this') or specific parameters into the strategy method to supply necessary calculation data.",
+        "Stateless vs Stateful Strategies: Stateless strategies can be shared concurrently across multiple contexts as Singletons or lambdas; stateful strategies require per-context instantiation."
+      ]
+    },
+    {
+      "heading": "3. Failure Modes: State Bleed Across Concurrent Invocations & Lambda Anti-Patterns",
+      "body": "A dangerous bug in multi-threaded environments arises when a developer introduces mutable state into a shared strategy instance. If Strategy A is injected as a singleton into multiple concurrent worker threads and mutates an internal counter or buffer during execute(), threads will corrupt each other's calculations. Strategies must either be completely stateless or thread-confined.",
+      "bullets": [
+        "Shared Mutable State Corruption: Always design strategy classes as immutable or stateless records when sharing across threads.",
+        "Context-Strategy Coupling: If the strategy method requires 20 arguments from the context, or if it queries internal private fields of the context, the boundary is flawed.",
+        "Class Explosion: If algorithms are trivial one-liners, creating dozens of distinct class files adds unnecessary clutter; prefer first-class function references in modern languages."
+      ]
+    },
+    {
+      "heading": "4. Production Blueprint: Enterprise Dynamic Payment & Routing Engine in Java 21",
+      "body": "The following production Java implementation showcases an enterprise Payment Orchestration engine leveraging Strategy with modern switch expressions and thread-safe stateless strategies.",
+      "bullets": [
+        "PaymentStrategy Contract: Clean interface returning immutable payment outcomes.",
+        "PaymentContext: Selects and executes strategies dynamically based on customer payment methods."
       ],
       "codeSnippet": {
-        "title": "Modern Functional Strategy Pattern in Java 21",
-        "code": "@FunctionalInterface\npublic interface DiscountStrategy {\n    long applyDiscount(long priceInCents);\n}\n\npublic class OrderCheckout {\n    private DiscountStrategy discountStrategy;\n\n    public OrderCheckout(DiscountStrategy discountStrategy) {\n        this.discountStrategy = discountStrategy;\n    }\n\n    public void setDiscountStrategy(DiscountStrategy strategy) {\n        this.discountStrategy = strategy;\n    }\n\n    public long calculateTotal(long originalPrice) {\n        return discountStrategy.applyDiscount(originalPrice);\n    }\n}\n\n// Usage with Modern Lambdas\npublic class Main {\n    public static void main(String[] args) {\n        OrderCheckout checkout = new OrderCheckout(p -> (long) (p * 0.8)); // 20% off\n        System.out.println(\"VIP Total: \" + checkout.calculateTotal(10000)); // 8000\n\n        checkout.setDiscountStrategy(p -> p - 1500); // $15 flat coupon\n        System.out.println(\"Coupon Total: \" + checkout.calculateTotal(10000)); // 8500\n    }\n}"
-      },
-      "flowDiagramUrl": "/diagrams/design-patterns/strategy-flow.svg",
-      "diagramImageUrl": "/diagrams/design-patterns/strategy-block.svg"
+        "title": "Production Payment Strategy Engine in Java 21",
+        "code": "public interface PaymentStrategy {\n    PaymentOutcome execute(BigDecimal amount, String currency, String customerId);\n    String getProviderName();\n}\n\npublic record PaymentOutcome(boolean success, String transactionId, String message) {}\n\n// Strategy 1: Credit Card\npublic class StripeCreditCardStrategy implements PaymentStrategy {\n    @Override public PaymentOutcome execute(BigDecimal amount, String currency, String customerId) {\n        System.out.printf(\"[Stripe] Charging %s %s to customer %s%n\", amount, currency, customerId);\n        return new PaymentOutcome(true, \"ch_\" + UUID.randomUUID(), \"Stripe charge approved\");\n    }\n    @Override public String getProviderName() { return \"STRIPE\"; }\n}\n\n// Strategy 2: PayPal\npublic class PayPalWalletStrategy implements PaymentStrategy {\n    @Override public PaymentOutcome execute(BigDecimal amount, String currency, String customerId) {\n        System.out.printf(\"[PayPal] Direct debit of %s %s for %s%n\", amount, currency, customerId);\n        return new PaymentOutcome(true, \"pp_\" + UUID.randomUUID(), \"PayPal debit settled\");\n    }\n    @Override public String getProviderName() { return \"PAYPAL\"; }\n}\n\n// Context Class\npublic class PaymentCheckoutContext {\n    private PaymentStrategy strategy;\n\n    public PaymentCheckoutContext(PaymentStrategy defaultStrategy) {\n        this.strategy = Objects.requireNonNull(defaultStrategy);\n    }\n\n    public void setStrategy(PaymentStrategy strategy) {\n        this.strategy = Objects.requireNonNull(strategy);\n    }\n\n    public PaymentOutcome processCheckout(BigDecimal total, String currency, String customerId) {\n        System.out.println(\"[Checkout] Delegating to: \" + strategy.getProviderName());\n        return strategy.execute(total, currency, customerId);\n    }\n}"
+      }
     }
   ],
   "tradeOffs": [
     {
       "option": "Strategy Pattern",
-      "pros": "Isolates algorithms; hot-swappable at runtime; completely eliminates if-else chains.",
-      "cons": "Clients must be aware of differences between strategies to select the right one.",
-      "bestFor": "Sorting engines, routing algorithms, payment methods, compression formats."
+      "pros": "Eliminates branching logic, enables runtime algorithmic swapping, adheres strictly to Open/Closed.",
+      "cons": "Clients must understand the differences between available strategies to pick the correct one.",
+      "bestFor": "Payment processing, sorting algorithms, compression codecs, discount calculators."
     },
     {
-      "option": "Hardcoded Procedural If-Else",
-      "pros": "No interfaces needed; simple for 1-2 invariant calculations.",
-      "cons": "Violates Open/Closed; editing algorithms requires modifying existing code, risking regressions.",
-      "bestFor": "Fixed, unchanging formula calculations."
+      "option": "Conditional If/Else Statements",
+      "pros": "Trivial to write; all calculation logic visible in one place without multiple files.",
+      "cons": "Violates Open/Closed; high cyclomatic complexity; testing requires large brittle test cases.",
+      "bestFor": "Small scripts with 1-2 unchanging algorithmic variations."
+    },
+    {
+      "option": "Subclassing / Template Method",
+      "pros": "Reuses shared skeleton code through inheritance.",
+      "cons": "Cannot change algorithm dynamically at runtime once the subclass is instantiated.",
+      "bestFor": "Static algorithms that do not need to be swapped during execution."
     }
   ],
-  "interviewTip": "Highlight that in modern Java, Strategy is often combined with Lambdas and Method References: `Collections.sort(list, Comparator.comparing(User::getAge))` is a pure production manifestation of the Strategy pattern.",
+  "interviewTip": "In interviews, cite Java's `Comparator.comparing()` and `Collections.sort(list, comparator)` as the canonical standard library example of Strategy. Emphasize that in modern Java and TypeScript, Strategy can often be implemented elegantly using lambdas or functional interfaces rather than heavyweight boilerplate classes.",
   "jsonUrl": "/api/design-patterns/subtopics/behavioral-patterns/strategy.json"
 }

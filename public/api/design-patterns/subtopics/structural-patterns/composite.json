@@ -3,10 +3,10 @@
   "topicId": "structural-patterns",
   "topicTitle": "2. Structural Patterns",
   "topicNumber": 2,
-  "subtopicNumber": "2.3",
+  "subtopicNumber": "2.5",
   "title": "Composite Pattern",
   "subtitle": "Composes objects into tree structures to represent part-whole hierarchies, letting clients treat individual objects and compositions uniformly.",
-  "readingTime": "7 min read",
+  "readingTime": "8 min read",
   "difficulty": "Intermediate",
   "keyTakeaways": [
     "Enables recursive tree data structures where single Leaf nodes and complex Composite branches share the exact same interface.",
@@ -18,19 +18,45 @@
   "flowDiagramUrl": "/diagrams/design-patterns/composite-flow.svg",
   "sections": [
     {
-      "heading": "Uniform Treatment of Part-Whole Hierarchies",
-      "body": "In complex domain trees like e-commerce packaging (boxes containing smaller boxes and individual products) or graphic renderers (groups containing shapes and other nested groups), writing special-cased code for leaves versus containers results in brittle switch statements. The Composite pattern enables clients to treat nested trees as if they were a single object.",
+      "heading": "1. Architectural Intent: Uniform Treatment of Part-Whole Hierarchies",
+      "body": "In complex domain trees like e-commerce packaging (boxes containing smaller boxes and individual products) or graphic renderers (groups containing shapes and other nested groups), writing special-cased code for leaves versus containers results in brittle switch statements. The Composite pattern enables clients to treat nested trees as if they were a single uniform object.",
       "bullets": [
         "Polymorphic Recursion: Complex hierarchies calculate results through natural recursive polymorphism.",
         "Open/Closed Principle: Introduce new leaf components or container types without changing client code.",
         "Simplified Client Logic: Eliminates cumbersome typecasting and deep nested iterative loops."
       ],
+      "diagramImageUrl": "/diagrams/design-patterns/composite-block.svg",
+      "flowDiagramUrl": "/diagrams/design-patterns/composite-flow.svg"
+    },
+    {
+      "heading": "2. Recursive Polymorphism & Tree Traversal Execution Mechanics",
+      "body": "In a Composite tree, when an operation (like calculateSize() or render()) is invoked on a composite node, that node simply iterates over its internal collection of child components and invokes the identical method on each child. For Leaf nodes, the method executes the concrete calculation (the base case). For sub-composite nodes, it triggers another nested iteration. The client initiating the root call has zero knowledge of whether the tree is 1 node deep or 1,000 nodes deep.",
+      "bullets": [
+        "Uniform Interface: Both Leaf and Composite implement the same root Component interface.",
+        "Implicit Recursion: Eliminates the need for external tree visitor loops or stack management.",
+        "Composite as Leaf: A Composite can be added as a child of another Composite without changing any logic."
+      ]
+    },
+    {
+      "heading": "3. Transparency vs Safety: Interface Segregation in Component Trees",
+      "body": "A classic design debate in Composite is Transparency versus Safety. In the Transparency approach, child management methods (add(), remove(), getChild()) are defined on the base Component interface, allowing clients to treat leaves and composites with 100% uniformity; however, calling add() on a Leaf either does nothing or throws an exception (violating Liskov Substitution). In the Safety approach, child management methods are defined exclusively on the Composite class, requiring clients to cast or distinguish composites when building the tree.",
+      "bullets": [
+        "Safety Preferred: In strongly typed languages (Java, TypeScript), the Safety approach is generally preferred to catch illegal child additions at compile time.",
+        "Cyclic Graph Hazards: If a composite node accidentally adds one of its ancestors as a child, recursive operations will trigger an infinite loop and StackOverflowError.",
+        "Parent References: Maintaining a parent pointer in each child simplifies upwards traversal, but requires synchronized two-way updates during additions and removals."
+      ]
+    },
+    {
+      "heading": "4. Production Blueprint: Enterprise File System & AST Node Evaluator in Java 21",
+      "body": "The following production Java implementation showcases an enterprise File System tree hierarchy featuring recursive size calculation, structural rendering, and safety-oriented child management.",
+      "bullets": [
+        "FileSystemNode Contract: Defines uniform size calculation and hierarchy rendering.",
+        "DirectoryComposite: Manages children safely and computes aggregate disk footprint."
+      ],
       "codeSnippet": {
-        "title": "Composite File System Architecture in Java 21",
-        "code": "// Component Interface\npublic interface FileSystemNode {\n    long calculateSizeBytes();\n    void render(int depth);\n}\n\n// Leaf Node\npublic record FileLeaf(String name, long size) implements FileSystemNode {\n    @Override public long calculateSizeBytes() { return size; }\n    @Override public void render(int depth) {\n        System.out.printf(\"%s- File: %s (%d bytes)%n\", \"  \".repeat(depth), name, size);\n    }\n}\n\n// Composite Node\npublic class DirectoryComposite implements FileSystemNode {\n    private final String name;\n    private final List<FileSystemNode> children = new ArrayList<>();\n\n    public DirectoryComposite(String name) { this.name = name; }\n    public void add(FileSystemNode node) { children.add(node); }\n\n    @Override\n    public long calculateSizeBytes() {\n        return children.stream().mapToLong(FileSystemNode::calculateSizeBytes).sum();\n    }\n\n    @Override\n    public void render(int depth) {\n        System.out.printf(\"%s+ Dir: %s%n\", \"  \".repeat(depth), name);\n        for (FileSystemNode child : children) child.render(depth + 1);\n    }\n}"
-      },
-      "flowDiagramUrl": "/diagrams/design-patterns/composite-flow.svg",
-      "diagramImageUrl": "/diagrams/design-patterns/composite-block.svg"
+        "title": "Production Composite File System Architecture in Java 21",
+        "code": "// Component Interface\npublic interface FileSystemNode {\n    long calculateSizeBytes();\n    void render(int depth);\n}\n\n// Leaf Node\npublic record FileLeaf(String name, long size) implements FileSystemNode {\n    @Override public long calculateSizeBytes() { return size; }\n    @Override public void render(int depth) {\n        System.out.printf(\"%s- File: %s (%d bytes)%n\", \"  \".repeat(depth), name, size);\n    }\n}\n\n// Composite Node\npublic class DirectoryComposite implements FileSystemNode {\n    private final String name;\n    private final List<FileSystemNode> children = new ArrayList<>();\n\n    public DirectoryComposite(String name) { this.name = name; }\n    public void add(FileSystemNode node) { children.add(Objects.requireNonNull(node)); }\n    public void remove(FileSystemNode node) { children.remove(node); }\n\n    @Override\n    public long calculateSizeBytes() {\n        return children.stream().mapToLong(FileSystemNode::calculateSizeBytes).sum();\n    }\n\n    @Override\n    public void render(int depth) {\n        System.out.printf(\"%s+ Dir: %s%n\", \"  \".repeat(depth), name);\n        for (FileSystemNode child : children) {\n            child.render(depth + 1);\n        }\n    }\n}"
+      }
     }
   ],
   "tradeOffs": [
@@ -45,8 +71,14 @@
       "pros": "Strict compile-time type safety; prevents accidental nesting of illegal combinations.",
       "cons": "Requires custom traversal and aggregation logic for every new container type.",
       "bestFor": "Strictly shallow, non-recursive parent-child relationships."
+    },
+    {
+      "option": "Decorator Pattern",
+      "pros": "Wraps a single component to add behavior without tree hierarchy mechanics.",
+      "cons": "Cannot represent multiple children or part-whole trees.",
+      "bestFor": "Single-item interceptor wrapping rather than multi-item branch trees."
     }
   ],
-  "interviewTip": "When discussing Composite, address the trade-off between Transparency (defining child management methods like `add()` and `remove()` in the base Component interface) versus Safety (defining them only on the Composite class). Explain why Safety is generally preferred in strongly-typed languages like Java.",
+  "interviewTip": "When discussing Composite, address the trade-off between Transparency (defining child management methods like add() and remove() in the base Component interface) versus Safety (defining them only on the Composite class). Explain why Safety is generally preferred in strongly typed enterprise codebases to uphold the Liskov Substitution Principle.",
   "jsonUrl": "/api/design-patterns/subtopics/structural-patterns/composite.json"
 }

@@ -4,7 +4,7 @@ An interactive, high-performance web handbook covering scalable system design, d
 
 ## Highlights
 
-- **13 Core Topics & 130 Detailed Subtopics**: Covers Core Fundamentals, Database Internals, Distributed Systems, High Availability & Cloud, Messaging & Kafka, Microservices, Networking, Observability, Reliability Engineering, Staff-Level Architecture Trade-Offs, and Must-Practice System Designs.
+- **13 Core Topics & 130 Detailed Subtopics**: Covers Core Fundamentals, Database Internals, Distributed Systems, High Availability & Cloud, Messaging & Kafka, Microservices, Networking, Observability, Reliability Engineering, Advanced Architecture & Trade-Offs, and Must-Practice System Designs.
 - **Architectural Diagrams**: Complete visual system diagrams and detailed Entity-Relationship (ER) storage blueprints with full-screen zoom support.
 - **Static Export Architecture**: Ultra-fast client-side reading experience backed by pre-generated static JSON endpoints in `public/api/`.
 - **Reader Experience**:

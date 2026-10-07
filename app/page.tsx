@@ -2,14 +2,14 @@ import type { Metadata } from "next";
 import HomePageView from "./components/HomePageView";
 
 export const metadata: Metadata = {
-  title: "Gangs of Developers (GOD) — Staff Engineering, System Design & Microservices Reference",
+  title: "Gangs of Developers (GOD) — System Design, Microservices & Architecture Reference",
   description:
-    "The engineering authority for Staff Engineers, Tech Leads, and Software Architects. Deep architectural blueprints, 130+ system design topics, 32 microservices design patterns, 23 GoF patterns with Java & UML, and Tier-1 FAANG interview breakdowns.",
+    "The engineering authority for software engineers and systems architects. Deep architectural blueprints, 130+ system design topics, 32 microservices design patterns, 23 GoF patterns with Java & UML, and Tier-1 FAANG interview breakdowns.",
   alternates: {
     canonical: "https://www.gangsofdevelopers.com",
   },
   openGraph: {
-    title: "Gangs of Developers (GOD) — Staff Engineering, System Design & Microservices Reference",
+    title: "Gangs of Developers (GOD) — System Design, Microservices & Architecture Reference",
     description:
       "Deep architectural blueprints, 130+ system design topics, 32 microservices design patterns, 23 GoF patterns with Java & UML, and Tier-1 FAANG interview breakdowns.",
     url: "https://www.gangsofdevelopers.com",
@@ -19,7 +19,7 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    title: "Gangs of Developers (GOD) — Staff Engineering, System Design & Microservices Reference",
+    title: "Gangs of Developers (GOD) — System Design, Microservices & Architecture Reference",
     description:
       "Deep architectural blueprints, 130+ system design topics, 32 microservices design patterns, 23 GoF patterns with Java & UML, and Tier-1 FAANG interview breakdowns.",
   },
@@ -34,7 +34,7 @@ const jsonLd = {
       "url": "https://www.gangsofdevelopers.com",
       "name": "Gangs of Developers (GOD)",
       "description":
-        "Engineering authority for Staff Engineers, Tech Leads, and Software Architects covering System Design, Microservices, and GoF Patterns.",
+        "Comprehensive engineering guide for software engineers and systems architects covering System Design, Microservices, and GoF Patterns.",
       "publisher": {
         "@type": "Person",
         "name": "Dharmendra Awasthi",
@@ -51,7 +51,7 @@ const jsonLd = {
       "founder": {
         "@type": "Person",
         "name": "Dharmendra Awasthi",
-        "jobTitle": "Staff Software Engineer",
+        "jobTitle": "Distributed Systems Engineer & Architect",
       },
       "sameAs": [
         "https://www.linkedin.com/company/gangsofdevelopers/",

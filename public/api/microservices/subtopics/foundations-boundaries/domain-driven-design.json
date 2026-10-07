@@ -3,50 +3,83 @@
   "topicId": "foundations-boundaries",
   "topicTitle": "1. Foundations & Boundaries",
   "topicNumber": 1,
-  "subtopicNumber": "1.2",
+  "subtopicNumber": "1.5",
   "title": "Domain-Driven Design (DDD) & Bounded Contexts",
   "subtitle": "Using ubiquitous language, subdomains, aggregates, and context mapping to draw clean architectural boundaries.",
-  "readingTime": "8 min read",
+  "readingTime": "9 min read",
   "difficulty": "Advanced",
   "keyTakeaways": [
     "A Bounded Context defines the exact boundary inside which a domain model and its ubiquitous language hold true without ambiguity.",
     "The word 'Order' means customer intent in Sales, a bill of materials in Fulfillment, and a ledger debit in Accounting. Trying to share a single god-object creates crippling coupling.",
-    "Use Anti-Corruption Layers (ACL) when integrating with legacy systems or foreign third-party APIs to prevent external jargon from polluting your clean domain model."
+    "An Aggregate is a transactional consistency boundary: an ACID transaction should update exactly one Aggregate in one service.",
+    "Use Anti-Corruption Layers (ACL) when integrating with legacy monoliths or third-party APIs to prevent external jargon from polluting your clean domain model."
   ],
   "architectureDiagram": "+-------------------------------------------------------------------------+\n|                  BOUNDED CONTEXTS & CONTEXT MAPPING                     |\n+-------------------------------------------------------------------------+\n  [Catalog Context]                 [Fulfillment Context]\n  +-----------------------+         +-----------------------+\n  | Item = SKU, Marketing |         | Item = Weight, Bin #  |\n  | Price, High-res JPGs  |         | Forklift dimensions   |\n  +-----------+-----------+         +-----------+-----------+\n              |                                 |\n              +======> [Anti-Corruption Layer] <=+\n                       (Translates Domain DTOs)",
   "diagramImageUrl": "/diagrams/microservices/domain-driven-design-block.svg",
   "flowDiagramUrl": "/diagrams/microservices/domain-driven-design-flow.svg",
   "sections": [
     {
-      "heading": "Strategic DDD: Aggregates as Consistency Boundaries",
-      "body": "In DDD, an Aggregate is a cluster of associated objects treated as a unit for data changes. Every Aggregate has a single Aggregate Root. Outside objects can only hold references to the Aggregate Root, never internal entities. In a microservices architecture, the fundamental rule is: One transaction should update exactly one Aggregate in one service. If your business requirement demands updating two separate aggregates in a single synchronous commit, either merge them into one aggregate or coordinate them via eventual consistency using domain events.",
+      "heading": "1. Strategic DDD: Ubiquitous Language & Bounded Contexts",
+      "body": "Domain-Driven Design (introduced by Eric Evans) provides the theoretical foundation for microservices decomposition. In monolithic codebases, teams instinctively attempt to model a single unified data model for the entire enterprise. For example, a single `User` entity or `Order` class accumulates hundreds of columns over time to satisfy billing, logistics, recommendations, customer support, and authentication. DDD demonstrates that a universal enterprise model is impossible at scale. Instead, the problem space must be split into Bounded Contexts, within which terms have precise, unambiguous meanings.",
       "bullets": [
-        "Ubiquitous Language: Speak the domain expert's language directly in class names, database tables, and API routes.",
-        "Shared Kernel vs Customer-Supplier: Shared code creates runtime coupling. Prefer decoupled contracts with consumer-driven contract testing.",
-        "Context Maps: Document relationships between bounded contexts (Partnership, Shared Kernel, Customer/Supplier, Conformist, Open Host Service)."
+        "Ubiquitous Language: A rigorous, shared vocabulary co-created by software engineers and domain business experts. Code, database tables, and API contracts reflect these exact terms.",
+        "Polysemic Entities: The term 'User' is an identity credential in Authentication, a shipping destination in Logistics, and a credit card token in Billing. Each bounded context models only the attributes it needs.",
+        "Subdomain Classification: Core Domain (high business ROI), Supporting Domain (custom supporting tools), and Generic Domain (commodity components)."
       ],
-      "codeSnippet": {
-        "title": "Java 21 Domain Aggregate Enforcing Business Invariants",
-        "code": "public record OrderId(UUID value) {}\n\npublic class OrderAggregate {\n    private final OrderId id;\n    private OrderStatus status;\n    private final List<OrderLineItem> items;\n\n    public void cancel(String reason) {\n        if (status == OrderStatus.SHIPPED) {\n            throw new IllegalStateException(\"Cannot cancel an order that has already shipped.\");\n        }\n        this.status = OrderStatus.CANCELLED;\n        DomainEvents.publish(new OrderCancelledEvent(this.id, reason, Instant.now()));\n    }\n}"
-      },
       "diagramImageUrl": "/diagrams/microservices/domain-driven-design-block.svg",
       "flowDiagramUrl": "/diagrams/microservices/domain-driven-design-flow.svg"
+    },
+    {
+      "heading": "2. Tactical DDD: Aggregates as Consistency Boundaries",
+      "body": "While Strategic DDD defines where services sit, Tactical DDD defines how code is structured inside a service. The central pattern is the Aggregate: a cluster of associated domain objects that are treated as an atomic unit for data changes. Every aggregate has an Aggregate Root through which all external mutations must pass. Outside services can only reference the Aggregate Root by its ID, never holding references to internal entities. The fundamental architectural rule: A database transaction should update exactly one Aggregate Root.",
+      "bullets": [
+        "Aggregate Invariants: Business rules that must be held true at all times (e.g., 'Total line items cannot exceed 50', 'Order cannot be cancelled once shipped').",
+        "Single Aggregate Transaction Rule: Updating multiple aggregates in a single synchronous commit creates lock contention and couples data models. Coordinate cross-aggregate updates asynchronously using Domain Events.",
+        "Entities vs Value Objects: Entities have unique identity (e.g. `OrderId`); Value Objects are immutable and defined solely by their attributes (e.g. `Money { amount: 100, currency: 'USD' }`)."
+      ]
+    },
+    {
+      "heading": "3. Context Mapping & Anti-Corruption Layers (ACL)",
+      "body": "When Bounded Contexts interact, their relationships must be formally mapped out. Common relationship patterns include Shared Kernel (shared code/data—use sparingly), Customer-Supplier (upstream team prioritizes downstream requests), Conformist (downstream adopts upstream schema), and Anti-Corruption Layer (ACL). An ACL is a translation adapter that isolates your clean domain model from foreign schemas, legacy SOAP APIs, or third-party vendor models.",
+      "bullets": [
+        "Anti-Corruption Layer (ACL): Translates incoming foreign data structures into internal native domain types, ensuring legacy bugs or schema changes do not pollute your service.",
+        "Open Host Service (OHS): Upstream service provides a stable public protocol (REST/gRPC) for multiple consumers.",
+        "Published Language (PL): Standardized interchange format (like JSON Schema or Protobuf) used across context boundaries."
+      ]
+    },
+    {
+      "heading": "4. Production Blueprint: Aggregate Root Enforcing Business Invariants",
+      "body": "The following Java 21 implementation demonstrates an Order Aggregate Root with strict invariant protection, encapsulated state, and domain event emission.",
+      "bullets": [
+        "Encapsulated State: State can only be mutated through explicit business methods (`cancel()`), never direct property setters.",
+        "Domain Event Emission: Emits immutable events captured within the aggregate for downstream broadcast."
+      ],
+      "codeSnippet": {
+        "title": "Java 21 Aggregate Root with Strict Business Invariant Enforcement",
+        "code": "public record OrderId(UUID value) {}\npublic record Money(BigDecimal amount, String currency) {}\n\npublic class OrderAggregate {\n    private final OrderId id;\n    private OrderStatus status;\n    private final List<OrderLineItem> items;\n    private final List<DomainEvent> domainEvents = new ArrayList<>();\n\n    public OrderAggregate(OrderId id, List<OrderLineItem> items) {\n        if (items == null || items.isEmpty()) {\n            throw new IllegalArgumentException(\"An order must contain at least one item.\");\n        }\n        this.id = id;\n        this.items = new ArrayList<>(items);\n        this.status = OrderStatus.PENDING;\n    }\n\n    public void cancel(String reason) {\n        // Invariant: Cannot cancel already dispatched order\n        if (this.status == OrderStatus.SHIPPED || this.status == OrderStatus.DELIVERED) {\n            throw new IllegalStateException(\"Cannot cancel an order that has already shipped.\");\n        }\n        this.status = OrderStatus.CANCELLED;\n        this.domainEvents.add(new OrderCancelledEvent(this.id, reason, Instant.now()));\n    }\n\n    public List<DomainEvent> pollEvents() {\n        List<DomainEvent> events = new ArrayList<>(this.domainEvents);\n        this.domainEvents.clear();\n        return events;\n    }\n}"
+      }
     }
   ],
   "tradeOffs": [
     {
       "option": "Strict DDD Bounded Contexts",
-      "pros": "Clean separation of concerns, zero schema contamination, independent velocity per business capability.",
-      "cons": "Requires deep domain modeling upfront; steep learning curve for junior engineers.",
-      "bestFor": "Core business systems with high complexity (fintech, e-commerce, healthcare logistics)."
+      "pros": "Zero schema pollution, clean ubiquitous language, isolated business invariants, perfect microservice alignment.",
+      "cons": "Steep learning curve, upfront Event Storming workshops required, boilerplate mapping classes.",
+      "bestFor": "Core business systems with high complexity (fintech, insurance, supply chain, healthcare)."
     },
     {
-      "option": "CRUD Entity Services",
-      "pros": "Fast to build initially; simple table-to-REST mappings.",
-      "cons": "Quickly deteriorates into an unmaintainable distributed monolith with anemic domain models.",
-      "bestFor": "Simple internal reporting tools or non-critical CRUD utilities."
+      "option": "CRUD Anemic Domain Models",
+      "pros": "Extremely fast initial development, simple database table-to-REST mappings.",
+      "cons": "Business logic scatters across service controllers; breaks down rapidly into unmaintainable spaghetti code.",
+      "bestFor": "Simple internal utilities, reporting CRUD tools, and low-complexity prototypes."
+    },
+    {
+      "option": "Shared Kernel Model",
+      "pros": "Shared code library eliminates duplicate class definitions.",
+      "cons": "Tight runtime and compile-time coupling; changes in shared library force redeployments across all services.",
+      "bestFor": "Extremely stable common utilities (e.g. Money or Address primitives) shared across closely paired teams."
     }
   ],
-  "interviewTip": "In architecture rounds, explicitly use DDD terminology: 'I am drawing a Bounded Context around the Payments domain. Within this boundary, Order refers only to payment intents, decoupling it from the logistics shipment domain.'",
+  "interviewTip": "In architecture interviews, explicitly leverage DDD terminology: 'I am drawing a Bounded Context around the Order Processing domain. Inside this boundary, Order is an Aggregate Root that enforces cancellation invariants. Outside this boundary, Logistics views Order merely as a shipping destination. This prevents data coupling and eliminates cross-service transactions.'",
   "jsonUrl": "/api/microservices/subtopics/foundations-boundaries/domain-driven-design.json"
 }

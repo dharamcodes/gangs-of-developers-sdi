@@ -35,7 +35,7 @@ const UI_CONFIG = {
     cons: "Trade-Offs & Complexity",
     bestFor: "Production Recommendation"
   },
-  interviewTipHeading: "GOD Staff+ Architecture Interview Pro-Tip",
+  interviewTipHeading: "GOD Architecture Interview Pro-Tip",
   previousLabel: "Previous Pattern",
   nextLabel: "Next Pattern",
   partPrefix: "Category",

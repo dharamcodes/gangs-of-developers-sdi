@@ -1,327 +1,1090 @@
- 
-
+/* eslint-disable @typescript-eslint/no-require-imports */
 const MODULE_5_EVENTS = {
-  id: "event-driven-messaging",
-  topicNumber: 5,
-  title: "5. Event-Driven Architecture & Messaging",
-  description: "Event-Driven microservices, Event Sourcing, Kafka partition topology, Dead Letter Queues, and Change Data Capture.",
-  subtopics: [
+  "id": "event-driven-messaging",
+  "topicNumber": 5,
+  "title": "5. Event-Driven Architecture & Messaging",
+  "description": "Asynchronous backbones: Dead Letter Queues, Kafka partitioning topology, Event Sourcing, monotonic ordering, and Change Data Capture (CDC).",
+  "subtopics": [
     {
-      id: "event-driven-architecture",
-      subtopicNumber: "5.1",
-      title: "Event-Driven Architecture & Event Sourcing",
-      subtitle: "Event notifications vs event-carried state transfer, append-only immutable event stores, and temporal query reconstruction.",
-      readingTime: "8 min read",
-      difficulty: "Advanced",
-      accent: "#8b5cf6",
-      keyTakeaways: [
-        "In **Event Notification**, producers emit minimal signals (`OrderPlaced: id=123`); consumers must call back via RPC to fetch details.",
-        "In **Event-Carried State Transfer (ECST)**, events include full state payloads, allowing consumers to update local read models without back-and-forth RPCs.",
-        "In **Event Sourcing**, state is not stored as mutable rows; the sequence of immutable domain events is the authoritative source of truth."
+      "id": "dead-letter-queues",
+      "subtopicNumber": "5.1",
+      "title": "Dead Letter Queues (DLQ) & Poison Pill Handling",
+      "subtitle": "Isolating corrupt payloads, preventing consumer crash loops, and implementing automated replay pipelines.",
+      "readingTime": "8 min read",
+      "difficulty": "Intermediate",
+      "accent": "#ef4444",
+      "keyTakeaways": [
+        "A Poison Pill is a malformed or unparseable message that crashes a consumer every time it attempts to process it, halting the entire partition.",
+        "A Dead Letter Queue (DLQ) isolates unprocessable messages after a maximum retry threshold (e.g. 3 attempts), allowing the primary consumer loop to continue.",
+        "Include diagnostic metadata in the DLQ message header: original topic, retry count, failure stack trace, and timestamp.",
+        "Build automated replay tooling: once a bug is fixed, operators can replay messages from the DLQ back into the primary processing pipeline."
       ],
-      ascii: `+-------------------------------------------------------------------------+
-|                    EVENT SOURCING & EVENT STREAMING                     |
-+-------------------------------------------------------------------------+
-[Order Aggregate Mutations]
-     |
-     v (Append Only Commit Log)
-+-----------------------------------------------------------------------+
-| Event 1: OrderCreated    (items: [A, B], total: $50)                  |
-| Event 2: ItemAdded       (item: C, total: $75)                        |
-| Event 3: OrderDiscounted (discount: 10%, total: $67.50)               |
-| Event 4: OrderShipped    (tracking: 1Z999)                            |
-+-----------------------------------------------------------------------+
-     |
-     v (Replay & Project)
-[Current State: Status=SHIPPED, Total=$67.50, Full Temporal Audit Trail]`,
-      blockNodes: [
-        { x: 50, y: 110, w: 260, h: 200, title: 'Event Producers', stroke: '#38bdf8', lines: ['Order Service', 'Emits Domain Events', 'Avro / Protobuf payload', 'Zero knowledge of subscribers'], tag: 'Producers' },
-        { x: 370, y: 110, w: 260, h: 200, title: 'Event Store / Kafka', stroke: '#8b5cf6', lines: ['Immutable append-only log', 'Persistent on disk', 'Time travel & state replay', 'Kafka Partitioned Topics'], tag: 'Event Store' },
-        { x: 690, y: 110, w: 260, h: 200, title: 'Consumer Subsystems', stroke: '#10b981', lines: ['Inventory Service', 'Fraud Scoring Engine', 'Email / Notification Svc', 'Financial Audit Ledger'], tag: 'Consumers' }
-      ],
-      blockConns: [
-        { d: 'M 310 210 L 370 210', lx: 340, ly: 200, label: 'Append' },
-        { d: 'M 630 210 L 690 210', lx: 660, ly: 200, label: 'Fan-Out' }
-      ],
-      flowNodes: [
-        { x: 50, y: 150, w: 200, h: 140, step: '1', title: 'Command Applied', stroke: '#38bdf8', lines: ['Customer cancels item', 'Aggregate validates rule', 'Generates ItemCancelled event'] },
-        { x: 280, y: 150, w: 210, h: 140, step: '2', title: 'Append to Log', stroke: '#8b5cf6', lines: ['Event appended to Kafka', 'Event sequence increments', 'Committed atomically to disk'] },
-        { x: 520, y: 150, w: 210, h: 140, step: '3', title: 'Parallel Consume', stroke: '#10b981', lines: ['Inventory restocks item', 'Billing credits customer account', 'Notification sends SMS'] },
-        { x: 760, y: 150, w: 200, h: 140, step: '4', title: 'Time Travel Audit', stroke: '#f59e0b', lines: ['Replay events from t=0', 'Reconstruct state at any date', 'Complete regulatory audit'] }
-      ],
-      flowConns: [
-        { d: 'M 250 210 L 280 210', lx: 265, ly: 200, label: 'Validate' },
-        { d: 'M 490 210 L 520 210', lx: 505, ly: 200, label: 'Append' },
-        { d: 'M 730 210 L 760 210', lx: 745, ly: 200, label: 'Fan-Out' }
-      ],
-      sections: [
+      "ascii": "+-------------------------------------------------------------------------+\n|                  DEAD LETTER QUEUE (DLQ) RECOVERY PIPELINE              |\n+-------------------------------------------------------------------------+\n[Primary Kafka Topic] ---> [Consumer Worker] ===(3 Failed Retries)===> [DLQ Topic]\n                                 |                                         |\n                       (Processes Next Message)                            v\n                                                                   [SRE Alert & Bugfix]\n                                                                           |\n                                                                   [Replay Tool / CLI]\n                                                                           |\n                                            +------------------------------+\n                                            v\n                               [Re-injected into Primary Topic]",
+      "blockNodes": [
         {
-          heading: "Event Notification vs Event-Carried State Transfer",
-          body: "In Event Notification, the producer publishes a lightweight notification (`{ event: 'OrderCreated', orderId: '123' }`). When 10 downstream services receive this event, each makes a synchronous HTTP/gRPC call back to the Order Service to fetch the customer name, items, and address. This triggers a 10x query storm. In Event-Carried State Transfer (ECST), the event payload contains all relevant domain attributes. Consumers store the data locally in their own databases, achieving complete runtime autonomy without query callbacks.",
-          bullets: [
-            "Snapshots in Event Sourcing: For aggregates with thousands of events, persist periodic state snapshots (e.g. every 100 events) to speed up hydration.",
-            "Schema Evolution: Use Confluent Schema Registry with Avro to enforce backward and forward schema compatibility.",
-            "Idempotency: Because Kafka guarantees at-least-once delivery, every consumer must be idempotent."
+          "x": 50,
+          "y": 120,
+          "w": 250,
+          "h": 180,
+          "title": "Primary Kafka Topic",
+          "stroke": "#38bdf8",
+          "lines": [
+            "Inbound stream of events",
+            "Order events / User signups",
+            "Strict partition sequence",
+            "Blocked if consumer crashes"
+          ],
+          "tag": "Active Stream"
+        },
+        {
+          "x": 360,
+          "y": 100,
+          "w": 270,
+          "h": 220,
+          "title": "Resilient Consumer",
+          "stroke": "#10b981",
+          "lines": [
+            "Deserializes & validates",
+            "Catches fatal exceptions",
+            "Retries 3x with backoff",
+            "Reroutes poison pill to DLQ",
+            "Commits primary offset"
+          ],
+          "tag": "Protected Worker"
+        },
+        {
+          "x": 690,
+          "y": 120,
+          "w": 250,
+          "h": 180,
+          "title": "Dead Letter Queue (DLQ)",
+          "stroke": "#ef4444",
+          "lines": [
+            "Isolated quarantine topic",
+            "Stores error stack trace",
+            "Alerts on-call engineers",
+            "Replay CLI inspection"
+          ],
+          "tag": "Quarantine Buffer"
+        }
+      ],
+      "blockConns": [
+        {
+          "d": "M 300 210 L 360 210",
+          "lx": 330,
+          "ly": 200,
+          "label": "Poll"
+        },
+        {
+          "d": "M 630 210 L 690 210",
+          "lx": 660,
+          "ly": 200,
+          "label": "Quarantine",
+          "stroke": "#ef4444"
+        }
+      ],
+      "flowNodes": [
+        {
+          "x": 50,
+          "y": 150,
+          "w": 200,
+          "h": 140,
+          "step": "1",
+          "title": "Poison Pill Hits",
+          "stroke": "#38bdf8",
+          "lines": [
+            "Malformed JSON received",
+            "Missing required user_id",
+            "Throws unhandled exception"
+          ]
+        },
+        {
+          "x": 280,
+          "y": 150,
+          "w": 210,
+          "h": 140,
+          "step": "2",
+          "title": "Bounded Retries",
+          "stroke": "#f59e0b",
+          "lines": [
+            "Retries attempt 1 & 2",
+            "Exhausts max retry budget",
+            "Identified as non-transient"
+          ]
+        },
+        {
+          "x": 520,
+          "y": 150,
+          "w": 210,
+          "h": 140,
+          "step": "3",
+          "title": "DLQ Diversion",
+          "stroke": "#ef4444",
+          "lines": [
+            "Publishes to orders.dlq",
+            "Attaches X-Error-Cause",
+            "Commits primary Kafka offset"
+          ]
+        },
+        {
+          "x": 760,
+          "y": 150,
+          "w": 200,
+          "h": 140,
+          "step": "4",
+          "title": "Stream Advances",
+          "stroke": "#10b981",
+          "lines": [
+            "Consumer unblocked",
+            "Processes remaining 9,999 msgs",
+            "Zero partition starvation"
           ]
         }
       ],
-      tradeOffs: [
-        { option: "Event-Carried State Transfer", pros: "Consumers are 100% decoupled; zero query storms back to origin service.", cons: "Larger message payload sizes; risk of stale replicated data if events lag.", bestFor: "High-scale asynchronous microservices." },
-        { option: "Event Sourcing", pros: "Complete immutable audit log, native time travel debugging, eliminates write lock contention.", cons: "Steep learning curve, complex schema migrations over long historical events.", bestFor: "Fintech ledgers, legal compliance, order tracking systems." }
+      "flowConns": [
+        {
+          "d": "M 250 210 L 280 210",
+          "lx": 265,
+          "ly": 200,
+          "label": "Fail"
+        },
+        {
+          "d": "M 490 210 L 520 210",
+          "lx": 505,
+          "ly": 200,
+          "label": "Route"
+        },
+        {
+          "d": "M 730 210 L 760 210",
+          "lx": 745,
+          "ly": 200,
+          "label": "Resume"
+        }
       ],
-      interviewTip: "In interviews, distinguish between Event Notification and Event-Carried State Transfer: 'I will use Event-Carried State Transfer so our downstream analytics and notification services don't bombard the Order service with synchronous GET requests.'"
+      "sections": [
+        {
+          "heading": "1. The Poison Pill Catastrophe in Streaming Queues",
+          "body": "In message streaming architectures like Apache Kafka or AWS SQS, messages in a partition are processed sequentially. If a publisher emits a corrupted message (e.g. invalid JSON syntax, schema mismatch, or integer overflow), the consumer throws an exception during deserialization. In a naive consumer loop, the error causes the consumer to abort without committing its offset. On the next poll, Kafka redelivers the exact same corrupted message! The consumer enters an infinite crash loop, consumer lag skyrockets, and all legitimate messages queued behind the poison pill are permanently stalled. A Dead Letter Queue (DLQ) is the essential quarantine circuit breaker.",
+          "bullets": [
+            "Partition Stalling: A single poison pill message stops processing for thousands of customers assigned to that partition.",
+            "Poison Pill Categories: Schema violations, corrupt binary encodings, negative numerical values violating domain rules, and expired tokens.",
+            "Offset Advancement: Moving a poison pill to a DLQ allows the consumer to advance its offset, unblocking the entire streaming pipeline."
+          ]
+        },
+        {
+          "heading": "2. The DLQ Envelope: Diagnostic Metadata Capture",
+          "body": "When redirecting a failed message to a Dead Letter Queue, you must never dump raw bytes without context. Debugging requires capturing the full operational execution environment at the moment of failure.",
+          "bullets": [
+            "Header Enrichment: Inject `X-Original-Topic`, `X-Exception-Message`, `X-Exception-Class`, `X-Failed-At`, and `X-Retry-Count` into the message headers.",
+            "Alerting Thresholds: A single DLQ message triggers a warning; a sudden spike of 50 DLQ messages indicates a breaking schema change deployment and must page on-call SREs.",
+            "DLQ Retention: Configure a generous retention period (e.g. 14 days) on the DLQ topic to allow engineers time to deploy bugfixes before messages expire."
+          ]
+        },
+        {
+          "heading": "3. Replay Architectures: Safe Drainage and Reprocessing",
+          "body": "A DLQ is useless if messages go there to die. The mark of mature engineering is automated Replay Pipelines.",
+          "bullets": [
+            "Replay CLI / Service: A dedicated utility that consumes from the DLQ topic and republishes messages back into the primary topic or a specialized staging retry queue.",
+            "Fix Forward: Deploy the consumer bugfix or schema update BEFORE initiating DLQ replay, otherwise replayed messages will fail again and cycle back to the DLQ.",
+            "Idempotency Safeguard: Because replayed messages were generated in the past, downstream consumers must handle them idempotently without executing duplicate business actions."
+          ]
+        },
+        {
+          "heading": "4. Production Blueprint: Spring Kafka / Go DLQ Error Handler",
+          "body": "The following Go snippet illustrates a production consumer error handling loop that captures unprocessable messages and routes them to a Dead Letter Queue with diagnostic metadata.",
+          "bullets": [
+            "Max Retry Counter: Tracks execution attempts before triggering the DLQ fallback.",
+            "Header Context Injection: Attaches failure causes directly to Kafka headers for SRE triage."
+          ],
+          "codeSnippet": {
+            "title": "Go Kafka Consumer with Poison Pill DLQ Routing",
+            "code": "package consumer\n\nimport (\n    \"context\"\n    \"time\"\n    \"github.com/segmentio/kafka-go\"\n)\n\ntype ResilientConsumer struct {\n    reader *kafka.Reader\n    dlqWriter *kafka.Writer\n}\n\nfunc (c *ResilientConsumer) ProcessMessage(ctx context.Context, msg kafka.Message) {\n    const maxRetries = 3\n    var err error\n\n    for attempt := 1; attempt <= maxRetries; attempt++ {\n        err = executeBusinessLogic(msg.Value)\n        if err == nil {\n            c.reader.CommitMessages(ctx, msg)\n            return\n        }\n        time.Sleep(time.Duration(attempt * 100) * time.Millisecond)\n    }\n\n    // Retries exhausted: Route Poison Pill to DLQ\n    dlqMsg := kafka.Message{\n        Key:   msg.Key,\n        Value: msg.Value,\n        Headers: []kafka.Header{\n            {Key: \"X-Original-Topic\", Value: []byte(msg.Topic)},\n            {Key: \"X-Error-Message\", Value: []byte(err.Error())},\n            {Key: \"X-Failed-Timestamp\", Value: []byte(time.Now().Format(time.RFC3339))},\n        },\n    }\n    c.dlqWriter.WriteMessages(ctx, dlqMsg)\n    c.reader.CommitMessages(ctx, msg) // Advance primary partition offset!\n}"
+          }
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Dead Letter Queue (DLQ) Architecture",
+          "pros": "Prevents consumer crash loops; unblocks legitimate traffic; provides durable buffer for diagnostic triage; enables replay.",
+          "cons": "Requires monitoring and alerting infrastructure; messages are processed out of chronological order upon replay.",
+          "bestFor": "All asynchronous message streaming and event-driven architectures."
+        },
+        {
+          "option": "Crash & Block (No DLQ)",
+          "pros": "Strictly prevents any out-of-order processing.",
+          "cons": "A single corrupted message brings down the entire processing partition, causing catastrophic customer backlog.",
+          "bestFor": "Never acceptable in high-throughput microservices."
+        },
+        {
+          "option": "Silent Drop (Discard Errors)",
+          "pros": "Simple to write in code.",
+          "cons": "Permanent data loss with zero visibility; impossible to recover lost customer orders.",
+          "bestFor": "Non-critical ephemeral telemetry (e.g. mouse cursor movements)."
+        }
+      ],
+      "interviewTip": "In event-driven system design interviews, proactively address poison pills: 'If a consumer receives a corrupted message that fails deserialization, retrying indefinitely would stall the entire Kafka partition. I implement a Dead Letter Queue (DLQ). After 3 failed attempts, we enrich the message with error headers, write it to orders.dlq, and advance the partition offset. This preserves 99.99% pipeline throughput while alerting SREs to investigate the quarantined payload.'"
     },
     {
-      id: "kafka-partitions",
-      subtopicNumber: "5.2",
-      title: "Apache Kafka Partitioning & Consumer Groups",
-      subtitle: "Partition keys, topic parallelism, consumer group rebalancing, and consumer lag monitoring.",
-      readingTime: "8 min read",
-      difficulty: "Advanced",
-      accent: "#f59e0b",
-      keyTakeaways: [
-        "A Kafka topic is divided into **Partitions**: the fundamental unit of parallelism and storage in Apache Kafka.",
-        "Kafka guarantees strict message ordering **only within a single partition**, never across different partitions.",
-        "A **Consumer Group** coordinates multiple workers: each partition is consumed by exactly one consumer within the group."
+      "id": "kafka-partitions",
+      "subtopicNumber": "5.2",
+      "title": "Apache Kafka Partitioning & Consumer Groups",
+      "subtitle": "Partition keys, topic parallelism, consumer group rebalancing, and consumer lag monitoring.",
+      "readingTime": "9 min read",
+      "difficulty": "Advanced",
+      "accent": "#f59e0b",
+      "keyTakeaways": [
+        "A Kafka topic is divided into Partitions: the fundamental unit of parallelism, storage, and scalability in Apache Kafka.",
+        "Kafka guarantees strict monotonic message ordering ONLY within a single partition, never globally across different partitions.",
+        "Consumer Group Coordination: Each partition is assigned to exactly one consumer instance within a consumer group; adding more consumers than partitions leaves excess consumers idle.",
+        "Hot Partition Skew: An uneven partition key distribution (e.g. partitioning by country code where 'US' receives 80% of events) bottlenecks single workers."
       ],
-      ascii: `+-------------------------------------------------------------------------+
-|                 KAFKA PARTITIONS & CONSUMER GROUP TOPOLOGY              |
-+-------------------------------------------------------------------------+
-  [Kafka Topic: orders (4 Partitions)]       [Consumer Group: order-workers]
-  +-----------------------------------+      +-------------------------------+
-  | Partition 0 (hash(key) == 0) ----+-----> | Consumer Instance 1           |
-  | Partition 1 (hash(key) == 1) ----+-----> | Consumer Instance 2           |
-  | Partition 2 (hash(key) == 2) ----+-----> | Consumer Instance 3           |
-  | Partition 3 (hash(key) == 3) ----+-----> | Consumer Instance 4           |
-  +-----------------------------------+      +-------------------------------+
-(Adding a 5th consumer will leave it IDLE; max parallel consumers = # of partitions!)`,
-      blockNodes: [
-        { x: 50, y: 110, w: 260, h: 200, title: 'Producers & Partition Key', stroke: '#38bdf8', lines: ['Order Service Producer', 'Key: user_id or order_id', 'MurmurHash2(key) % 4', 'Routes related events to same part'], tag: 'Producers' },
-        { x: 370, y: 110, w: 260, h: 200, title: 'Kafka Topic (4 Partitions)', stroke: '#f59e0b', lines: ['Partition 0 | Partition 1', 'Partition 2 | Partition 3', 'Strict in-order commit log', 'High disk sequential I/O'], tag: 'Broker' },
-        { x: 690, y: 110, w: 260, h: 200, title: 'Consumer Group (4 Nodes)', stroke: '#10b981', lines: ['Node 1 (P0) | Node 2 (P1)', 'Node 3 (P2) | Node 4 (P3)', 'Auto-rebalancing on crash', 'Independent offset tracking'], tag: 'Consumer Group' }
-      ],
-      blockConns: [
-        { d: 'M 310 210 L 370 210', lx: 340, ly: 200, label: 'Hash Key' },
-        { d: 'M 630 210 L 690 210', lx: 660, ly: 200, label: 'Assign 1:1' }
-      ],
-      flowNodes: [
-        { x: 50, y: 150, w: 200, h: 140, step: '1', title: 'Key Hashing', stroke: '#38bdf8', lines: ['Produce message with orderId', 'MurmurHash2 calculates partition 2', 'Ensures ordering for this order'] },
-        { x: 280, y: 150, w: 210, h: 140, step: '2', title: 'Commit Log Append', stroke: '#f59e0b', lines: ['Broker appends to partition 2', 'Replicated across In-Sync Replicas', 'Producer receives ACK'] },
-        { x: 520, y: 150, w: 210, h: 140, step: '3', title: 'Consumer Poll', stroke: '#10b981', lines: ['Consumer assigned to P2 polls', 'Fetches batch of 50 records', 'Processes business logic'] },
-        { x: 760, y: 150, w: 200, h: 140, step: '4', title: 'Commit Offset', stroke: '#a855f7', lines: ['Commits consumer offset', 'Progress saved in __consumer_offsets', 'Safe recovery on node reboot'] }
-      ],
-      flowConns: [
-        { d: 'M 250 210 L 280 210', lx: 265, ly: 200, label: 'Hash' },
-        { d: 'M 490 210 L 520 210', lx: 505, ly: 200, label: 'Append' },
-        { d: 'M 730 210 L 760 210', lx: 745, ly: 200, label: 'Poll' }
-      ],
-      sections: [
+      "ascii": "+-------------------------------------------------------------------------+\n|                 KAFKA PARTITIONS & CONSUMER GROUP TOPOLOGY              |\n+-------------------------------------------------------------------------+\n  [Kafka Topic: orders (4 Partitions)]       [Consumer Group: order-workers]\n  +-----------------------------------+      +-------------------------------+\n  | Partition 0 (hash(key) == 0) ----+-----> | Consumer Instance 1           |\n  | Partition 1 (hash(key) == 1) ----+-----> | Consumer Instance 2           |\n  | Partition 2 (hash(key) == 2) ----+-----> | Consumer Instance 3           |\n  | Partition 3 (hash(key) == 3) ----+-----> | Consumer Instance 4           |\n  +-----------------------------------+      +-------------------------------+\n(Adding a 5th consumer will leave it IDLE; max parallel consumers = # of partitions!)",
+      "blockNodes": [
         {
-          heading: "How Consumer Group Rebalancing Works",
-          body: "When a consumer crashes or a new consumer joins the group, Kafka initiates a Group Rebalance to redistribute partition assignments across the remaining active consumers. During eager rebalancing, all consumers stop processing (a 'stop-the-world' pause), which can create temporary latency spikes. Modern Kafka uses Cooperative Sticky Rebalancing (KIP-429), allowing consumers that don't need partition reassignment to continue processing messages without interruption.",
-          bullets: [
-            "Partition Count Heuristic: Set partition count to $N = \\max(P, C)$ where $P$ is target producer throughput / single partition write throughput, and $C$ is consumer processing throughput.",
-            "Consumer Lag Alerting: Monitor `records-lag-max`. A growing consumer lag indicates downstream worker starvation or slow database writes.",
-            "Null Keys: If you publish without a key, Kafka uses sticky round-robin partitioning, spreading data evenly but offering zero ordering guarantees."
+          "x": 50,
+          "y": 110,
+          "w": 260,
+          "h": 200,
+          "title": "Producers & Partition Key",
+          "stroke": "#38bdf8",
+          "lines": [
+            "Order Service Producer",
+            "Key: user_id or order_id",
+            "MurmurHash2(key) % 4",
+            "Routes related events to same part"
+          ],
+          "tag": "Producers"
+        },
+        {
+          "x": 370,
+          "y": 110,
+          "w": 260,
+          "h": 200,
+          "title": "Kafka Topic (4 Partitions)",
+          "stroke": "#f59e0b",
+          "lines": [
+            "Partition 0 | Partition 1",
+            "Partition 2 | Partition 3",
+            "Strict in-order commit log",
+            "High disk sequential I/O"
+          ],
+          "tag": "Broker"
+        },
+        {
+          "x": 690,
+          "y": 110,
+          "w": 260,
+          "h": 200,
+          "title": "Consumer Group (Workers)",
+          "stroke": "#10b981",
+          "lines": [
+            "Worker 1 -> Partition 0",
+            "Worker 2 -> Partition 1",
+            "Worker 3 -> Partition 2",
+            "Worker 4 -> Partition 3"
+          ],
+          "tag": "Scale Out"
+        }
+      ],
+      "blockConns": [
+        {
+          "d": "M 310 210 L 370 210",
+          "lx": 340,
+          "ly": 200,
+          "label": "Hash Key"
+        },
+        {
+          "d": "M 630 210 L 690 210",
+          "lx": 660,
+          "ly": 200,
+          "label": "Pull Stream"
+        }
+      ],
+      "flowNodes": [
+        {
+          "x": 50,
+          "y": 150,
+          "w": 200,
+          "h": 140,
+          "step": "1",
+          "title": "Key Hashing",
+          "stroke": "#38bdf8",
+          "lines": [
+            "Producer hashes partition key",
+            "Calculates target partition",
+            "Batches records for efficiency"
+          ]
+        },
+        {
+          "x": 280,
+          "y": 150,
+          "w": 210,
+          "h": 140,
+          "step": "2",
+          "title": "Append to Log",
+          "stroke": "#f59e0b",
+          "lines": [
+            "Appends to partition commit log",
+            "Replicates to ISR quorum",
+            "Assigns sequential offset"
+          ]
+        },
+        {
+          "x": 520,
+          "y": 150,
+          "w": 210,
+          "h": 140,
+          "step": "3",
+          "title": "Group Assignment",
+          "stroke": "#10b981",
+          "lines": [
+            "Cooperative sticky assignor",
+            "Distributes partitions to pods",
+            "Handles auto-rebalances"
+          ]
+        },
+        {
+          "x": 760,
+          "y": 150,
+          "w": 200,
+          "h": 140,
+          "step": "4",
+          "title": "Lag Monitor",
+          "stroke": "#a855f7",
+          "lines": [
+            "Measures Log End - Offset",
+            "Alerts when lag spikes",
+            "Triggers pod horizontal scale"
           ]
         }
       ],
-      tradeOffs: [
-        { option: "Kafka Partitioning", pros: "Horizontal linear scalability, massive sequential disk throughput (1M+ events/s), guaranteed ordering per key.", cons: "Cannot increase partitions dynamically without breaking partition key hash ordering.", bestFor: "High-throughput stream processing, event sourcing, telemetry." },
-        { option: "Standard Message Queues (RabbitMQ / SQS)", pros: "Simple setup, fine-grained message acknowledgment per message.", cons: "Lower throughput; difficult to achieve strict ordered streaming at scale.", bestFor: "Simple background task dispatch and job queues." }
+      "flowConns": [
+        {
+          "d": "M 250 210 L 280 210",
+          "lx": 265,
+          "ly": 200,
+          "label": "Hash"
+        },
+        {
+          "d": "M 490 210 L 520 210",
+          "lx": 505,
+          "ly": 200,
+          "label": "Replicate"
+        },
+        {
+          "d": "M 730 210 L 760 210",
+          "lx": 745,
+          "ly": 200,
+          "label": "Assign"
+        }
       ],
-      interviewTip: "If asked 'How do you scale Kafka consumption?', state: 'The maximum concurrency of a consumer group equals the number of partitions in the topic. If a topic has 10 partitions, running 12 consumer instances will leave 2 instances idle. To increase consumer throughput, we must increase partition count or process messages concurrently within each consumer.'"
+      "sections": [
+        {
+          "heading": "1. The Partition as the Atomic Unit of Parallelism",
+          "body": "In traditional message queues (like RabbitMQ or ActiveMQ), multiple consumers compete for messages from a single queue. While simple, competing consumers require central coordination locks inside the broker, capping maximum throughput. Apache Kafka discarded this paradigm by introducing Partitions. A partition is an immutable, ordered commit log stored on disk. By splitting a topic into 16, 64, or 256 partitions distributed across different broker nodes, Kafka achieves massive horizontal throughput (millions of events per second) because producers and consumers write and read to separate files in parallel.",
+          "bullets": [
+            "Ordering Guarantee: Strict sequential ordering is guaranteed ONLY within a single partition. If Order 1 and Order 2 land in different partitions, they may be processed out of order.",
+            "Consumer Concurrency Ceiling: The number of active consumers in a consumer group cannot exceed the number of partitions. If a topic has 10 partitions, running 15 pods in your consumer group means 5 pods sit completely idle.",
+            "Partition Sizing Rule of Thumb: Aim for 10–50MB/sec write throughput per partition; avoid having more than 4,000 partitions per broker to prevent JVM heap overhead."
+          ]
+        },
+        {
+          "heading": "2. The Art of Choosing the Partition Key: Avoiding Key Skew",
+          "body": "When producing a message to Kafka, the producer calculates the target partition using: $$\\text{Partition} = \\text{MurmurHash2}(\\text{Key}) \\pmod{\\text{Number\\_of\\_Partitions}}$$. Choosing the correct partition key is the most critical decision in event-driven design.",
+          "bullets": [
+            "Entity Key (`order_id` or `user_id`): Guarantees that all events for that specific user or order land in the exact same partition in strict chronological order.",
+            "Hot Key Anti-Pattern: If you partition by `merchant_id` or `country_code`, a celebrity merchant (e.g. Nike) or large country (e.g. US) will route 70% of total cluster traffic to a single partition, creating massive consumer lag on one pod while other pods idle.",
+            "Salted Partition Keys: If a hot key is unavoidable, append a random integer (`merchant_123_4`) to distribute traffic across 5 partitions, recombining them in application logic."
+          ]
+        },
+        {
+          "heading": "3. Consumer Rebalances: Stop-the-World vs Cooperative Sticky",
+          "body": "When a consumer pod crashes or an auto-scaler adds a new pod, Kafka executes a Consumer Group Rebalance to redistribute partition assignments.",
+          "bullets": [
+            "Eager Rebalance (Legacy): Revokes all partition assignments across all consumers simultaneously, freezing processing for 5–30 seconds ('Stop-the-World' rebalance).",
+            "Cooperative Sticky Assignor (Modern Standard): Incremental rebalancing. Only the specific partitions being moved are paused; all other consumers continue processing traffic uninterrupted."
+          ]
+        },
+        {
+          "heading": "4. Production Blueprint: Kafka Producer with MurmurHash Keying in Java",
+          "body": "The following Java snippet demonstrates a production Kafka producer configuration with idempotency enabled, snappy compression, and explicit partition key assignment.",
+          "bullets": [
+            "Idempotent Producer (`enable.idempotence=true`): Prevents duplicate broker writes on network retries.",
+            "Snappy Compression: Cuts network bandwidth and disk storage by up to 60%."
+          ],
+          "codeSnippet": {
+            "title": "Production Idempotent Kafka Producer Configuration in Java",
+            "code": "Properties props = new Properties();\nprops.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, \"kafka-broker.internal:9092\");\nprops.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());\nprops.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());\n\n// Enterprise Reliability Settings\nprops.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, \"true\");\nprops.put(ProducerConfig.ACKS_CONFIG, \"all\"); // Wait for full in-sync replica ack\nprops.put(ProducerConfig.RETRIES_CONFIG, Integer.MAX_VALUE);\nprops.put(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, \"5\");\nprops.put(ProducerConfig.COMPRESSION_TYPE_CONFIG, \"snappy\");\n\nProducer<String, byte[]> producer = new KafkaProducer<>(props);\n\n// Partition key guarantees all events for this user land in same partition\nProducerRecord<String, byte[]> record = new ProducerRecord<>(\n    \"orders.v1\",\n    order.getUserId(), // Key used for MurmurHash2 partition routing\n    serializeToAvro(order)\n);\nproducer.send(record);"
+          }
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Keyed Partitioning (Entity Key)",
+          "pros": "Strict chronological message ordering per entity (e.g. per user or per order).",
+          "cons": "Vulnerable to hot key data skew if key distribution is non-uniform.",
+          "bestFor": "Workflows where order matters (financial transactions, state machines)."
+        },
+        {
+          "option": "Round-Robin / Sticky Partitioning (Null Key)",
+          "pros": "Perfect uniform load distribution across all partitions and consumer pods; zero hot key risk.",
+          "cons": "Zero ordering guarantees; events for the same order arrive out of order.",
+          "bestFor": "Independent stateless events (e.g. log ingestion, clickstream metrics)."
+        },
+        {
+          "option": "Salted Key Partitioning",
+          "pros": "Breaks up hot keys across multiple partitions while maintaining sub-key locality.",
+          "cons": "Downstream consumers must coordinate to merge salted partitions.",
+          "bestFor": "Mega-scale entities (e.g. viral celebrity posts on social media)."
+        }
+      ],
+      "interviewTip": "In interviews, demonstrate deep Kafka internals: 'I size our Kafka topics based on consumer concurrency requirements. Since Kafka enforces that one partition is consumed by only one consumer in a group, our partition count defines our maximum horizontal scaling ceiling. I partition by customer_id to guarantee in-order delivery per customer, while monitoring Consumer Lag (Log End Offset minus Current Offset) via Prometheus to trigger horizontal pod auto-scaling.'"
     },
     {
-      id: "dead-letter-queues",
-      subtopicNumber: "5.3",
-      title: "Dead Letter Queues (DLQ) & Poison Pill Handling",
-      subtitle: "Quarantining unparseable payloads, exponential retry topics, non-blocking retries, and manual replay tooling.",
-      readingTime: "7 min read",
-      difficulty: "Intermediate",
-      accent: "#ef4444",
-      keyTakeaways: [
-        "A **Poison Pill** is a malformed message (corrupt JSON, missing schema field, null pointer bug) that causes consumer workers to crash repeatedly.",
-        "Without proper handling, a poison pill halts partition consumption forever, blocking all subsequent valid messages from being processed.",
-        "The **Dead Letter Queue (DLQ)** pattern routes unprocessable messages to a separate error topic after max retries, allowing the main stream to proceed without interruption."
+      "id": "event-driven-architecture",
+      "subtopicNumber": "5.3",
+      "title": "Event-Driven Architecture & Event Sourcing",
+      "subtitle": "Event notifications vs event-carried state transfer, append-only immutable event stores, and temporal query reconstruction.",
+      "readingTime": "9 min read",
+      "difficulty": "Advanced",
+      "accent": "#8b5cf6",
+      "keyTakeaways": [
+        "In Event Notification, producers emit minimal signals (`OrderPlaced: id=123`); consumers must call back via RPC to fetch details, creating query storms.",
+        "In Event-Carried State Transfer (ECST), events include full state payloads, allowing consumers to update local read models without back-and-forth RPCs.",
+        "In Event Sourcing, state is not stored as mutable rows; the sequence of immutable domain events is the authoritative source of truth.",
+        "Event Sourcing provides native audit trails, time-travel debugging, and allows rebuilding read views at any point in history."
       ],
-      ascii: `+-------------------------------------------------------------------------+
-|                  NON-BLOCKING RETRY TOPICS & DLQ TOPOLOGY               |
-+-------------------------------------------------------------------------+
-[Main Topic: orders] ===> [Consumer Worker]
-                              | (Fails: Transient 503)
-                              v
-                  [Retry Topic: orders-retry-1] (Sleep 1s)
-                              | (Fails Again)
-                              v
-                  [Retry Topic: orders-retry-2] (Sleep 5s)
-                              | (Fails 3x: Poison Pill!)
-                              v
-                  [DEAD LETTER TOPIC: orders-dlq]
-                  (Alert PagerDuty; Inspect & Replay)`,
-      blockNodes: [
-        { x: 50, y: 110, w: 260, h: 200, title: 'Main Topic Consumer', stroke: '#38bdf8', lines: ['Topic: orders', 'Consumes real-time stream', 'Parses schema payload', 'If poison pill: Forward to retry'], tag: 'Main Stream' },
-        { x: 370, y: 110, w: 260, h: 200, title: 'Non-Blocking Retry Topics', stroke: '#f59e0b', lines: ['orders-retry-1 (1s wait)', 'orders-retry-2 (10s wait)', 'Does not block main topic!', 'Main stream continues at 10k/s'], tag: 'Retry Bus' },
-        { x: 690, y: 110, w: 260, h: 200, title: 'Dead Letter Topic (DLQ)', stroke: '#ef4444', lines: ['Topic: orders-dlq', 'Stores corrupt payload + error stack', 'Emits Datadog / Slack alert', 'Admin CLI for manual replay'], tag: 'Quarantine' }
-      ],
-      blockConns: [
-        { d: 'M 310 170 L 370 170', lx: 340, ly: 160, label: 'Error' },
-        { d: 'M 630 170 L 690 170', lx: 660, ly: 160, label: 'Exhausted' }
-      ],
-      flowNodes: [
-        { x: 50, y: 150, w: 200, h: 140, step: '1', title: 'Poison Pill Arrives', stroke: '#38bdf8', lines: ['Client sends invalid JSON', 'Deserializer throws exception', 'Consumer catches error'] },
-        { x: 280, y: 150, w: 210, h: 140, step: '2', title: 'Non-Blocking Shift', stroke: '#f59e0b', lines: ['Commit offset on main topic', 'Publish to retry topic', 'Main partition keeps flowing!'] },
-        { x: 520, y: 150, w: 210, h: 140, step: '3', title: 'Retries Exhausted', stroke: '#ef4444', lines: ['Retried 3x on retry topics', 'Still fails NullPointer', 'Routed to `orders-dlq`'] },
-        { x: 760, y: 150, w: 200, h: 140, step: '4', title: 'Alert & Replay', stroke: '#10b981', lines: ['Alerts on-call engineer', 'Dev patches consumer bug', 'DLQ replay tool reprocesses'] }
-      ],
-      flowConns: [
-        { d: 'M 250 210 L 280 210', lx: 265, ly: 200, label: 'Catch' },
-        { d: 'M 490 210 L 520 210', lx: 505, ly: 200, label: 'Retry' },
-        { d: 'M 730 210 L 760 210', lx: 745, ly: 200, label: 'Route' }
-      ],
-      sections: [
+      "ascii": "+-------------------------------------------------------------------------+\n|                    EVENT SOURCING & EVENT STREAMING                     |\n+-------------------------------------------------------------------------+\n[Order Aggregate Mutations]\n     |\n     v (Append Only Commit Log)\n+-----------------------------------------------------------------------+\n| Event 1: OrderCreated    (items: [A, B], total: $50)                  |\n| Event 2: ItemAdded       (item: C, total: $75)                        |\n| Event 3: OrderDiscounted (discount: 10%, total: $67.50)               |\n| Event 4: OrderShipped    (tracking: 1Z999)                            |\n+-----------------------------------------------------------------------+\n     |\n     v (Replay & Project)\n[Current State: Status=SHIPPED, Total=$67.50, Full Temporal Audit Trail]",
+      "blockNodes": [
         {
-          heading: "Why Blocking Retries Destroy Kafka Throughput",
-          body: "If your Kafka consumer encounters an error and executes `Thread.sleep(5000)` inside the consumer loop, the entire partition halts. Thousands of legitimate customer messages queued behind the corrupt message remain stuck. In high-throughput architectures, implement Non-Blocking Retries using delayed retry topics (Uber's pattern). The failing message is immediately published to a retry topic and the main topic offset is committed, allowing valid traffic to flow uninterrupted.",
-          bullets: [
-            "Diagnostic Headers: In the DLQ message headers, attach `X-Exception-Message`, `X-Exception-StackTrace`, and `X-Original-Topic`.",
-            "DLQ Replay Tool: Provide a CLI or admin UI allowing engineers to re-publish fixed DLQ messages back to the main topic.",
-            "Schema Registry Validation: Prevent poison pills from entering the broker in the first place by validating Avro/Protobuf schemas at the producer boundary."
+          "x": 50,
+          "y": 110,
+          "w": 260,
+          "h": 200,
+          "title": "Event Producers",
+          "stroke": "#38bdf8",
+          "lines": [
+            "Order Service",
+            "Emits Domain Events",
+            "Avro / Protobuf payload",
+            "Zero knowledge of subscribers"
+          ],
+          "tag": "Producers"
+        },
+        {
+          "x": 370,
+          "y": 110,
+          "w": 260,
+          "h": 200,
+          "title": "Event Store / Kafka",
+          "stroke": "#8b5cf6",
+          "lines": [
+            "Immutable append-only log",
+            "Persistent on disk",
+            "Time travel & state replay",
+            "Kafka Partitioned Topics"
+          ],
+          "tag": "Event Store"
+        },
+        {
+          "x": 690,
+          "y": 110,
+          "w": 260,
+          "h": 200,
+          "title": "Consumer Subsystems",
+          "stroke": "#10b981",
+          "lines": [
+            "Inventory Service",
+            "Fraud Scoring Engine",
+            "Email / Notification Svc",
+            "Financial Audit Ledger"
+          ],
+          "tag": "Consumers"
+        }
+      ],
+      "blockConns": [
+        {
+          "d": "M 310 210 L 370 210",
+          "lx": 340,
+          "ly": 200,
+          "label": "Append"
+        },
+        {
+          "d": "M 630 210 L 690 210",
+          "lx": 660,
+          "ly": 200,
+          "label": "Fan-Out"
+        }
+      ],
+      "flowNodes": [
+        {
+          "x": 50,
+          "y": 150,
+          "w": 200,
+          "h": 140,
+          "step": "1",
+          "title": "Command Applied",
+          "stroke": "#38bdf8",
+          "lines": [
+            "Customer cancels item",
+            "Aggregate validates rule",
+            "Generates ItemCancelled event"
+          ]
+        },
+        {
+          "x": 280,
+          "y": 150,
+          "w": 210,
+          "h": 140,
+          "step": "2",
+          "title": "Append to Log",
+          "stroke": "#8b5cf6",
+          "lines": [
+            "Event appended to Kafka",
+            "Event sequence increments",
+            "Committed atomically to disk"
+          ]
+        },
+        {
+          "x": 520,
+          "y": 150,
+          "w": 210,
+          "h": 140,
+          "step": "3",
+          "title": "Parallel Consume",
+          "stroke": "#10b981",
+          "lines": [
+            "Inventory restocks item",
+            "Billing credits customer account",
+            "Notification sends SMS"
+          ]
+        },
+        {
+          "x": 760,
+          "y": 150,
+          "w": 200,
+          "h": 140,
+          "step": "4",
+          "title": "Time Travel Audit",
+          "stroke": "#f59e0b",
+          "lines": [
+            "Replay events from t=0",
+            "Reconstruct state at any date",
+            "Complete regulatory audit"
           ]
         }
       ],
-      tradeOffs: [
-        { option: "Non-Blocking Retry Topics + DLQ", pros: "Main partition never stalls; poison pills quarantined automatically; full debugging context preserved.", cons: "Messages can temporarily process out of order relative to the retry queue.", bestFor: "High-throughput microservices where partial failures must not block other users." },
-        { option: "In-Place Blocking Retries", pros: "Preserves strict ordering of messages.", cons: "Single bad message halts the entire partition indefinitely.", bestFor: "Low-throughput financial ledgers where out-of-order execution is catastrophic." }
+      "flowConns": [
+        {
+          "d": "M 250 210 L 280 210",
+          "lx": 265,
+          "ly": 200,
+          "label": "Validate"
+        },
+        {
+          "d": "M 490 210 L 520 210",
+          "lx": 505,
+          "ly": 200,
+          "label": "Append"
+        },
+        {
+          "d": "M 730 210 L 760 210",
+          "lx": 745,
+          "ly": 200,
+          "label": "Fan-Out"
+        }
       ],
-      interviewTip: "When designing asynchronous Kafka consumers, always bring up Dead Letter Queues: 'To prevent poison pills from blocking our Kafka partitions, we will catch unparseable payloads, forward them to a dedicated DLQ topic with exception headers, and commit the main partition offset to keep processing valid messages.'"
+      "sections": [
+        {
+          "heading": "1. Event Taxonomy: Notification vs Event-Carried State Transfer",
+          "body": "In Event-Driven Architecture (EDA), there are distinct patterns of communication:\n1. Event Notification: A producer emits a lightweight signal: `{ event: 'OrderCreated', orderId: '123' }`. Problem: When 10 downstream services receive this event, each makes a synchronous HTTP/gRPC call back to Order Service to fetch line items, creating a 10x query storm!\n2. Event-Carried State Transfer (ECST): The event payload contains all relevant data: customer name, line items, shipping address. Downstream consumers consume the data and store local copies in their own databases. They achieve 100% runtime autonomy without query callbacks.\n3. Domain Events: Formally signify a state transition within a Bounded Context, expressed in past tense (`OrderShipped`, `PaymentDeclined`).",
+          "bullets": [
+            "Autonomy via ECST: Downstream services operate even if the origin Order Service is offline.",
+            "Schema Versioning: Use Avro or Protobuf with a Schema Registry (Confluent / AWS Glue) to prevent breaking downstream consumers as schemas evolve."
+          ]
+        },
+        {
+          "heading": "2. The Event Sourcing Pattern: The Log is the Truth",
+          "body": "In traditional CRUD databases, data is stored as mutable records: when an order status changes, an `UPDATE orders SET status = 'CANCELLED'` query overwrites the previous status, destroying historical context. In Event Sourcing (originated in accounting ledgers), state is never updated or deleted. Instead, the application appends immutable events to an append-only Event Store. Current state is reconstructed on-the-fly by replaying the event stream from genesis.",
+          "bullets": [
+            "Complete Audit Trail: Native regulatory compliance; answers not just what the current state is, but exactly how, when, and why it reached that state.",
+            "Time Travel Debugging: You can reconstruct the exact state of the system on March 15th at 14:02 UTC to reproduce a bug.",
+            "Snapshots: For aggregates with thousands of events, persist periodic snapshots (e.g. every 100 events) so rehydration requires reading only the latest snapshot plus subsequent events."
+          ]
+        },
+        {
+          "heading": "3. Operational Challenges: Long-Term Event Evolution",
+          "body": "Event Sourcing introduces unique long-term operational challenges that require careful architecture:",
+          "bullets": [
+            "Schema Evolution Over Decades: An event emitted 5 years ago cannot be deleted. If class structures change, you must implement Upcasters (middleware that transforms old V1 events into V2 schemas during replay).",
+            "GDPR Compliance ('Right to be Forgotten'): In an immutable append-only event store, deleting a customer's personal data is legally required. Solution: Crypto-Shredding (encrypt personal data with a per-user key; deleting the key renders the immutable event payload permanently unreadable)."
+          ]
+        },
+        {
+          "heading": "4. Production Blueprint: Event Sourcing Aggregate in TypeScript",
+          "body": "The following TypeScript snippet demonstrates an Event Sourced Order aggregate hydrating state by replaying an array of domain events.",
+          "bullets": [
+            "Apply State Transitions: Evaluates domain events sequentially to compute current state.",
+            "Immutable State: State is never mutated directly without generating an event."
+          ],
+          "codeSnippet": {
+            "title": "Event Sourced Aggregate Rehydration in TypeScript",
+            "code": "export interface DomainEvent {\n  type: string;\n  occurredAt: string;\n  payload: any;\n}\n\nexport class OrderAggregate {\n  id: string = '';\n  status: string = 'CREATED';\n  totalCents: number = 0;\n  version: number = 0;\n\n  // Rehydrate state from event history\n  static fromHistory(events: DomainEvent[]): OrderAggregate {\n    const aggregate = new OrderAggregate();\n    for (const event of events) {\n      aggregate.apply(event);\n      aggregate.version++;\n    }\n    return aggregate;\n  }\n\n  private apply(event: DomainEvent): void {\n    switch (event.type) {\n      case 'OrderCreated':\n        this.id = event.payload.orderId;\n        this.totalCents = event.payload.totalCents;\n        this.status = 'PENDING';\n        break;\n      case 'OrderPaid':\n        this.status = 'PAID';\n        break;\n      case 'OrderCancelled':\n        this.status = 'CANCELLED';\n        break;\n    }\n  }\n}"
+          }
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Event-Carried State Transfer (ECST)",
+          "pros": "Total consumer autonomy; eliminates query storms; enables decoupled asynchronous microservices.",
+          "cons": "Larger message payload sizes; potential data duplication across service databases.",
+          "bestFor": "Standard asynchronous enterprise microservices."
+        },
+        {
+          "option": "Event Sourcing",
+          "pros": "100% immutable audit ledger; temporal time-travel debugging; eliminates write-lock contention.",
+          "cons": "High cognitive complexity; difficult schema migrations; requires CQRS to query data.",
+          "bestFor": "Banking ledgers, financial accounting, supply chain logistics."
+        },
+        {
+          "option": "Event Notification",
+          "pros": "Lightweight minimal message sizes; zero data duplication.",
+          "cons": "Triggers massive query storms back to origin service; temporal coupling.",
+          "bestFor": "Low-frequency alerts or notifications where payload details are rarely needed."
+        }
+      ],
+      "interviewTip": "In interviews, distinguish between Event Notification and Event-Carried State Transfer: 'I advocate for Event-Carried State Transfer (ECST). Rather than sending a bare ID that forces 10 downstream consumers to execute synchronous callback queries, we package all necessary domain attributes in the event. This empowers downstream services to update their read models with zero runtime coupling.'"
     },
     {
-      id: "event-ordering",
-      subtopicNumber: "5.4",
-      title: "Distributed Event Ordering & Key Skew Mitigation",
-      subtitle: "Partition hashing, handling celebrity hot keys, out-of-order network arrival resolution, and sequence numbers.",
-      readingTime: "8 min read",
-      difficulty: "Advanced",
-      accent: "#10b981",
-      keyTakeaways: [
-        "Total ordering across an entire distributed cluster is physically impossible without a centralized bottleneck; Kafka guarantees total ordering **only within a partition**.",
-        "Assigning partition keys by entity ID (`order_id`) guarantees all state mutations for that order arrive in strict chronological order.",
-        "Beware **Partition Key Skew**: if a celebrity user (Elon Musk, Nike) generates 1,000x more events than other users, their partition becomes a hot spot, overwhelming a single consumer worker."
+      "id": "event-ordering",
+      "subtopicNumber": "5.4",
+      "title": "Distributed Event Ordering & Key Skew Mitigation",
+      "subtitle": "Preserving monotonic ordering across partitions, mitigating hot key skew, and handling out-of-order deliveries.",
+      "readingTime": "8 min read",
+      "difficulty": "Advanced",
+      "accent": "#ec4899",
+      "keyTakeaways": [
+        "In distributed streaming, physical clocks cannot be trusted (NTP clock drift); event ordering must rely on logical sequence numbers or monotonic offsets.",
+        "Kafka guarantees ordering within a partition, but network retries or consumer group rebalances can cause consumers to process messages out of order.",
+        "Key Skew occurs when a popular entity (e.g. celebrity account or Black Friday merchant) receives 100x more traffic than others, overloading a single partition.",
+        "Defensive consumer design: Check monotonic version numbers and reject or buffer events that arrive out of chronological sequence."
       ],
-      ascii: `+-------------------------------------------------------------------------+
-|                  PARTITION SKEW & CELEBRITY KEY MITIGATION             |
-+-------------------------------------------------------------------------+
-[Celebrity Hot Key: user_id=nike (1,000,000 events)]
-  Naive Hashing: MurmurHash2("nike") % 4 ===> ALL 1M Events Hit Partition 2!
-  (Partition 2 Lag Explodes; Consumer 2 Crashes with OOM!)
-
-[Compound Salted Key Hashing Solution]
-  Salted Key: "nike" + "_" + random(0..9)
-  (Spreads Nike traffic across 10 partitions uniformly!)`,
-      blockNodes: [
-        { x: 50, y: 110, w: 260, h: 200, title: 'Event Producers', stroke: '#38bdf8', lines: ['Producers send event stream', 'Standard Key: order_id', 'Salted Key for hot users', 'Sequence number headers'], tag: 'Producers' },
-        { x: 370, y: 110, w: 260, h: 200, title: 'Partition Distribution', stroke: '#10b981', lines: ['Uniform traffic distribution', 'Order mutations strictly sequenced', 'Hot celebrity keys salted', 'Eliminates partition starvation'], tag: 'Kafka Partitions' },
-        { x: 690, y: 110, w: 260, h: 200, title: 'Consumer Reassembly', stroke: '#f59e0b', lines: ['Inspects sequence numbers', 'Local buffering window', 'Discards stale duplicate state', 'Updates read model'], tag: 'Consumers' }
-      ],
-      blockConns: [
-        { d: 'M 310 210 L 370 210', lx: 340, ly: 200, label: 'Hash Key' },
-        { d: 'M 630 210 L 690 210', lx: 660, ly: 200, label: 'Balance' }
-      ],
-      flowNodes: [
-        { x: 50, y: 150, w: 200, h: 140, step: '1', title: 'Key Assignment', stroke: '#38bdf8', lines: ['Choose partition key orderId', 'Attach monotonic sequence: 4', 'Guarantees order sequence'] },
-        { x: 280, y: 150, w: 210, h: 140, step: '2', title: 'Single Partition Log', stroke: '#10b981', lines: ['All order events hit partition 3', 'Appended strictly in order', 'Maintains causal history'] },
-        { x: 520, y: 150, w: 210, h: 140, step: '3', title: 'Consumer Ingestion', stroke: '#f59e0b', lines: ['Consumer reads sequential log', 'Applies state mutation', 'Checks sequence > lastSeen'] },
-        { x: 760, y: 150, w: 200, h: 140, step: '4', title: 'Skew Protection', stroke: '#a855f7', lines: ['If celebrity key detected:', 'Append random salt 0..9', 'Distributes load across fleet'] }
-      ],
-      flowConns: [
-        { d: 'M 250 210 L 280 210', lx: 265, ly: 200, label: 'Key' },
-        { d: 'M 490 210 L 520 210', lx: 505, ly: 200, label: 'Append' },
-        { d: 'M 730 210 L 760 210', lx: 745, ly: 200, label: 'Process' }
-      ],
-      sections: [
+      "ascii": "+-------------------------------------------------------------------------+\n|                  OUT-OF-ORDER EVENT MITIGATION PATTERN                  |\n+-------------------------------------------------------------------------+\n[Kafka Stream: Partition 0] ---> [Consumer Pod]\nEvents arrive:\n#1: OrderCreated    (Version: 1) ===> Processed! (Current DB Version: 1)\n#3: OrderShipped    (Version: 3) ===> OUT OF ORDER! (Version 2 Missing!)\n                                       |\n                                       +---> [Local Buffer / Redis Delay Set]\n                                             (Waits for Version 2)\n                                       |\n#2: OrderPaid       (Version: 2) ===> Processed! (Current DB Version: 2)\n                                       |\n                                       +---> Flushes Version 3 from Buffer!\n                                             (Processed! Current DB Version: 3)",
+      "blockNodes": [
         {
-          heading: "How to Solve Celebrity Hot Partition Skew",
-          body: "When you partition by customer ID, all events for a given customer route to the same partition. If a major enterprise client generates 100,000 events per minute while standard users generate 5, the partition assigned to that enterprise customer will experience catastrophic consumer lag while other partitions sit idle. To mitigate hot keys, implement Key Salting: identify hot entities and append a random suffix (`nike_0`, `nike_1`, ..., `nike_9`) to distribute the traffic across 10 partitions.",
-          bullets: [
-            "Idempotent Out-of-Order Rejection: In the consumer, store `last_processed_version`. If an event arrives with `version <= last_processed_version`, drop it immediately.",
-            "Causal Consistency: Use vector clocks or monotonic database transaction IDs to order events when consumers aggregate across multiple partitions.",
-            "Rebalancing Awareness: Remember that increasing partition count changes the hash modulus (`hash(key) % N`), routing subsequent events for an existing entity to a different partition."
+          "x": 50,
+          "y": 120,
+          "w": 250,
+          "h": 180,
+          "title": "Out-of-Order Events",
+          "stroke": "#ef4444",
+          "lines": [
+            "Kafka network retry delay",
+            "Version 3 arrives before 2",
+            "Risk: Invalid state transition",
+            "Payment marked after ship"
+          ],
+          "tag": "Hazard"
+        },
+        {
+          "x": 360,
+          "y": 100,
+          "w": 270,
+          "h": 220,
+          "title": "Reordering Buffer",
+          "stroke": "#10b981",
+          "lines": [
+            "Checks current DB version",
+            "Buffers version > current + 1",
+            "Redis sorted set storage",
+            "Releases when gap closes",
+            "Guarantees monotonic order"
+          ],
+          "tag": "Sequence Guard"
+        },
+        {
+          "x": 690,
+          "y": 120,
+          "w": 250,
+          "h": 180,
+          "title": "Consistent State",
+          "stroke": "#38bdf8",
+          "lines": [
+            "OrderCreated (v1) -> OK",
+            "OrderPaid (v2) -> OK",
+            "OrderShipped (v3) -> OK",
+            "Zero state corruption"
+          ],
+          "tag": "Protected Aggregate"
+        }
+      ],
+      "blockConns": [
+        {
+          "d": "M 300 210 L 360 210",
+          "lx": 330,
+          "ly": 200,
+          "label": "Inspect"
+        },
+        {
+          "d": "M 630 210 L 690 210",
+          "lx": 660,
+          "ly": 200,
+          "label": "In-Order"
+        }
+      ],
+      "flowNodes": [
+        {
+          "x": 50,
+          "y": 150,
+          "w": 200,
+          "h": 140,
+          "step": "1",
+          "title": "Event Arrives",
+          "stroke": "#38bdf8",
+          "lines": [
+            "Event version = 3",
+            "Current entity version = 1",
+            "Gap detected: v2 missing"
+          ]
+        },
+        {
+          "x": 280,
+          "y": 150,
+          "w": 210,
+          "h": 140,
+          "step": "2",
+          "title": "Buffer in Redis",
+          "stroke": "#f59e0b",
+          "lines": [
+            "Store v3 in Redis sorted set",
+            "Set TTL = 60 seconds",
+            "Do not commit primary state"
+          ]
+        },
+        {
+          "x": 520,
+          "y": 150,
+          "w": 210,
+          "h": 140,
+          "step": "3",
+          "title": "Missing v2 Ingest",
+          "stroke": "#10b981",
+          "lines": [
+            "Delayed v2 arrives on wire",
+            "Entity state advances to v2",
+            "Triggers buffer drain"
+          ]
+        },
+        {
+          "x": 760,
+          "y": 150,
+          "w": 200,
+          "h": 140,
+          "step": "4",
+          "title": "Drain Buffer",
+          "stroke": "#a855f7",
+          "lines": [
+            "Pulls v3 from Redis buffer",
+            "Applies state mutation to v3",
+            "All invariants preserved"
           ]
         }
       ],
-      tradeOffs: [
-        { option: "Entity-Key Partitioning (orderId)", pros: "Guarantees strict FIFO ordering per entity, zero race conditions for that entity.", cons: "Subject to partition skew if single entities generate huge traffic spikes.", bestFor: "Transactional orders, user profiles, banking transactions." },
-        { option: "Round-Robin / Random Partitioning", pros: "Perfect uniform load balancing across all broker nodes and consumers.", cons: "Zero ordering guarantees; events for the same order arrive out of order.", bestFor: "Stateless telemetry, clickstream analytics, metric collection." }
+      "flowConns": [
+        {
+          "d": "M 250 210 L 280 210",
+          "lx": 265,
+          "ly": 200,
+          "label": "Detect Gap"
+        },
+        {
+          "d": "M 490 210 L 520 210",
+          "lx": 505,
+          "ly": 200,
+          "label": "Catch Up"
+        },
+        {
+          "d": "M 730 210 L 760 210",
+          "lx": 745,
+          "ly": 200,
+          "label": "Drain"
+        }
       ],
-      interviewTip: "In Twitter or Instagram system design interviews, bring up the celebrity problem: 'Partitioning tweets by author ID will create hot partitions for celebrities like Cristiano Ronaldo. We will salt celebrity keys or route celebrity fan-outs to a separate read-path architecture.'"
+      "sections": [
+        {
+          "heading": "1. The Fallacy of Global Ordering in Distributed Systems",
+          "body": "A foundational law of distributed computing is that global total ordering across independent machines is impossible without a centralized bottleneck sequencer. While Kafka provides total ordering within a single partition, real-world systems experience out-of-order event arrivals due to network retries, parallel processing threads, and consumer rebalancing. If `OrderCancelled` arrives before `OrderCreated`, a consumer that blindly executes updates will create corrupted state.",
+          "bullets": [
+            "Logical Monotonic Sequence Numbers: Every event for an aggregate must carry an incrementing version integer (Version 1, 2, 3) rather than relying on system wall-clock timestamps.",
+            "Producer Idempotence: Ensure producer configuration `max.in.flight.requests.per.connection=5` is paired with `enable.idempotence=true` to prevent in-flight retry reordering in Kafka."
+          ]
+        },
+        {
+          "heading": "2. Mitigating Hot Key Partition Skew",
+          "body": "When you partition Kafka events by entity ID (e.g. `merchant_id`), you risk Key Skew. A high-volume merchant (e.g. Amazon or Apple) can generate 1,000x more events than other merchants, causing that single partition's consumer pod to experience massive lag while other pods sit idle.",
+          "bullets": [
+            "Compound Partition Keys: Instead of `merchant_id`, partition by `merchant_id + '_' + (order_id % 4)`. This spreads the high-volume merchant across 4 partitions.",
+            "Dedicated Topics for VIPs: Route massive tenants to a dedicated high-capacity topic with higher partition counts."
+          ]
+        },
+        {
+          "heading": "3. Consumer-Side Reordering Buffer Pattern",
+          "body": "When events arrive out of order, defensive consumers implement the Reordering Buffer pattern:",
+          "bullets": [
+            "Version Inspection: If incoming event version is greater than `current_version + 1`, place the event into a Redis sorted set buffer with a short TTL.",
+            "Buffer Drain: When the missing event arrives and processes successfully, poll the buffer and apply subsequent versions in order."
+          ]
+        },
+        {
+          "heading": "4. Production Blueprint: Version-Aware Event Handler in TypeScript",
+          "body": "The following TypeScript snippet demonstrates a version-checking consumer that detects sequence gaps and buffers out-of-order events.",
+          "bullets": [
+            "Sequence Gap Detection: Identifies missing intermediate versions.",
+            "Redis Sorted Set Buffer: Buffers future events until the gap is closed."
+          ],
+          "codeSnippet": {
+            "title": "Out-of-Order Sequence Buffer in TypeScript",
+            "code": "export async function handleVersionedEvent(\n  event: { aggregateId: string; version: number; payload: any },\n  db: any,\n  redis: any\n) {\n  const currentVersion = await db.getVersion(event.aggregateId);\n\n  // Case 1: Exact expected next version\n  if (event.version === currentVersion + 1) {\n    await db.applyMutation(event.aggregateId, event.payload, event.version);\n    await drainBufferedEvents(event.aggregateId, event.version, db, redis);\n    return;\n  }\n\n  // Case 2: Stale duplicate event (already processed)\n  if (event.version <= currentVersion) {\n    console.warn(`Ignoring stale event v${event.version} (current: v${currentVersion})`);\n    return;\n  }\n\n  // Case 3: Future event (Gap detected! Buffer in Redis)\n  console.warn(`Gap detected! Received v${event.version}, expected v${currentVersion + 1}. Buffering...`);\n  await redis.zadd(\n    `buffer:${event.aggregateId}`,\n    event.version,\n    JSON.stringify(event)\n  );\n}"
+          }
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Consumer Sequence Reordering Buffer",
+          "pros": "Guarantees state machine correctness; prevents out-of-order state corruption.",
+          "cons": "Adds Redis buffer complexity; potential memory pressure if missing event is lost forever.",
+          "bestFor": "Strict state machines (order lifecycles, account balances)."
+        },
+        {
+          "option": "Strict Single Partition per Tenant",
+          "pros": "Native Kafka in-order delivery; zero application buffer code.",
+          "cons": "Vulnerable to hot key skew; maximum consumer concurrency capped at 1.",
+          "bestFor": "Low-throughput entities."
+        },
+        {
+          "option": "Commutative Data Modeling (CRDTs)",
+          "pros": "Operations can be applied in any order without changing final state ($A + B = B + A$).",
+          "cons": "Mathematically difficult to model for complex business rules.",
+          "bestFor": "Counters, collaborative editing, shopping cart item additions."
+        }
+      ],
+      "interviewTip": "In interviews, address out-of-order events with engineering rigor: 'Because network retries can cause events to arrive out of chronological order, I attach monotonic version numbers to each domain event. The consumer checks the entity version in the database; if a gap is detected, it buffers the future event in a Redis sorted set until the intermediate event arrives, guaranteeing state machine consistency.'"
     },
     {
-      id: "change-data-capture",
-      subtopicNumber: "5.5",
-      title: "Change Data Capture (CDC) & Debezium Streaming",
-      subtitle: "Tailing PostgreSQL write-ahead logs, MySQL binlogs, streaming database mutations, and zero-impact event sourcing.",
-      readingTime: "7 min read",
-      difficulty: "Advanced",
-      accent: "#a855f7",
-      keyTakeaways: [
-        "Change Data Capture (CDC) streams row-level changes (INSERT, UPDATE, DELETE) directly from a database's transaction log (WAL / binlog) into Kafka.",
-        "CDC requires zero changes to application code: developers write normal SQL transactions, and the CDC engine automatically extracts the stream.",
-        "Use Debezium with Kafka Connect for low-latency ($t < 50ms$), high-throughput data replication without placing polling load on the database."
+      "id": "change-data-capture",
+      "subtopicNumber": "5.5",
+      "title": "Change Data Capture (CDC) & Debezium Streaming",
+      "subtitle": "Streaming real-time database transaction logs (WAL/binlog) to Kafka without application code modifications.",
+      "readingTime": "9 min read",
+      "difficulty": "Advanced",
+      "accent": "#10b981",
+      "keyTakeaways": [
+        "Change Data Capture (CDC) observes and extracts row-level changes from a database's Write-Ahead Log (PostgreSQL WAL or MySQL binlog) in real-time.",
+        "Zero Application Code Overhead: CDC runs as a database replication listener (Debezium); application developers write standard SQL queries without event-publishing code.",
+        "Guarantees that every single committed database mutation is captured with zero dual-write risk.",
+        "Ideal for streaming database changes to search indexes (Elasticsearch), analytics caches (Redis), and data warehouses (Snowflake)."
       ],
-      ascii: `+-------------------------------------------------------------------------+
-|                  CHANGE DATA CAPTURE (CDC) WITH DEBEZIUM                |
-+-------------------------------------------------------------------------+
-[Application] ---> [PostgreSQL Database Engine]
-                         | (Normal SQL Commits)
-                         v
-             [Write-Ahead Log (WAL Disk)]
-                         |
-                         v (Logical Replication Slot)
-             [Debezium / Kafka Connect Engine]
-                         |
-                         v (Streams JSON / Avro Row Deltas)
-               [Apache Kafka Topic] (dbserver1.orders)`,
-      blockNodes: [
-        { x: 50, y: 110, w: 260, h: 200, title: 'Application & RDBMS', stroke: '#38bdf8', lines: ['App executes standard SQL', 'INSERT INTO orders', 'PostgreSQL / MySQL engine', 'Writes to WAL disk on commit'], tag: 'Database' },
-        { x: 370, y: 110, w: 260, h: 200, title: 'Debezium CDC Connector', stroke: '#a855f7', lines: ['Kafka Connect Plugin', 'Connects via replication slot', 'Reads raw binary WAL stream', 'Zero SQL SELECT polling'], tag: 'CDC Engine' },
-        { x: 690, y: 110, w: 260, h: 200, title: 'Streaming Downstream', stroke: '#10b981', lines: ['Kafka Topic: db.orders', 'Elasticsearch Search Index', 'Snowflake Data Warehouse', 'Real-time microservice sync'], tag: 'Downstream Sync' }
-      ],
-      blockConns: [
-        { d: 'M 310 210 L 370 210', lx: 340, ly: 200, label: 'Tails WAL' },
-        { d: 'M 630 210 L 690 210', lx: 660, ly: 200, label: 'Publishes' }
-      ],
-      flowNodes: [
-        { x: 50, y: 150, w: 200, h: 140, step: '1', title: 'SQL Mutation', stroke: '#38bdf8', lines: ['App updates row status', 'Postgres commits transaction', 'Appends binary record to WAL'] },
-        { x: 280, y: 150, w: 210, h: 140, step: '2', title: 'WAL Capture', stroke: '#a855f7', lines: ['Debezium reads replication slot', 'Decodes binary delta into DTO', 'Captures before and after values'] },
-        { x: 520, y: 150, w: 210, h: 140, step: '3', title: 'Kafka Publishing', stroke: '#10b981', lines: ['Emits record to Kafka topic', 'Key = primary key of row', 'Partition ordering maintained'] },
-        { x: 760, y: 150, w: 200, h: 140, step: '4', title: 'Search Index Sync', stroke: '#f59e0b', lines: ['Elasticsearch consumer updates', 'Search index fresh within 50ms', 'Zero application code changes'] }
-      ],
-      flowConns: [
-        { d: 'M 250 210 L 280 210', lx: 265, ly: 200, label: 'Commit' },
-        { d: 'M 490 210 L 520 210', lx: 505, ly: 200, label: 'Capture' },
-        { d: 'M 730 210 L 760 210', lx: 745, ly: 200, label: 'Index' }
-      ],
-      sections: [
+      "ascii": "+-------------------------------------------------------------------------+\n|                  CHANGE DATA CAPTURE (CDC) WITH DEBEZIUM                |\n+-------------------------------------------------------------------------+\n[Application Service] ---> INSERT/UPDATE ---> [PostgreSQL Database Engine]\n                                                        |\n                                                        v\n                                          [Write-Ahead Log: WAL on Disk]\n                                                        |\n                                                        | (Logical Replication)\n                                                        v\n                                            [Debezium Connector Engine]\n                                                        |\n                                                        | (Publishes Avro/JSON)\n                                                        v\n                                                  [Apache Kafka]\n                                                        |\n                                                        v\n                                      [Downstream Materialized Views]\n                                      - Elasticsearch (Search)\n                                      - Redis (Fast Cache)\n                                      - Snowflake (Data Warehouse)",
+      "blockNodes": [
         {
-          heading: "How CDC Revolutionizes Cache Invalidation and Search Indexing",
-          body: "Keeping a cache (Redis) or search engine (Elasticsearch) in sync with a primary relational database has historically been error-prone. When developers manually write dual-writes (`db.save(); redis.set()`), crashes cause the cache to drift out of sync. With CDC, the database itself is the event source. Debezium reads the WAL directly. If the database crashes, it rolls back; if it commits, Debezium streams the exact diff. Cache invalidation workers consume the CDC stream and update Redis with 100% mathematical fidelity.",
-          bullets: [
-            "Zero Application Overhead: Legacy codebases can be turned into event-driven systems without modifying a single line of application source code.",
-            "Before/After Payloads: Debezium events contain both the old row values and new row values, enabling rich audit logging.",
-            "Replication Slot Monitoring: Monitor PostgreSQL `pg_replication_slots`. If Kafka Connect stops consuming, the WAL disk on the database can fill up!"
+          "x": 50,
+          "y": 120,
+          "w": 250,
+          "h": 180,
+          "title": "Application & DB",
+          "stroke": "#38bdf8",
+          "lines": [
+            "Standard SQL queries",
+            "PostgreSQL / MySQL engine",
+            "Write-Ahead Log (WAL)",
+            "Zero event-code boilerplate"
+          ],
+          "tag": "Origin DB"
+        },
+        {
+          "x": 360,
+          "y": 100,
+          "w": 270,
+          "h": 220,
+          "title": "Debezium CDC Engine",
+          "stroke": "#10b981",
+          "lines": [
+            "Logical replication client",
+            "Tails WAL in sub-milliseconds",
+            "Captures INSERT, UPDATE, DELETE",
+            "Emits before/after state",
+            "Fault-tolerant offset tracking"
+          ],
+          "tag": "Log Miner"
+        },
+        {
+          "x": 690,
+          "y": 120,
+          "w": 250,
+          "h": 180,
+          "title": "Streaming Consumers",
+          "stroke": "#a855f7",
+          "lines": [
+            "Elasticsearch search index",
+            "Redis distributed cache",
+            "Snowflake data warehouse",
+            "Fraud detection engine"
+          ],
+          "tag": "Destinations"
+        }
+      ],
+      "blockConns": [
+        {
+          "d": "M 300 210 L 360 210",
+          "lx": 330,
+          "ly": 200,
+          "label": "WAL Stream"
+        },
+        {
+          "d": "M 630 210 L 690 210",
+          "lx": 660,
+          "ly": 200,
+          "label": "To Kafka"
+        }
+      ],
+      "flowNodes": [
+        {
+          "x": 50,
+          "y": 150,
+          "w": 200,
+          "h": 140,
+          "step": "1",
+          "title": "SQL Mutation",
+          "stroke": "#38bdf8",
+          "lines": [
+            "App executes SQL commit",
+            "Postgres writes to disk WAL",
+            "Transaction finalized"
+          ]
+        },
+        {
+          "x": 280,
+          "y": 150,
+          "w": 210,
+          "h": 140,
+          "step": "2",
+          "title": "WAL Tailing",
+          "stroke": "#10b981",
+          "lines": [
+            "Debezium reads replication slot",
+            "Decodes logical WAL frames",
+            "Extracts before and after rows"
+          ]
+        },
+        {
+          "x": 520,
+          "y": 150,
+          "w": 210,
+          "h": 140,
+          "step": "3",
+          "title": "Kafka Ingest",
+          "stroke": "#f59e0b",
+          "lines": [
+            "Publishes to postgres.orders",
+            "Partitioned by primary key",
+            "Committed to Kafka broker"
+          ]
+        },
+        {
+          "x": 760,
+          "y": 150,
+          "w": 200,
+          "h": 140,
+          "step": "4",
+          "title": "View Update",
+          "stroke": "#a855f7",
+          "lines": [
+            "Elasticsearch sink consumes",
+            "Updates search index in <100ms",
+            "Cache invalidated"
           ]
         }
       ],
-      tradeOffs: [
-        { option: "Change Data Capture (Debezium)", pros: "Zero application code changes, impossible to miss an event, sub-50ms latency, zero polling query load.", cons: "Requires Kafka Connect infrastructure; unconsumed replication slots can exhaust database disk.", bestFor: "Cache invalidation, CQRS search indexing, data warehouse ingestion." },
-        { option: "Scheduled Polling (SELECT WHERE updated_at > t)", pros: "Simple to write in a cron job.", cons: "High database CPU consumption; misses deletes; latency bound by polling interval.", bestFor: "Simple batch ETL jobs only." }
+      "flowConns": [
+        {
+          "d": "M 250 210 L 280 210",
+          "lx": 265,
+          "ly": 200,
+          "label": "Commit"
+        },
+        {
+          "d": "M 490 210 L 520 210",
+          "lx": 505,
+          "ly": 200,
+          "label": "Decode"
+        },
+        {
+          "d": "M 730 210 L 760 210",
+          "lx": 745,
+          "ly": 200,
+          "label": "Project"
+        }
       ],
-      interviewTip: "When asked 'How do we keep our Elasticsearch search index in sync with PostgreSQL?', recommend: 'We will use Change Data Capture with Debezium tailing PostgreSQL's Write-Ahead Log. This guarantees real-time synchronization without dual-write inconsistencies or polling load on the database.'"
+      "sections": [
+        {
+          "heading": "1. The Evolution of Data Synchronization: Why Dual-Writes and Polling Fail",
+          "body": "Synchronizing data from an operational database to downstream consumers (search engines, analytics warehouses, and caches) has historically suffered from flawed implementations. Application-level dual writes risk partial failures, while batch database polling (`SELECT WHERE updated_at > ?`) burns massive database CPU and cannot detect deleted rows (`DELETE` statements leave no updated timestamp). Change Data Capture (CDC) reads the database engine's internal transaction log (PostgreSQL WAL or MySQL binlog). Every create, update, and delete is captured automatically with zero impact on database query latency.",
+          "bullets": [
+            "Log-Based CDC vs Query Polling: Log-based CDC consumes zero database read query CPU and captures deletes naturally.",
+            "Sub-Millisecond Replication: Debezium streams transaction log events into Kafka within 50–200 milliseconds of database commit.",
+            "Before-and-After Row State: Debezium payloads capture both the previous row values and the updated row values, enabling audit logging."
+          ]
+        },
+        {
+          "heading": "2. Debezium Architecture: Replication Slots & Schema Evolution",
+          "body": "Debezium acts as a simulated database replica. In PostgreSQL, it leverages native Logical Decoding Output Plugins (`pgoutput`) via replication slots.",
+          "bullets": [
+            "Replication Slot Safety: PostgreSQL preserves WAL files on disk until the Debezium replication slot acknowledges consumption. If Debezium is offline, WAL accumulates on disk; monitoring replication slot lag is critical to prevent database disk saturation.",
+            "Initial Snapshotting: When booted against an existing database with millions of records, Debezium performs an initial table snapshot before switching seamlessly to tailing the live WAL stream."
+          ]
+        },
+        {
+          "heading": "3. CDC Anti-Patterns: Leaking Internal Database Schemas",
+          "body": "The primary risk of CDC is coupling downstream services directly to internal database table schemas. If your CDC pipeline dumps raw SQL table rows into Kafka, renaming a database column breaks all downstream consumers.",
+          "bullets": [
+            "Outbox SMT Pattern: Rather than streaming raw entity tables, combine CDC with the Transactional Outbox pattern. Debezium streams an explicit `outbox` table, transforming table rows into clean domain events using Single Message Transforms (SMT)."
+          ]
+        },
+        {
+          "heading": "4. Production Blueprint: Debezium PostgreSQL Connector JSON",
+          "body": "The following configuration demonstrates a production Debezium PostgreSQL connector with Avro serialization and replication slot management.",
+          "bullets": [
+            "Plugin Configuration: Configures `pgoutput` with snapshot mode.",
+            "Avro Serialization: Pairs with Confluent Schema Registry for strict schema governance."
+          ],
+          "codeSnippet": {
+            "title": "Production Debezium PostgreSQL Connector Configuration",
+            "code": "{\n  \"name\": \"postgres-inventory-cdc\",\n  \"config\": {\n    \"connector.class\": \"io.debezium.connector.postgresql.PostgresConnector\",\n    \"tasks.max\": \"1\",\n    \"plugin.name\": \"pgoutput\",\n    \"database.hostname\": \"db.production.internal\",\n    \"database.port\": \"5432\",\n    \"database.user\": \"cdc_debezium\",\n    \"database.password\": \"${env:DB_CDC_PASSWORD}\",\n    \"database.dbname\": \"inventory_db\",\n    \"database.server.name\": \"inventory_cluster\",\n    \"table.include.list\": \"public.products,public.outbox_events\",\n    \"slot.name\": \"debezium_inventory_slot\",\n    \"publication.autocreate.mode\": \"filtered\",\n    \"decimal.handling.mode\": \"double\",\n    \"key.converter\": \"io.confluent.connect.avro.AvroConverter\",\n    \"key.converter.schema.registry.url\": \"http://schema-registry:8081\",\n    \"value.converter\": \"io.confluent.connect.avro.AvroConverter\",\n    \"value.converter.schema.registry.url\": \"http://schema-registry:8081\"\n  }\n}"
+          }
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Log-Based CDC (Debezium + Kafka)",
+          "pros": "Zero application code; sub-100ms replication; captures deletes naturally; zero database query CPU overhead.",
+          "cons": "Requires Kafka Connect cluster; unmanaged replication slots can fill database disk if connector stalls.",
+          "bestFor": "Real-time cache invalidation, search index syncing, data warehouse streaming."
+        },
+        {
+          "option": "Application-Level Event Publishing",
+          "pros": "Full control over domain event schemas; no database WAL permissions needed.",
+          "cons": "Vulnerable to the dual-write problem unless paired with the Outbox pattern.",
+          "bestFor": "Standard microservices domain events."
+        },
+        {
+          "option": "Database Polling (SELECT WHERE updated_at)",
+          "pros": "Simple to write in a cron job.",
+          "cons": "Cannot capture hard deletes; high database query CPU; high replication latency (polling interval).",
+          "bestFor": "Legacy databases where WAL access is completely impossible."
+        }
+      ],
+      "interviewTip": "In interviews, bring up CDC when discussing cache invalidation or search syncing: 'Rather than having the application update both PostgreSQL and Elasticsearch in code (which risks dual-write inconsistency), I implement Change Data Capture using Debezium. Debezium tails the PostgreSQL Write-Ahead Log in sub-milliseconds, streaming committed changes to Kafka. An Elasticsearch sink consumes the stream, guaranteeing eventual consistency with zero impact on operational query latency.'"
     }
   ]
 };
-
-module.exports = {
-  MODULE_5_EVENTS
-};
+module.exports = { MODULE_5_EVENTS };

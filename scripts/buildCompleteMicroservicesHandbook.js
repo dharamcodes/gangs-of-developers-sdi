@@ -51,7 +51,7 @@ const UI_CONFIG = {
     cons: "Trade-Offs & Failure Modes",
     bestFor: "Production Recommendation"
   },
-  interviewTipHeading: "GOD Staff+ Microservices Interview Pro-Tip",
+  interviewTipHeading: "GOD Microservices Interview Pro-Tip",
   previousLabel: "Previous",
   nextLabel: "Next",
   partPrefix: "Part",

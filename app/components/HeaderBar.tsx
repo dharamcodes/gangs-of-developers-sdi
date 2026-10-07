@@ -165,7 +165,7 @@ export default function HeaderBar({
           sx={{ width: 20, height: 20, border: "1px solid #f59e0b" }}
         />
       ),
-      badge: "Staff Engineer",
+      badge: "Architect",
     },
   ];
 
