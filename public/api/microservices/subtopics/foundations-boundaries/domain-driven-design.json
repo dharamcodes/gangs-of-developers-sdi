@@ -4,60 +4,73 @@
   "topicTitle": "1. Foundations & Boundaries",
   "topicNumber": 1,
   "subtopicNumber": "1.5",
-  "title": "Domain-Driven Design (DDD) & Bounded Contexts",
-  "subtitle": "Using ubiquitous language, subdomains, aggregates, and context mapping to draw clean architectural boundaries.",
-  "readingTime": "9 min read",
+  "title": "Domain-Driven Design (DDD) in Distributed Systems",
+  "subtitle": "Strategic and tactical DDD, Aggregate Roots, Value Objects, Domain Events, and transaction consistency boundaries.",
+  "readingTime": "12 min read",
   "difficulty": "Advanced",
   "keyTakeaways": [
-    "A Bounded Context defines the exact boundary inside which a domain model and its ubiquitous language hold true without ambiguity.",
-    "The word 'Order' means customer intent in Sales, a bill of materials in Fulfillment, and a ledger debit in Accounting. Trying to share a single god-object creates crippling coupling.",
-    "An Aggregate is a transactional consistency boundary: an ACID transaction should update exactly one Aggregate in one service.",
-    "Use Anti-Corruption Layers (ACL) when integrating with legacy monoliths or third-party APIs to prevent external jargon from polluting your clean domain model."
+    "Strategic DDD (Bounded Contexts, Ubiquitous Language) provides the macro blueprint for microservice boundaries.",
+    "Tactical DDD (Aggregates, Entities, Value Objects) provides the micro blueprint for internal service domain models and consistency boundaries.",
+    "An Aggregate Root is the single entry point for all state mutations; external code can never directly modify internal entities belonging to an aggregate.",
+    "Rule of One: A single database transaction should only ever mutate a single Aggregate Root instance. Cross-aggregate consistency must be achieved via Domain Events and eventual consistency.",
+    "Value Objects are immutable, identity-less primitives (e.g., Money, Currency, Address) that enforce business invariants upon instantiation."
   ],
-  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                  BOUNDED CONTEXTS & CONTEXT MAPPING                     |\n+-------------------------------------------------------------------------+\n  [Catalog Context]                 [Fulfillment Context]\n  +-----------------------+         +-----------------------+\n  | Item = SKU, Marketing |         | Item = Weight, Bin #  |\n  | Price, High-res JPGs  |         | Forklift dimensions   |\n  +-----------+-----------+         +-----------+-----------+\n              |                                 |\n              +======> [Anti-Corruption Layer] <=+\n                       (Translates Domain DTOs)",
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                  TACTICAL DDD AGGREGATE ROOT ARCHITECTURE               |\n+-------------------------------------------------------------------------+\n[Order Bounded Context]\n+-------------------------------------------------------------------------+\n|  AGGREGATE ROOT: Order (Enforces Invariants & Lifecycle)                |\n|  - Id: OrderId (Value Object)                                           |\n|  - Status: OrderStatus (Value Object)                                   |\n|  - Total: Money (Value Object: amount + currency)                       |\n|                                                                         |\n|  INTERNAL ENTITIES (Inaccessible from outside Aggregate):                |\n|  [OrderItem #1]   [OrderItem #2]   [ShippingAddress (Value Object)]     |\n|                                                                         |\n|  MUTATION BOUNDARY:                                                     |\n|  Order.cancel() ---> Validates state ---> Emits OrderCancelled Event    |\n+-------------------------------------------------------------------------+\n                                    |\n            Publishes Domain Event via Transactional Outbox\n                                    v\n          [Event Broker: Kafka] ---> [Logistics Bounded Context]",
   "diagramImageUrl": "/diagrams/microservices/domain-driven-design-block.svg",
   "flowDiagramUrl": "/diagrams/microservices/domain-driven-design-flow.svg",
   "sections": [
     {
-      "heading": "1. Strategic DDD: Ubiquitous Language & Bounded Contexts",
-      "body": "Domain-Driven Design (introduced by Eric Evans) provides the theoretical foundation for microservices decomposition. In monolithic codebases, teams instinctively attempt to model a single unified data model for the entire enterprise. For example, a single `User` entity or `Order` class accumulates hundreds of columns over time to satisfy billing, logistics, recommendations, customer support, and authentication. DDD demonstrates that a universal enterprise model is impossible at scale. Instead, the problem space must be split into Bounded Contexts, within which terms have precise, unambiguous meanings.",
+      "heading": "1. Strategic DDD: Ubiquitous Language, Context Mapping, and Subdomain Classification",
+      "body": "Domain-Driven Design (DDD) provides the architectural grammar for designing distributed systems. Strategic DDD focuses on boundaries, team communication, and the classification of business domains before any code is written.",
       "bullets": [
-        "Ubiquitous Language: A rigorous, shared vocabulary co-created by software engineers and domain business experts. Code, database tables, and API contracts reflect these exact terms.",
-        "Polysemic Entities: The term 'User' is an identity credential in Authentication, a shipping destination in Logistics, and a credit card token in Billing. Each bounded context models only the attributes it needs.",
-        "Subdomain Classification: Core Domain (high business ROI), Supporting Domain (custom supporting tools), and Generic Domain (commodity components)."
+        "Ubiquitous Language: A rigorous, shared vocabulary co-created by software engineers and domain experts. If the business calls a user a 'Subscriber' and the code calls it 'AccountRecord', cognitive dissonance and bug rates soar.",
+        "Bounded Context: The boundary within which a specific Ubiquitous Language and domain model applies uniformly. Inside the Order Context, an Order is a rich Aggregate; outside, it is merely an OrderReference ID.",
+        "Context Mapping Relationships: Formally diagramming the interaction patterns between Bounded Contexts (Shared Kernel, Customer-Supplier, Conformist, Open Host Service, Anti-Corruption Layer).",
+        "Core vs Supporting vs Generic Domains: Direct engineering effort toward the Core Domain (what generates competitive differentiation and revenue) while buying or commoditizing Generic domains."
       ],
       "diagramImageUrl": "/diagrams/microservices/domain-driven-design-block.svg",
       "flowDiagramUrl": "/diagrams/microservices/domain-driven-design-flow.svg"
     },
     {
-      "heading": "2. Tactical DDD: Aggregates as Consistency Boundaries",
-      "body": "While Strategic DDD defines where services sit, Tactical DDD defines how code is structured inside a service. The central pattern is the Aggregate: a cluster of associated domain objects that are treated as an atomic unit for data changes. Every aggregate has an Aggregate Root through which all external mutations must pass. Outside services can only reference the Aggregate Root by its ID, never holding references to internal entities. The fundamental architectural rule: A database transaction should update exactly one Aggregate Root.",
+      "heading": "2. Tactical DDD: Entities, Value Objects, Aggregates, and Domain Events",
+      "body": "Tactical DDD defines the internal building blocks of a microservice's domain layer, enforcing encapsulation and rich business logic over anemic data models.",
       "bullets": [
-        "Aggregate Invariants: Business rules that must be held true at all times (e.g., 'Total line items cannot exceed 50', 'Order cannot be cancelled once shipped').",
-        "Single Aggregate Transaction Rule: Updating multiple aggregates in a single synchronous commit creates lock contention and couples data models. Coordinate cross-aggregate updates asynchronously using Domain Events.",
-        "Entities vs Value Objects: Entities have unique identity (e.g. `OrderId`); Value Objects are immutable and defined solely by their attributes (e.g. `Money { amount: 100, currency: 'USD' }`)."
+        "Entities: Domain objects defined by their unique identity that endures across time and state changes (e.g., an Order with ID `ord-883` remains the same entity even if its items change).",
+        "Value Objects: Immutable objects defined solely by their attributes and values, possessing no identity. Example: `Money(amount: 50, currency: USD)`. Two instances with the same values are completely interchangeable.",
+        "Aggregates: A cluster of domain objects (Entities and Value Objects) treated as a single cohesive unit for data changes, bounded by an Aggregate Root.",
+        "Domain Events: A record of something meaningful that happened in the domain in the past (e.g. `PaymentAuthorized`, `OrderShipped`). Domain events are immutable facts."
       ]
     },
     {
-      "heading": "3. Context Mapping & Anti-Corruption Layers (ACL)",
-      "body": "When Bounded Contexts interact, their relationships must be formally mapped out. Common relationship patterns include Shared Kernel (shared code/data—use sparingly), Customer-Supplier (upstream team prioritizes downstream requests), Conformist (downstream adopts upstream schema), and Anti-Corruption Layer (ACL). An ACL is a translation adapter that isolates your clean domain model from foreign schemas, legacy SOAP APIs, or third-party vendor models.",
+      "heading": "3. Consistency Boundaries: The Aggregate as the Unit of Atomic Mutation",
+      "body": "The most vital rule of tactical DDD in distributed architectures is: An Aggregate defines a strict boundary of immediate transactional consistency. Inside the aggregate, all business invariants must be satisfied atomically before persisting.",
       "bullets": [
-        "Anti-Corruption Layer (ACL): Translates incoming foreign data structures into internal native domain types, ensuring legacy bugs or schema changes do not pollute your service.",
-        "Open Host Service (OHS): Upstream service provides a stable public protocol (REST/gRPC) for multiple consumers.",
-        "Published Language (PL): Standardized interchange format (like JSON Schema or Protobuf) used across context boundaries."
+        "Rule 1 - External References: Outside code can only hold a reference to the Aggregate Root, never to an internal entity inside the aggregate.",
+        "Rule 2 - Direct Root Modification: All commands to modify state must pass through methods on the Aggregate Root. An external service cannot directly update `OrderItem.quantity`.",
+        "Rule 3 - One Aggregate Per Transaction: A single database transaction should only ever mutate a single Aggregate Root instance. Modifying multiple aggregates in one transaction violates boundary decoupling.",
+        "Rule 4 - Eventual Consistency Between Aggregates: When a state change in Aggregate A requires updates in Aggregate B, use asynchronous Domain Events rather than distributed transactions."
       ]
     },
     {
-      "heading": "4. Production Blueprint: Aggregate Root Enforcing Business Invariants",
-      "body": "The following Java 21 implementation demonstrates an Order Aggregate Root with strict invariant protection, encapsulated state, and domain event emission.",
+      "heading": "4. Aggregate Root Boundary Invariants & Event-Driven State Mutation Lifecycle",
+      "body": "A robust Aggregate Root model eliminates corrupt state transitions by encapsulating business rules directly within domain methods, preventing controllers or application services from executing invalid operations.",
       "bullets": [
-        "Encapsulated State: State can only be mutated through explicit business methods (`cancel()`), never direct property setters.",
-        "Domain Event Emission: Emits immutable events captured within the aggregate for downstream broadcast."
-      ],
-      "codeSnippet": {
-        "title": "Java 21 Aggregate Root with Strict Business Invariant Enforcement",
-        "code": "public record OrderId(UUID value) {}\npublic record Money(BigDecimal amount, String currency) {}\n\npublic class OrderAggregate {\n    private final OrderId id;\n    private OrderStatus status;\n    private final List<OrderLineItem> items;\n    private final List<DomainEvent> domainEvents = new ArrayList<>();\n\n    public OrderAggregate(OrderId id, List<OrderLineItem> items) {\n        if (items == null || items.isEmpty()) {\n            throw new IllegalArgumentException(\"An order must contain at least one item.\");\n        }\n        this.id = id;\n        this.items = new ArrayList<>(items);\n        this.status = OrderStatus.PENDING;\n    }\n\n    public void cancel(String reason) {\n        // Invariant: Cannot cancel already dispatched order\n        if (this.status == OrderStatus.SHIPPED || this.status == OrderStatus.DELIVERED) {\n            throw new IllegalStateException(\"Cannot cancel an order that has already shipped.\");\n        }\n        this.status = OrderStatus.CANCELLED;\n        this.domainEvents.add(new OrderCancelledEvent(this.id, reason, Instant.now()));\n    }\n\n    public List<DomainEvent> pollEvents() {\n        List<DomainEvent> events = new ArrayList<>(this.domainEvents);\n        this.domainEvents.clear();\n        return events;\n    }\n}"
-      }
+        "Optimistic Concurrency Control: The Aggregate Root maintains a version number. When persisting, the database verifies that the stored version matches the loaded version (`WHERE id = ? AND version = ?`), preventing lost updates in concurrent environments.",
+        "Invariant Verification at Ingress: Before any state mutation is accepted, the Aggregate Root verifies domain rules (e.g., verifying an order is in `SUBMITTED` status before allowing cancellation). Invalid commands throw domain exceptions immediately.",
+        "Internal State Transition: Upon successful validation, the Aggregate Root modifies its internal private state and registers a new Domain Event in its internal pending events collection.",
+        "Transactional Event Dispatch: When the repository saves the Aggregate Root, it persists both the updated aggregate state and the pending domain events to the outbox table within the same ACID transaction.",
+        "Publishing and Cleanup: After database commit confirmation, domain events are dispatched to the message broker, completing the state mutation lifecycle."
+      ]
+    },
+    {
+      "heading": "5. Event Storming & Ubiquitous Language Discovery Methodology",
+      "body": "Event Storming is a rapid, highly collaborative workshop method used to discover domain boundaries, bounded contexts, and aggregate candidates directly with domain stakeholders.",
+      "bullets": [
+        "Orange Sticky Notes (Domain Events): Participants begin by brainstorming every significant business event written in the past tense (`AccountRegistered`, `InvoiceSettled`).",
+        "Blue Sticky Notes (Commands): Triggers that cause domain events, representing user intents or API actions (`RegisterAccount`, `SettleInvoice`).",
+        "Yellow Sticky Notes (Aggregates): Identifying the stateful business concepts that accept commands and emit domain events while enforcing consistency rules.",
+        "Drawing Bounded Contexts: Grouping tightly related clusters of commands, aggregates, and events reveals natural bounded contexts and microservice boundaries."
+      ]
     }
   ],
   "tradeOffs": [
@@ -65,7 +78,7 @@
       "option": "Strict DDD Bounded Contexts",
       "pros": "Zero schema pollution, clean ubiquitous language, isolated business invariants, perfect microservice alignment.",
       "cons": "Steep learning curve, upfront Event Storming workshops required, boilerplate mapping classes.",
-      "bestFor": "Core business systems with high complexity (fintech, insurance, supply chain, healthcare)."
+      "bestFor": "Core business systems with high complexity (fintech, supply chain, healthcare, e-commerce)."
     },
     {
       "option": "CRUD Anemic Domain Models",
@@ -75,7 +88,7 @@
     },
     {
       "option": "Shared Kernel Model",
-      "pros": "Shared code library eliminates duplicate class definitions.",
+      "pros": "Shared code library eliminates duplicate class definitions across microservices.",
       "cons": "Tight runtime and compile-time coupling; changes in shared library force redeployments across all services.",
       "bestFor": "Extremely stable common utilities (e.g. Money or Address primitives) shared across closely paired teams."
     }

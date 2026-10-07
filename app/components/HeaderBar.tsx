@@ -129,7 +129,7 @@ export default function HeaderBar({
     {
       id: "system-design",
       label: "System Design",
-      href: "/free-course",
+      href: "/system-design",
       icon: <MenuBookRoundedIcon sx={{ fontSize: 18 }} />,
       badge: "Handbook",
     },
@@ -149,7 +149,7 @@ export default function HeaderBar({
     },
     {
       id: "company-wise",
-      label: "FAANG Problems",
+      label: "Problems",
       href: "/company-wise-problems",
       icon: <BusinessRoundedIcon sx={{ fontSize: 18 }} />,
       badge: "Interviews",

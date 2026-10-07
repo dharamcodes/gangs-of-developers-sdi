@@ -9,6 +9,7 @@ const { MODULE_3_DATA } = require('./microservicesMod3');
 const { MODULE_4_RESILIENCE } = require('./microservicesMod4');
 const { MODULE_5_EVENTS } = require('./microservicesMod5');
 const { MODULE_6_OPERATIONS } = require('./microservicesMod6');
+require('./generateOAuthFlowDiagrams');
 
 const rootDir = path.join(__dirname, '..');
 const apiDir = path.join(rootDir, 'public', 'api', 'microservices');
@@ -34,7 +35,7 @@ const UI_CONFIG = {
   brandTitle: "Gangs of Developers",
   brandSubtitle: "Microservices Architecture Handbook",
   tocHeading: "Microservices Curriculum",
-  searchPlaceholder: "Search 32 microservices topics & patterns...",
+  searchPlaceholder: "Search 33 microservices topics & patterns...",
   noResultsText: "No microservices patterns match your search.",
   expandAllTooltip: "Expand all topics",
   collapseAllTooltip: "Collapse all topics",
@@ -57,7 +58,7 @@ const UI_CONFIG = {
   partPrefix: "Part",
   sectionPrefix: "Chapter",
   subtopicsBarSuffix: "Patterns",
-  footerStatsTemplate: "6 Modules • 32 In-Depth Patterns & Concepts"
+  footerStatsTemplate: "6 Modules • 33 In-Depth Patterns & Concepts"
 };
 
 console.log("Starting Complete Microservices Handbook Build...");
@@ -105,8 +106,8 @@ ALL_MODULES.forEach((mod) => {
       flowDiagramUrl: `/diagrams/microservices/${sub.id}-flow.svg`,
       sections: (sub.sections || []).map((sec, sIdx) => ({
         ...sec,
-        diagramImageUrl: sIdx === 0 ? `/diagrams/microservices/${sub.id}-block.svg` : sec.diagramImageUrl,
-        flowDiagramUrl: sIdx === 0 ? `/diagrams/microservices/${sub.id}-flow.svg` : sec.flowDiagramUrl
+        diagramImageUrl: sec.diagramImageUrl || (sIdx === 0 ? `/diagrams/microservices/${sub.id}-block.svg` : undefined),
+        flowDiagramUrl: sec.flowDiagramUrl || (sIdx === 0 ? `/diagrams/microservices/${sub.id}-flow.svg` : undefined)
       })),
       jsonUrl: `/api/microservices/subtopics/${mod.id}/${sub.id}.json`
     }))
@@ -163,8 +164,8 @@ ALL_MODULES.forEach((mod) => {
       flowDiagramUrl: `/diagrams/microservices/${sub.id}-flow.svg`,
       sections: (sub.sections || []).map((sec, sIdx) => ({
         ...sec,
-        diagramImageUrl: sIdx === 0 ? `/diagrams/microservices/${sub.id}-block.svg` : sec.diagramImageUrl,
-        flowDiagramUrl: sIdx === 0 ? `/diagrams/microservices/${sub.id}-flow.svg` : sec.flowDiagramUrl
+        diagramImageUrl: sec.diagramImageUrl || (sIdx === 0 ? `/diagrams/microservices/${sub.id}-block.svg` : undefined),
+        flowDiagramUrl: sec.flowDiagramUrl || (sIdx === 0 ? `/diagrams/microservices/${sub.id}-flow.svg` : undefined)
       })),
       tradeOffs: sub.tradeOffs,
       interviewTip: sub.interviewTip,

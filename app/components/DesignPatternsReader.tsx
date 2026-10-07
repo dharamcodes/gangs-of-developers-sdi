@@ -107,7 +107,15 @@ const getServerFontScale = () => "normal" as const;
 const getServerFullWidth = () => false;
 const getServerDesktopSidebar = () => true;
 
-export default function DesignPatternsReader() {
+export interface DesignPatternsReaderProps {
+  initialIndexData?: HandbookIndexResponse;
+  initialSubtopicDetail?: SubtopicDetail;
+}
+
+export default function DesignPatternsReader({
+  initialIndexData,
+  initialSubtopicDetail,
+}: DesignPatternsReaderProps = {}) {
   const mode = useSyncExternalStore(
     subscribeStorage,
     getThemeSnapshot,
@@ -129,15 +137,17 @@ export default function DesignPatternsReader() {
     getServerDesktopSidebar
   );
   const [indexData, setIndexData] = useState<HandbookIndexResponse | null>(
-    null
+    initialIndexData ?? null
   );
   const [activeSubtopicDetail, setActiveSubtopicDetail] =
-    useState<SubtopicDetail | null>(null);
+    useState<SubtopicDetail | null>(initialSubtopicDetail ?? null);
   const [loadingSubtopic, setLoadingSubtopic] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [mobileOpen, setMobileOpen] = useState<boolean>(false);
   const [expandedTopics, setExpandedTopics] = useState<Record<string, boolean>>(
-    {}
+    initialIndexData
+      ? Object.fromEntries(initialIndexData.topics.map((t) => [t.id, true]))
+      : {}
   );
   const [activeSectionId, setActiveSectionId] = useState<string>("section-0");
 
@@ -187,12 +197,14 @@ export default function DesignPatternsReader() {
   useEffect(() => {
     let active = true;
     async function init() {
-      const idx = await fetchDesignPatternsIndex();
+      const idx = initialIndexData ?? (await fetchDesignPatternsIndex());
       if (!active) return;
-      setIndexData(idx);
-      setExpandedTopics(
-        Object.fromEntries(idx.topics.map((t) => [t.id, true]))
-      );
+      if (!indexData) {
+        setIndexData(idx);
+        setExpandedTopics(
+          Object.fromEntries(idx.topics.map((t) => [t.id, true]))
+        );
+      }
 
       // Check URL parameters first: ?topic=...&subtopic=...
       let initialTopicId: string | null = null;
@@ -248,6 +260,9 @@ export default function DesignPatternsReader() {
       }
 
       if (targetTopic && targetSub) {
+        if (activeSubtopicDetail && activeSubtopicDetail.id === targetSub.id) {
+          return;
+        }
         setLoadingSubtopic(true);
         const detail = await fetchDesignPatternsSubtopicData(targetTopic.id, targetSub.id);
         if (active) {
@@ -261,6 +276,7 @@ export default function DesignPatternsReader() {
     return () => {
       active = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const allSubtopicsFlat = useMemo<SubtopicSummary[]>(() => {

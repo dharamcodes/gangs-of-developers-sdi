@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Avatar,
   Box,
@@ -29,8 +29,6 @@ import ArrowBackRoundedIcon from "@mui/icons-material/ArrowBackRounded";
 import ArrowForwardRoundedIcon from "@mui/icons-material/ArrowForwardRounded";
 import TipsAndUpdatesOutlinedIcon from "@mui/icons-material/TipsAndUpdatesOutlined";
 import AccessTimeIcon from "@mui/icons-material/AccessTime";
-import ContentCopyIcon from "@mui/icons-material/ContentCopy";
-import CheckIcon from "@mui/icons-material/Check";
 import ZoomOutMapIcon from "@mui/icons-material/ZoomOutMap";
 import CloseIcon from "@mui/icons-material/Close";
 import SchemaOutlinedIcon from "@mui/icons-material/SchemaOutlined";
@@ -42,6 +40,7 @@ import ShareOutlinedIcon from "@mui/icons-material/ShareOutlined";
 import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
 import MenuBookOutlinedIcon from "@mui/icons-material/MenuBookOutlined";
 import ArchitectureDiagramCard from "./ArchitectureDiagramCard";
+import IntelliJCodeBlock from "./IntelliJCodeBlock";
 import type {
   HandbookUiConfig,
   SubtopicDetail,
@@ -109,8 +108,8 @@ const DIFFICULTY_STYLE: Record<
     bg: "rgba(245, 158, 11, 0.1)",
     border: "rgba(245, 158, 11, 0.25)",
   },
-  "Staff+": {
-    label: "🟠 Expert",
+  Architect: {
+    label: "🟠 Architect",
     color: "#d97706",
     bg: "rgba(245, 158, 11, 0.1)",
     border: "rgba(245, 158, 11, 0.25)",
@@ -228,122 +227,12 @@ function renderFormattedBullet(
 function CodeBlockCard({
   title,
   code,
-  fontSize,
 }: {
   title: string;
   code: string;
-  fontSize: { xs: string; sm: string };
+  fontSize?: { xs: string; sm: string };
 }) {
-  const [copied, setCopied] = useState(false);
-  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (copyTimerRef.current) {
-        clearTimeout(copyTimerRef.current);
-      }
-    };
-  }, []);
-
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(code);
-      setCopied(true);
-      if (copyTimerRef.current) {
-        clearTimeout(copyTimerRef.current);
-      }
-      copyTimerRef.current = setTimeout(() => setCopied(false), 1800);
-    } catch {
-      // Ignore clipboard errors
-    }
-  };
-
-  return (
-    <Paper
-      variant="outlined"
-      sx={{
-        overflow: "hidden",
-        borderRadius: 2.5,
-        mt: 2.5,
-        mb: 2.5,
-        borderColor: "rgba(148, 163, 184, 0.25)",
-        boxShadow: "0 10px 28px -10px rgba(15, 23, 42, 0.18)",
-      }}
-    >
-      <Stack
-        direction="row"
-        sx={{
-          alignItems: "center",
-          justifyContent: "space-between",
-          px: 2,
-          py: 1.15,
-          bgcolor: "#111827",
-          color: "#e2e8f0",
-          borderBottom: "1px solid rgba(255, 255, 255, 0.08)",
-        }}
-      >
-        <Stack direction="row" spacing={1.25} sx={{ alignItems: "center", minWidth: 0 }}>
-          <Stack direction="row" spacing={0.6} sx={{ alignItems: "center", flexShrink: 0 }}>
-            <Box sx={{ width: 10, height: 10, borderRadius: "50%", bgcolor: "#ef4444" }} />
-            <Box sx={{ width: 10, height: 10, borderRadius: "50%", bgcolor: "#f59e0b" }} />
-            <Box sx={{ width: 10, height: 10, borderRadius: "50%", bgcolor: "#22c55e" }} />
-          </Stack>
-          <Typography
-            variant="caption"
-            sx={{
-              fontWeight: 700,
-              fontFamily:
-                'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
-              color: "#f1f5f9",
-              letterSpacing: "0.02em",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {title}
-          </Typography>
-        </Stack>
-
-        <Tooltip title={copied ? "Copied!" : "Copy Snippet"}>
-          <IconButton
-            size="small"
-            onClick={handleCopy}
-            sx={{
-              color: copied ? "#4ade80" : "#94a3b8",
-              p: 0.5,
-              borderRadius: 1.5,
-              "&:hover": { color: "#ffffff", bgcolor: "rgba(255,255,255,0.08)" },
-            }}
-          >
-            {copied ? (
-              <CheckIcon sx={{ fontSize: 16 }} />
-            ) : (
-              <ContentCopyIcon sx={{ fontSize: 16 }} />
-            )}
-          </IconButton>
-        </Tooltip>
-      </Stack>
-
-      <Box
-        component="pre"
-        sx={{
-          m: 0,
-          p: { xs: 2, sm: 2.75 },
-          overflowX: "auto",
-          WebkitOverflowScrolling: "touch",
-          fontFamily:
-            'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
-          fontSize,
-          lineHeight: 1.65,
-          bgcolor: "#070b14",
-          color: "#e2e8f0",
-        }}
-      >
-        {code}
-      </Box>
-    </Paper>
-  );
+  return <IntelliJCodeBlock code={code} title={title} />;
 }
 
 export default function SubtopicContentView({
@@ -362,13 +251,12 @@ export default function SubtopicContentView({
   const [showBackToTop, setShowBackToTop] = useState<boolean>(false);
   const scaleConfig = FONT_SIZE_MAP[fontScale];
 
-  // Check if any section already contains an architecture diagram (e.g. Section 5 "High-Level Architecture Blueprint & Component Topology")
-  const hasSectionArchitectureDiagram = Boolean(
+  // Check if this subtopic has a dedicated "High-Level Architecture Blueprint" section (e.g. System Design topics)
+  // which houses the primary architecture diagram, so we avoid rendering a duplicate at the top.
+  const hasHighLevelArchitectureSection = Boolean(
     subtopic.sections?.some(
       (sec, idx) =>
-        idx > 0 &&
-        ((Boolean(sec.diagramImageUrl) && !sec.flowDiagramUrl) ||
-          sec.heading.toLowerCase().includes("high-level architecture"))
+        idx > 0 && sec.heading.toLowerCase().includes("high-level architecture")
     )
   );
 
@@ -744,7 +632,7 @@ export default function SubtopicContentView({
         {/* ========================================================= */}
         {/* PRIMARY ARCHITECTURAL BLUEPRINT & EXECUTION PIPELINE     */}
         {/* ========================================================= */}
-        {!hasSectionArchitectureDiagram &&
+        {!hasHighLevelArchitectureSection &&
           (Boolean(subtopic.diagramImageUrl) ||
             Boolean(subtopic.sections?.[0]?.diagramImageUrl) ||
             Boolean(subtopic.architectureDiagram) ||
@@ -1004,10 +892,10 @@ export default function SubtopicContentView({
                   </Box>
                 )}
 
-                {/* System Architecture Diagram (renders strictly under Section 5 / High-Level Architecture section and not on section 0) */}
+                {/* Section Architecture Diagram (renders strictly under Section 5 / High-Level Architecture section or when a section has its own dedicated diagramImageUrl) */}
                 {Boolean(
-                  (section.diagramImageUrl && !section.flowDiagramUrl) ||
-                  (hasSectionArchitectureDiagram &&
+                  (section.diagramImageUrl && section.diagramImageUrl !== section.flowDiagramUrl) ||
+                  (hasHighLevelArchitectureSection &&
                     section.heading.toLowerCase().includes("high-level architecture") &&
                     (section.diagramImageUrl || subtopic.diagramImageUrl))
                 ) &&
@@ -1018,9 +906,9 @@ export default function SubtopicContentView({
                       mode={mode}
                       diagramImageUrl={section.diagramImageUrl || subtopic.diagramImageUrl}
                       asciiDiagram={
-                        section.asciiDiagram || subtopic.architectureDiagram || ""
+                        section.asciiDiagram || (hasHighLevelArchitectureSection ? subtopic.architectureDiagram : "") || ""
                       }
-                      altText={`${subtopic.subtopicNumber} ${subtopic.title}`}
+                      altText={`${section.heading} - ${subtopic.title}`}
                     />
                   </Box>
                 )}

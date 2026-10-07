@@ -2,16 +2,18 @@ import type { Metadata } from "next";
 import HomePageView from "./components/HomePageView";
 
 export const metadata: Metadata = {
-  title: "Gangs of Developers (GOD) — System Design, Microservices & Architecture Reference",
+  title: {
+    absolute: "Gangs of Developers (GOD) — System Design & Architecture Reference",
+  },
   description:
-    "The engineering authority for software engineers and systems architects. Deep architectural blueprints, 130+ system design topics, 32 microservices design patterns, 23 GoF patterns with Java & UML, and Tier-1 FAANG interview breakdowns.",
+    "Production-first architecture reference for software engineers: 130+ system design topics, 33 microservices patterns, 23 GoF patterns, and FAANG case studies.",
   alternates: {
     canonical: "https://www.gangsofdevelopers.com",
   },
   openGraph: {
     title: "Gangs of Developers (GOD) — System Design, Microservices & Architecture Reference",
     description:
-      "Deep architectural blueprints, 130+ system design topics, 32 microservices design patterns, 23 GoF patterns with Java & UML, and Tier-1 FAANG interview breakdowns.",
+      "Deep architectural blueprints, 130+ system design topics, 33 microservices design patterns, 23 GoF patterns with Java & UML, and Tier-1 FAANG interview breakdowns.",
     url: "https://www.gangsofdevelopers.com",
     siteName: "Gangs of Developers (GOD)",
     type: "website",
@@ -21,7 +23,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "Gangs of Developers (GOD) — System Design, Microservices & Architecture Reference",
     description:
-      "Deep architectural blueprints, 130+ system design topics, 32 microservices design patterns, 23 GoF patterns with Java & UML, and Tier-1 FAANG interview breakdowns.",
+      "Deep architectural blueprints, 130+ system design topics, 33 microservices design patterns, 23 GoF patterns with Java & UML, and Tier-1 FAANG interview breakdowns.",
   },
 };
 

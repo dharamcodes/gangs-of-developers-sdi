@@ -125,10 +125,24 @@ function renderSvgIcon(type, x, y, color) {
   }
 }
 
-function generateSvgDiagram(width, height, title, subtitle, accentColor, categoryTag, nodes, connections, isFlow = false) {
-  // Generate Tier background boundaries if nodes form identifiable architectural zones
+function generateSvgDiagram(width, height, title, subtitle, accentColor, categoryTag, nodes, connections, isFlow = false, customTiers = null) {
+  // Generate Tier background boundaries if provided explicitly or if nodes form identifiable architectural zones
   let tiersMarkup = '';
-  if (!isFlow && nodes.length >= 3) {
+  if (customTiers && customTiers.length > 0) {
+    customTiers.forEach(t => {
+      const stroke = t.stroke || accentColor;
+      const labelWidth = t.label ? Math.max(88, t.label.length * 7.5 + 24) : 0;
+      tiersMarkup += `
+        <g class="tier-group">
+          <rect x="${t.x}" y="${t.y}" width="${t.w}" height="${t.h}" rx="${t.rx || 12}" class="tier-bg" stroke="${stroke}" stroke-width="1.2" stroke-dasharray="5,4" />
+          ${t.label ? `
+            <rect x="${t.x + 12}" y="${t.y - 10}" width="${labelWidth}" height="18" rx="9" fill="${stroke}" opacity="0.14" />
+            <text x="${t.x + 12 + labelWidth / 2}" y="${t.y + 3}" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="9" font-weight="850" fill="${stroke}" letter-spacing="0.05em">${esc(t.label)}</text>
+          ` : ''}
+        </g>
+      `;
+    });
+  } else if (!isFlow && nodes.length >= 3) {
     const minX = Math.min(...nodes.map(n => n.x));
     
     // Check if there is a client tier (nodes with x < 300)
@@ -230,7 +244,9 @@ function generateSvgDiagram(width, height, title, subtitle, accentColor, categor
     const stepNum = stepMatch ? stepMatch[1] : (c.step ? String(c.step) : null);
     const stepText = stepMatch ? stepMatch[2].trim() : (c.label || '');
 
-    const pillWidth = c.lw || (stepNum ? 82 : 56);
+    const autoPillWidth = stepNum ? Math.max(92, stepText.length * 6.8 + 36) : Math.max(60, (c.label || '').length * 6.8 + 18);
+    const pillWidth = c.lw || autoPillWidth;
+    const textCenterX = stepNum ? (c.lx - pillWidth / 2 + 22 + (pillWidth - 22) / 2) : c.lx;
 
     connsMarkup += `
       <g id="conn-${idx}">
@@ -241,7 +257,7 @@ function generateSvgDiagram(width, height, title, subtitle, accentColor, categor
             <rect x="${c.lx - pillWidth / 2}" y="${c.ly - 11}" width="${pillWidth}" height="22" rx="11" class="pill-bg" stroke="${strokeCol}" stroke-width="1.3" />
             <circle cx="${c.lx - pillWidth / 2 + 11}" cy="${c.ly}" r="8" fill="${strokeCol}" />
             <text x="${c.lx - pillWidth / 2 + 11}" y="${c.ly + 3.5}" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="9.5" font-weight="900" fill="#ffffff">${esc(stepNum)}</text>
-            <text x="${c.lx + 6}" y="${c.ly + 3.5}" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="9.5" font-weight="750" fill="${strokeCol}">${esc(stepText || c.label)}</text>
+            <text x="${textCenterX}" y="${c.ly + 3.5}" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="9.5" font-weight="750" fill="${strokeCol}">${esc(stepText || c.label)}</text>
           ` : `
             <!-- Standard Label Pill -->
             <rect x="${c.lx - pillWidth / 2}" y="${c.ly - 10}" width="${pillWidth}" height="20" rx="6" class="pill-bg" stroke="${strokeCol}" stroke-width="1.2" />
@@ -256,10 +272,9 @@ function generateSvgDiagram(width, height, title, subtitle, accentColor, categor
   <defs>
     <style>
       .bg { fill: #f8fafc; }
-      .grid-dot { fill: #e2e8f0; }
-      .header-bg { fill: #0b1120; }
-      .header-title { fill: #ffffff; }
-      .header-sub { fill: #94a3b8; }
+      .grid-dot { fill: #cbd5e1; }
+      .header-title { fill: #0f172a; }
+      .header-sub { fill: #475569; }
       .card-bg { fill: #ffffff; }
       .text-muted { fill: #475569; }
       .arrow-line { stroke: #64748b; stroke-width: 2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
@@ -271,7 +286,8 @@ function generateSvgDiagram(width, height, title, subtitle, accentColor, categor
       @media (prefers-color-scheme: dark) {
         .bg { fill: #070b14; }
         .grid-dot { fill: #1e293b; }
-        .header-bg { fill: #030712; }
+        .header-title { fill: #f8fafc; }
+        .header-sub { fill: #94a3b8; }
         .card-bg { fill: #0f172a; }
         .text-muted { fill: #94a3b8; }
         .arrow-line { stroke: #94a3b8; }
@@ -297,12 +313,10 @@ function generateSvgDiagram(width, height, title, subtitle, accentColor, categor
   <rect width="${width}" height="${height}" class="bg" />
   <rect width="${width}" height="${height}" fill="url(#grid)" />
 
-  <!-- Architectural Banner Header -->
-  <rect x="0" y="0" width="${width}" height="64" class="header-bg" />
-  <rect x="0" y="62" width="${width}" height="2.5" fill="url(#headerGrad)" />
-  <text x="28" y="28" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="14.5" font-weight="900" class="header-title" letter-spacing="0.04em">${esc(title.toUpperCase())}</text>
-  <text x="28" y="48" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="11" font-weight="600" class="header-sub">${esc(subtitle)}</text>
-  <rect x="${width - 180}" y="18" width="152" height="26" rx="13" fill="${accentColor}" opacity="0.18" stroke="${accentColor}" stroke-width="1" />
+  <!-- Clean Whiteboard Architectural Header -->
+  <text x="28" y="30" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="14.5" font-weight="900" class="header-title" letter-spacing="0.04em">${esc(title.toUpperCase())}</text>
+  <text x="28" y="50" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="11" font-weight="600" class="header-sub">${esc(subtitle)}</text>
+  <rect x="${width - 180}" y="18" width="152" height="26" rx="13" fill="${accentColor}" opacity="0.14" stroke="${accentColor}" stroke-width="1.2" />
   <text x="${width - 104}" y="35" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="10.5" font-weight="800" fill="${accentColor}">${esc(categoryTag)}</text>
 
   <!-- Tier Boundaries -->

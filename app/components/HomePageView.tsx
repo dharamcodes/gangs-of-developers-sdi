@@ -10,7 +10,6 @@ import {
   Chip,
   Container,
   CssBaseline,
-  Divider,
   Grid,
   IconButton,
   Stack,
@@ -33,7 +32,7 @@ import LightbulbOutlinedIcon from "@mui/icons-material/LightbulbOutlined";
 import LinkedInIcon from "@mui/icons-material/LinkedIn";
 import EmailIcon from "@mui/icons-material/Email";
 import HeaderBar from "./HeaderBar";
-import GodLogoMark from "./GodLogoMark";
+import SiteFooter from "./SiteFooter";
 import { useHandbookTheme } from "../theme/theme";
 
 export default function HomePageView() {
@@ -255,7 +254,7 @@ export default function HomePageView() {
               >
                 {[
                   { value: "130+", label: "System Design Topics", sub: "13 Core Modules" },
-                  { value: "32", label: "Microservices Patterns", sub: "Distributed Resilience & Mesh" },
+                  { value: "33", label: "Microservices Patterns", sub: "Distributed Resilience & Mesh" },
                   { value: "23", label: "Classic GoF Patterns", sub: "UML Models & Java 21 Code" },
                   { value: "75+", label: "FAANG Interview Problems", sub: "High-Frequency System Questions" },
                 ].map((stat, idx) => (
@@ -739,7 +738,7 @@ export default function HomePageView() {
                         Microservices Architecture
                       </Typography>
                       <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 650 }}>
-                        6 Modules • 32 Distributed Patterns • 64 Themed SVGs
+                        6 Modules • 33 Distributed Patterns • 66 Themed SVGs
                       </Typography>
                     </Box>
                   </Stack>
@@ -947,7 +946,7 @@ export default function HomePageView() {
                 </Card>
               </Grid>
 
-              {/* Track 4: FAANG Problems */}
+              {/* Track 4: Problems */}
               <Grid size={{ xs: 12, md: 6 }}>
                 <Card
                   variant="outlined"
@@ -982,7 +981,7 @@ export default function HomePageView() {
                     </Box>
                     <Box>
                       <Typography variant="h5" sx={{ fontWeight: 850, letterSpacing: "-0.02em" }}>
-                        Company-Wise FAANG Problems
+                        Company-Wise Problems
                       </Typography>
                       <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 650 }}>
                         75+ Curated High-Frequency Architecture Prompts
@@ -1061,7 +1060,7 @@ export default function HomePageView() {
                         color: "#ffffff",
                       }}
                     >
-                      Solve FAANG Problems
+                      Solve Problems
                     </Button>
                   </Box>
                 </Card>
@@ -1181,8 +1180,8 @@ export default function HomePageView() {
                   <Grid size={{ xs: 12, md: 7 }}>
                     <Box
                       component="img"
-                      src="/diagrams/microservices/saga-block.svg"
-                      alt="Sample Saga Architecture SVG Diagram"
+                      src="/diagrams/microservices/saga-pattern-block.svg"
+                      alt="Sample Saga Pattern Architecture SVG Diagram"
                       sx={{
                         width: "100%",
                         height: "auto",
@@ -1386,22 +1385,22 @@ export default function HomePageView() {
               sx={{ flexWrap: "wrap", justifyContent: "center" }}
             >
               {[
-                "Java 21 Virtual Threads",
-                "Spring Boot 3",
-                "Apache Kafka",
-                "PostgreSQL Sharding",
-                "Redis Cluster",
-                "Docker & Kubernetes",
-                "Envoy Proxy",
-                "Istio Service Mesh",
-                "OpenTelemetry",
-                "gRPC / Protobuf",
-                "Debezium CDC",
-                "Raft Consensus",
-                "Resilience4j",
-                "Prometheus & Grafana",
-                "AWS & Multi-Cloud",
-                "OAuth2 & JWT",
+                "HTTP/2 & REST APIs",
+                "gRPC & Protocol Buffers",
+                "WebSockets & SSE",
+                "Mutual TLS (mTLS) & Zero Trust",
+                "OAuth 2.0 & JWT Auth",
+                "TCP Sockets & Zero-Copy I/O",
+                "Apache Kafka (Distributed Logs)",
+                "Redis (Distributed Caching)",
+                "Relational DBs (B-Tree Indexing)",
+                "NoSQL & LSM-Tree Storage",
+                "Database Sharding & Replication",
+                "Raft Consensus Protocol",
+                "Consistent Hashing Rings",
+                "Change Data Capture (CDC & WAL)",
+                "Java 21 Concurrency (Virtual Threads)",
+                "API Gateways & Reverse Proxies",
               ].map((tech, idx) => (
                 <Chip
                   key={idx}
@@ -1598,120 +1597,8 @@ export default function HomePageView() {
           </Container>
         </Box>
 
-        {/* ========================================================= */}
-        {/* COMPREHENSIVE TECHNICAL FOOTER                            */}
-        {/* ========================================================= */}
-        <Box
-          component="footer"
-          sx={{
-            py: { xs: 6, sm: 8 },
-            bgcolor: isLight ? "#fbfaf8" : "#070b14",
-          }}
-        >
-          <Container maxWidth="lg">
-            <Grid container spacing={4} sx={{ mb: 6 }}>
-              {/* Brand info */}
-              <Grid size={{ xs: 12, md: 4 }}>
-                <GodLogoMark />
-                <Typography variant="body2" sx={{ color: "text.secondary", mt: 2, pr: { md: 4 }, lineHeight: 1.7 }}>
-                  Gangs of Developers (GOD) is an engineering knowledge platform dedicated to deep-dive
-                  distributed systems, software architecture, microservices, and technical interview preparation.
-                </Typography>
-                <Typography variant="caption" sx={{ color: "text.secondary", display: "block", mt: 2 }}>
-                  Built with Next.js, TypeScript &amp; Material UI.
-                </Typography>
-              </Grid>
-
-              {/* Col 1: Handbooks */}
-              <Grid size={{ xs: 6, sm: 3, md: 2 }}>
-                <Typography variant="caption" sx={{ fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", color: "text.primary", display: "block", mb: 2 }}>
-                  Curricula
-                </Typography>
-                <Stack spacing={1.25}>
-                  <Typography component={Link} href="/free-course" variant="body2" sx={{ color: "text.secondary", textDecoration: "none", "&:hover": { color: "primary.main" } }}>
-                    System Design
-                  </Typography>
-                  <Typography component={Link} href="/microservices" variant="body2" sx={{ color: "text.secondary", textDecoration: "none", "&:hover": { color: "primary.main" } }}>
-                    Microservices
-                  </Typography>
-                  <Typography component={Link} href="/design-patterns" variant="body2" sx={{ color: "text.secondary", textDecoration: "none", "&:hover": { color: "primary.main" } }}>
-                    GoF Patterns
-                  </Typography>
-                  <Typography component={Link} href="/company-wise-problems" variant="body2" sx={{ color: "text.secondary", textDecoration: "none", "&:hover": { color: "primary.main" } }}>
-                    FAANG Problems
-                  </Typography>
-                </Stack>
-              </Grid>
-
-              {/* Col 2: Top Patterns */}
-              <Grid size={{ xs: 6, sm: 3, md: 3 }}>
-                <Typography variant="caption" sx={{ fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", color: "text.primary", display: "block", mb: 2 }}>
-                  Featured Patterns
-                </Typography>
-                <Stack spacing={1.25}>
-                  <Typography component={Link} href="/microservices?topic=distributed-data&subtopic=saga-pattern" variant="body2" sx={{ color: "text.secondary", textDecoration: "none", "&:hover": { color: "primary.main" } }}>
-                    Saga Distributed Pattern
-                  </Typography>
-                  <Typography component={Link} href="/microservices?topic=distributed-data&subtopic=transactional-outbox" variant="body2" sx={{ color: "text.secondary", textDecoration: "none", "&:hover": { color: "primary.main" } }}>
-                    Transactional Outbox (CDC)
-                  </Typography>
-                  <Typography component={Link} href="/microservices?topic=distributed-resilience&subtopic=circuit-breaker" variant="body2" sx={{ color: "text.secondary", textDecoration: "none", "&:hover": { color: "primary.main" } }}>
-                    Circuit Breaker (Resilience4j)
-                  </Typography>
-                  <Typography component={Link} href="/design-patterns?topic=creational-patterns&subtopic=factory-method" variant="body2" sx={{ color: "text.secondary", textDecoration: "none", "&:hover": { color: "primary.main" } }}>
-                    Factory Method Pattern
-                  </Typography>
-                  <Typography component={Link} href="/design-patterns?topic=structural-patterns&subtopic=adapter" variant="body2" sx={{ color: "text.secondary", textDecoration: "none", "&:hover": { color: "primary.main" } }}>
-                    Adapter Pattern
-                  </Typography>
-                </Stack>
-              </Grid>
-
-              {/* Col 3: Community & Author */}
-              <Grid size={{ xs: 12, sm: 6, md: 3 }}>
-                <Typography variant="caption" sx={{ fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", color: "text.primary", display: "block", mb: 2 }}>
-                  Connect &amp; Author
-                </Typography>
-                <Stack spacing={1.25}>
-                  <Typography component={Link} href="/author" variant="body2" sx={{ color: "text.secondary", textDecoration: "none", "&:hover": { color: "primary.main" } }}>
-                    About Dharam (Author)
-                  </Typography>
-                  <Box
-                    component="a"
-                    href="https://linkedin.com/in/dharamcodes"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    sx={{ display: "inline-flex", alignItems: "center", gap: 1, color: "text.secondary", textDecoration: "none", fontSize: "0.875rem", "&:hover": { color: "primary.main" } }}
-                  >
-                    <LinkedInIcon sx={{ fontSize: 18 }} /> LinkedIn Profile
-                  </Box>
-                  <Box
-                    component="a"
-                    href="mailto:dharamcodes@gmail.com"
-                    sx={{ display: "inline-flex", alignItems: "center", gap: 1, color: "text.secondary", textDecoration: "none", fontSize: "0.875rem", "&:hover": { color: "primary.main" } }}
-                  >
-                    <EmailIcon sx={{ fontSize: 18 }} /> dharamcodes@gmail.com
-                  </Box>
-                </Stack>
-              </Grid>
-            </Grid>
-
-            <Divider sx={{ mb: 4 }} />
-
-            <Stack
-              direction={{ xs: "column", sm: "row" }}
-              spacing={2}
-              sx={{ justifyContent: "space-between", alignItems: "center", textAlign: "center" }}
-            >
-              <Typography variant="caption" sx={{ color: "text.secondary" }}>
-                &copy; {new Date().getFullYear()} Gangs of Developers (GOD). All rights reserved.
-              </Typography>
-              <Typography variant="caption" sx={{ color: "text.secondary" }}>
-                Dedicated to engineering excellence and deep architectural craft.
-              </Typography>
-            </Stack>
-          </Container>
-        </Box>
+        {/* Universal Site Footer */}
+        <SiteFooter />
       </Box>
     </ThemeProvider>
   );

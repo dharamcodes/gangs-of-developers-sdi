@@ -69,7 +69,7 @@ export default function SidebarToc({
           if (!sub.difficulty) return false;
           const diff = sub.difficulty.toLowerCase();
           const target = difficultyFilter.toLowerCase();
-          if (target === "expert") return diff === "expert" || diff === "staff+";
+          if (target === "expert") return diff === "expert" || diff === "architect";
           return diff === target;
         });
         return {
