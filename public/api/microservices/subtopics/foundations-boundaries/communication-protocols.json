@@ -1,0 +1,52 @@
+{
+  "id": "communication-protocols",
+  "topicId": "foundations-boundaries",
+  "topicTitle": "1. Foundations & Boundaries",
+  "topicNumber": 1,
+  "subtopicNumber": "1.4",
+  "title": "Communication Protocols: REST vs gRPC vs GraphQL",
+  "subtitle": "Benchmarking transport protocols, Protobuf binary serialization, HTTP/2 multiplexing, and client contract governance.",
+  "readingTime": "8 min read",
+  "difficulty": "Intermediate",
+  "keyTakeaways": [
+    "Use gRPC (HTTP/2 + Protobuf) for high-throughput inter-service (East-West) communication; it provides 5–10x faster serialization and multiplexed streams.",
+    "Use REST / JSON or GraphQL at the API Gateway edge (North-South) for public web and mobile client consumption.",
+    "Protobuf strictly enforces backward and forward compatibility through integer field tags, eliminating brittle runtime JSON parsing crashes."
+  ],
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                  EAST-WEST VS NORTH-SOUTH PROTOCOL MATRIX               |\n+-------------------------------------------------------------------------+\n  [North-South: Edge Ingress]           [East-West: Inter-Service Mesh]\n  Web / Mobile / Third-Party            Service A ===========> Service B\n             |                                     (gRPC / HTTP/2)\n             v                                     (Protobuf Binary)\n     [API Gateway / BFF]                           (Multiplexed Streams)\n   (REST / GraphQL / JSON)",
+  "diagramImageUrl": "/diagrams/microservices/communication-protocols-block.svg",
+  "flowDiagramUrl": "/diagrams/microservices/communication-protocols-flow.svg",
+  "sections": [
+    {
+      "heading": "Why gRPC Outperforms REST for Internal Microservices",
+      "body": "JSON is human-readable, but computationally expensive. Every JSON payload requires converting strings to integers, floats, and memory structures on both sides of the wire. In high-throughput internal microservice networks handling 100,000+ requests per second, CPU time spent on JSON parsing becomes a major bottleneck. gRPC uses Protocol Buffers: a binary serialization format where field names are replaced with compact integer tags (1, 2, 3) and data is encoded into dense bitstreams. Combined with HTTP/2 multiplexing, gRPC slashes latency and server CPU consumption.",
+      "bullets": [
+        "Multiplexing: Eliminates TCP connection storms; hundreds of concurrent RPCs share a persistent connection.",
+        "Streaming: Supports client streaming, server streaming, and bidirectional streaming out of the box.",
+        "Strict Contracts: No more guessing if a field is null, string, or boolean; protoc compiles immutable types for Go, Java, Rust, and Node.js."
+      ],
+      "codeSnippet": {
+        "title": "Protocol Buffer 3 Contract with Backward Compatibility Safeguards",
+        "code": "syntax = \"proto3\";\npackage billing.v1;\n\nmessage ChargePaymentRequest {\n  string transaction_id = 1;\n  int64 amount_cents = 2;\n  string currency_code = 3;\n  reserved 4;\n  reserved \"payment_token\";\n  string idempotency_key = 5;\n}\n\nservice PaymentService {\n  rpc ChargePayment (ChargePaymentRequest) returns (ChargePaymentResponse);\n}"
+      },
+      "diagramImageUrl": "/diagrams/microservices/communication-protocols-block.svg",
+      "flowDiagramUrl": "/diagrams/microservices/communication-protocols-flow.svg"
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "gRPC (HTTP/2 + Protobuf)",
+      "pros": "5–10x faster serialization, 50% smaller payload size, built-in code generation, streaming support.",
+      "cons": "Not natively browser-friendly (requires grpc-web proxy); binary payloads are harder to debug via cURL.",
+      "bestFor": "Internal East-West microservice-to-microservice communication."
+    },
+    {
+      "option": "REST + JSON",
+      "pros": "Ubiquitous, human-readable, native browser support, mature tooling, simple CDN caching.",
+      "cons": "High serialization CPU overhead, large payload footprints, no native schema validation.",
+      "bestFor": "Public North-South edge APIs and external third-party partner integrations."
+    }
+  ],
+  "interviewTip": "In system design interviews, recommend a hybrid protocol strategy: REST/GraphQL at the Edge Gateway for mobile/web clients, and gRPC over HTTP/2 for all internal microservice calls.",
+  "jsonUrl": "/api/microservices/subtopics/foundations-boundaries/communication-protocols.json"
+}

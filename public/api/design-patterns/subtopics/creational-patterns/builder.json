@@ -1,0 +1,52 @@
+{
+  "id": "builder",
+  "topicId": "creational-patterns",
+  "topicTitle": "1. Creational Patterns",
+  "topicNumber": 1,
+  "subtopicNumber": "1.3",
+  "title": "Builder Pattern",
+  "subtitle": "Separates the construction of a complex object from its representation, allowing the same construction process to create various representations.",
+  "readingTime": "7 min read",
+  "difficulty": "Foundational",
+  "keyTakeaways": [
+    "Eliminates the 'Telescoping Constructor' anti-pattern where classes require constructors with 10+ overloaded parameters.",
+    "Enforces object immutability by collecting configuration parameters step-by-step and validating invariants prior to final instantiation in build().",
+    "Separates optional attributes from mandatory constraints while providing clean, readable fluent method chaining."
+  ],
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                        BUILDER UML CLASS MODEL                          |\n+-------------------------------------------------------------------------+\n      +------------------------+             +------------------------+\n      |        Director        |             |     <<interface>>      |\n      +------------------------+             |      OrderBuilder      |\n      | - builder: OrderBuilder|  uses --->  +------------------------+\n      +------------------------+             | + setItem(item): this  |\n      | + constructVipOrder()  |             | + setCoupon(code): this|\n      +------------------------+             | + build(): Order       |\n                                             +-----------^------------+\n                                                         |\n                                             +-----------+------------+\n                                             |  ConcreteOrderBuilder  |\n                                             +------------------------+\n                                             | - items: List<Item>    |\n                                             | - coupon: String       |\n                                             | + build(): Order       |\n                                             +------------------------+",
+  "diagramImageUrl": "/diagrams/design-patterns/builder-block.svg",
+  "flowDiagramUrl": "/diagrams/design-patterns/builder-flow.svg",
+  "sections": [
+    {
+      "heading": "Preventing Telescoping Constructors and Mutation Bugs",
+      "body": "As domain entities accumulate dozens of optional settings, constructors become unmaintainable (e.g. `new HttpRequest(url, headers, timeout, retry, proxy, cookieJar, null, null, false)`). Passing multiple boolean and null arguments introduces severe caller bugs. The Builder pattern isolates configuration assembly, enforces required parameters, and produces an immutable target instance.",
+      "bullets": [
+        "Fluent API: Self-documenting, chained method invocations improve code readability across engineering teams.",
+        "Fail-Fast Invariant Checking: All business constraint validations run atomically inside the build() method prior to object creation.",
+        "Thread Safety: The constructed entity can have only private final fields and no setters, making it inherently thread-safe."
+      ],
+      "codeSnippet": {
+        "title": "Production Java 21 Builder with Fail-Fast Invariant Checks",
+        "code": "public final class HttpRequest {\n    private final String url;\n    private final Duration timeout;\n    private final boolean followRedirects;\n    private final Map<String, String> headers;\n\n    private HttpRequest(Builder builder) {\n        this.url = builder.url;\n        this.timeout = builder.timeout;\n        this.followRedirects = builder.followRedirects;\n        this.headers = Map.copyOf(builder.headers); // Defensive copy\n    }\n\n    public static Builder newBuilder(String url) { return new Builder(url); }\n\n    public static class Builder {\n        private final String url; // Mandatory\n        private Duration timeout = Duration.ofSeconds(5); // Default\n        private boolean followRedirects = true;\n        private final Map<String, String> headers = new HashMap<>();\n\n        public Builder(String url) {\n            Objects.requireNonNull(url, \"URL cannot be null\");\n            this.url = url;\n        }\n\n        public Builder timeout(Duration timeout) {\n            if (timeout.isNegative()) throw new IllegalArgumentException(\"Timeout cannot be negative\");\n            this.timeout = timeout;\n            return this;\n        }\n\n        public Builder header(String key, String value) {\n            headers.put(key, value);\n            return this;\n        }\n\n        public HttpRequest build() {\n            if (!url.startsWith(\"http://\") && !url.startsWith(\"https://\")) {\n                throw new IllegalStateException(\"URL must use HTTP or HTTPS protocol\");\n            }\n            return new HttpRequest(this);\n        }\n    }\n}"
+      },
+      "flowDiagramUrl": "/diagrams/design-patterns/builder-flow.svg",
+      "diagramImageUrl": "/diagrams/design-patterns/builder-block.svg"
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Builder Pattern",
+      "pros": "Provides fluent readable code, supports partial construction, enables immutable target objects.",
+      "cons": "Requires duplicating all domain fields in the builder class; higher boilerplate overhead.",
+      "bestFor": "Complex domain entities, HTTP/gRPC client configurations, SQL/query generators."
+    },
+    {
+      "option": "Java Record / POJO Setters",
+      "pros": "Compact syntax (records), simple bean reflection support (frameworks like Jackson/Spring).",
+      "cons": "Setters expose mutable state causing concurrent race conditions; records with 10+ fields are hard to read at call sites.",
+      "bestFor": "Small DTOs with 2-4 fields, simple data mapping payloads."
+    }
+  ],
+  "interviewTip": "In interviews, emphasize how Builder enables Immutability. Explain that in multi-threaded environments, an immutable object constructed via a Builder eliminates the need for synchronization locks.",
+  "jsonUrl": "/api/design-patterns/subtopics/creational-patterns/builder.json"
+}

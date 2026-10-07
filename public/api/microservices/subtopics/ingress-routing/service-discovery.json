@@ -1,0 +1,48 @@
+{
+  "id": "service-discovery",
+  "topicId": "ingress-routing",
+  "topicTitle": "2. Edge Ingress, Routing & Service Mesh",
+  "topicNumber": 2,
+  "subtopicNumber": "2.3",
+  "title": "Service Discovery & Dynamic Registry",
+  "subtitle": "Consul, Eureka, etcd, ephemeral Kubernetes pod IPs, health check eviction, and client-side load balancing.",
+  "readingTime": "7 min read",
+  "difficulty": "Intermediate",
+  "keyTakeaways": [
+    "In autoscaling cloud environments, service instances are ephemeral: IP addresses change constantly as pods scale up, crash, or migrate.",
+    "Service Discovery decouples callers from physical network addresses: instances register with a Service Registry (Consul, Eureka) and send periodic heartbeats.",
+    "Client-Side Load Balancing (Envoy, Spring Cloud LoadBalancer) caches healthy instance lists locally, eliminating an extra hardware load balancer hop."
+  ],
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                  SERVICE DISCOVERY & HEALTH PROBE TOPOLOGY              |\n+-------------------------------------------------------------------------+\n  [Order Svc Pod 1: 10.0.1.4]  ---(Heartbeat OK)---> +-------------------+\n  [Order Svc Pod 2: 10.0.1.9]  ---(Heartbeat OK)---> |  SERVICE REGISTRY |\n  [Order Svc Pod 3: 10.0.1.18] --(Failed! Evicted)-->| (Consul / Eureka) |\n                                                     +---------+---------+\n                                                               ^\n       [API Gateway / Client] ----(Lookup healthy IPs)---------+\n                 |\n                 +====> (Direct Call: 10.0.1.4)",
+  "diagramImageUrl": "/diagrams/microservices/service-discovery-block.svg",
+  "flowDiagramUrl": "/diagrams/microservices/service-discovery-flow.svg",
+  "sections": [
+    {
+      "heading": "Client-Side vs Server-Side Discovery",
+      "body": "In Server-Side Discovery (AWS ALB / Kubernetes ClusterIP Services), the client calls a static DNS/IP of a load balancer, which queries the registry and forwards the request. In Client-Side Discovery (Netflix Eureka, Consul with Envoy), the client directly queries the registry, caches the list of available healthy endpoints, and executes the load-balancing algorithm locally in process. This eliminates an intermediate load-balancer hop and prevents single-chokepoint bandwidth bottlenecks.",
+      "bullets": [
+        "Kubernetes CoreDNS: In K8s, built-in kube-proxy and CoreDNS abstract discovery via Virtual ClusterIPs.",
+        "Health Checking Protocols: Active HTTP probes (`/actuator/health`) combined with passive failure tripwires.",
+        "Gossip Protocols: Consul uses Serf gossip protocol for efficient membership and failure detection."
+      ],
+      "diagramImageUrl": "/diagrams/microservices/service-discovery-block.svg",
+      "flowDiagramUrl": "/diagrams/microservices/service-discovery-flow.svg"
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Client-Side Discovery",
+      "pros": "Zero extra network hop, fine-grained client load balancing (sticky sessions, latency-aware), no central bottleneck.",
+      "cons": "Requires client-side library integration (Envoy/Spring); cache invalidation delay if instance dies suddenly.",
+      "bestFor": "High-scale internal service mesh networks."
+    },
+    {
+      "option": "Server-Side Discovery (K8s Service / ALB)",
+      "pros": "Language agnostic; simple standard DNS; zero client code needed.",
+      "cons": "Extra network hop through proxy; potential load balancer throughput limits.",
+      "bestFor": "Standard Kubernetes environments using native ClusterIP."
+    }
+  ],
+  "interviewTip": "In interviews, explain: 'In modern Kubernetes, Service Discovery is natively provided by kube-dns and CoreDNS via virtual ClusterIPs, but in multi-cluster or hybrid clouds, we use HashiCorp Consul or Istio ServiceEntry.'",
+  "jsonUrl": "/api/microservices/subtopics/ingress-routing/service-discovery.json"
+}

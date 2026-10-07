@@ -1,0 +1,48 @@
+{
+  "id": "timeout-deadlines",
+  "topicId": "resilience-fault-tolerance",
+  "topicTitle": "4. Distributed Resilience & Fault Tolerance",
+  "topicNumber": 4,
+  "subtopicNumber": "4.5",
+  "title": "Timeout & Context Deadline Propagation",
+  "subtitle": "End-to-end SLA time budgeting, context deadline propagation via gRPC metadata, and immediate thread reclamation.",
+  "readingTime": "7 min read",
+  "difficulty": "Intermediate",
+  "keyTakeaways": [
+    "Every network call must have an explicit timeout; default infinite socket timeouts are a ticking time bomb in production.",
+    "Implement **Deadline Propagation**: calculate an end-to-end SLA budget (e.g. 2000ms) at ingress and propagate the remaining time budget downstream.",
+    "When an upstream request times out, downstream operations must detect the expired deadline and immediately cancel in-flight queries."
+  ],
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                  DEADLINE BUDGET PROPAGATION PIPELINE                   |\n+-------------------------------------------------------------------------+\n[Edge Client: SLA 2000ms]\n       |  (Header: X-Request-Deadline: now + 2000ms)\n       v\n[API Gateway: Consumes 200ms -> Remaining Budget: 1800ms]\n       |  (Header: X-Request-Deadline: remaining 1800ms)\n       v\n[Order Svc: Consumes 600ms -> Remaining Budget: 1200ms]\n       |  (Header: X-Request-Deadline: remaining 1200ms)\n       v\n[Payment Svc: Hangs for 1300ms! Context CANCELED at 1200ms mark!]\n       (Immediate Thread Reclaim; Returns 504 Gateway Timeout)",
+  "diagramImageUrl": "/diagrams/microservices/timeout-deadlines-block.svg",
+  "flowDiagramUrl": "/diagrams/microservices/timeout-deadlines-flow.svg",
+  "sections": [
+    {
+      "heading": "Why Independent Timeouts Fail Without Deadlines",
+      "body": "If Service A has a timeout of 5s, Service B has a timeout of 5s, and Service C has a timeout of 5s, an edge call can hang for 15 seconds before failing! Even worse: if Service A times out after 5s and returns an error to the user, Service B and C may continue executing for another 10 seconds, burning expensive database and CPU resources for a client that has already closed their browser. In gRPC and Go, `context.WithDeadline` automatically cancels child contexts when the deadline expires.",
+      "bullets": [
+        "gRPC Deadline: Natively transmitted in HTTP/2 headers as `grpc-timeout`.",
+        "Database Query Cancellation: When a context is cancelled, PostgreSQL triggers `STATEMENT_TIMEOUT` to cancel in-flight queries.",
+        "Wasted Work Elimination: Never compute results for a client that has already aborted the HTTP connection."
+      ],
+      "diagramImageUrl": "/diagrams/microservices/timeout-deadlines-block.svg",
+      "flowDiagramUrl": "/diagrams/microservices/timeout-deadlines-flow.svg"
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Context Deadline Propagation",
+      "pros": "Strict SLA enforcement across multi-hop calls, eliminates wasted server work, prevents cascading hangs.",
+      "cons": "Requires passing context or headers across every RPC and database driver.",
+      "bestFor": "All microservices; standard in gRPC and modern Go/Java architectures."
+    },
+    {
+      "option": "Static Local Timeouts",
+      "pros": "Simple to configure on individual HTTP clients.",
+      "cons": "Cumulative latency stacks up; downstream services waste CPU computing abandoned results.",
+      "bestFor": "Single-hop architectures only."
+    }
+  ],
+  "interviewTip": "Explain: 'I will implement Deadline Propagation using gRPC metadata. The API gateway sets a 2-second deadline; each microservice subtracts its own processing time. If the deadline expires, all downstream operations are cancelled immediately to eliminate wasted work.'",
+  "jsonUrl": "/api/microservices/subtopics/resilience-fault-tolerance/timeout-deadlines.json"
+}

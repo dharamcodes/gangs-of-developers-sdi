@@ -1,0 +1,48 @@
+{
+  "id": "rate-limiting",
+  "topicId": "resilience-fault-tolerance",
+  "topicTitle": "4. Distributed Resilience & Fault Tolerance",
+  "topicNumber": 4,
+  "subtopicNumber": "4.3",
+  "title": "Distributed Rate Limiting & Throttling",
+  "subtitle": "Token Bucket, Leaky Bucket, Sliding Window Counter algorithms, and Redis cluster rate limiting.",
+  "readingTime": "8 min read",
+  "difficulty": "Intermediate",
+  "keyTakeaways": [
+    "Rate limiting protects services from denial-of-service, abusive scrapers, and cascading overload by capping the request rate per client.",
+    "The **Token Bucket algorithm** allows for bursts of traffic up to the bucket capacity while maintaining a stable average refill rate.",
+    "In distributed environments, use **Redis Lua scripts** or **Sliding Window Counter** to prevent race conditions and synchronize limits across multiple gateway nodes."
+  ],
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                  TOKEN BUCKET RATE LIMITING TOPOLOGY                    |\n+-------------------------------------------------------------------------+\n       [Refill Clock: +10 tokens/sec] ===> [Token Bucket: Max 50]\n                                                  |\n[Client Request Arrival] =========================+\n                                                  |\n                            (Bucket has tokens?)  |\n                            /                  \\  |\n                         [YES]                 [NO]\n                         /                        \\\n             (Deduct 1 Token: Allow)         (Reject: HTTP 429 Too Many)\n             (Forward to Microservice)       (Retry-After: 3 seconds)",
+  "diagramImageUrl": "/diagrams/microservices/rate-limiting-block.svg",
+  "flowDiagramUrl": "/diagrams/microservices/rate-limiting-flow.svg",
+  "sections": [
+    {
+      "heading": "Token Bucket vs Leaky Bucket vs Sliding Window Counter",
+      "body": "The Token Bucket algorithm maintains a fixed-capacity bucket of tokens that refills at a constant rate. A client needs one token per request. If tokens exist, they are deducted and the request proceeds immediately. This permits bursts of traffic while guaranteeing an upper bound. The Leaky Bucket processes requests at a constant, unvarying rate (useful for smoothing traffic out to an external partner). The Sliding Window Counter divides time into minute chunks and interpolates requests across the boundary to prevent 2x traffic bursts at the top of the minute.",
+      "bullets": [
+        "Distributed State: Store tokens in Redis using a Hash with fields `tokens` and `last_updated_timestamp`.",
+        "Atomic Lua Execution: Refill calculation and token deduction must happen in a single atomic Redis Lua script to prevent race conditions.",
+        "Client Headers: Always return standard RFC 6585 headers: `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `Retry-After`."
+      ],
+      "diagramImageUrl": "/diagrams/microservices/rate-limiting-block.svg",
+      "flowDiagramUrl": "/diagrams/microservices/rate-limiting-flow.svg"
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Token Bucket Algorithm",
+      "pros": "Allows natural traffic bursts, memory efficient (requires only 2 numbers per client in Redis).",
+      "cons": "Bursts can momentarily stress backend before tokens deplete.",
+      "bestFor": "General-purpose API Gateway rate limiting."
+    },
+    {
+      "option": "Sliding Window Log",
+      "pros": "100% accurate, zero burst boundary anomalies.",
+      "cons": "High memory consumption (stores every timestamp in a Redis sorted set).",
+      "bestFor": "Strict low-volume security checkpoints (e.g. login attempts)."
+    }
+  ],
+  "interviewTip": "When designing rate limiters in interviews, draw the Token Bucket and write down the Redis Lua formula: `tokens = min(capacity, current_tokens + (now - last_refill) * rate)`. Interviewers love seeing this mathematical rigor.",
+  "jsonUrl": "/api/microservices/subtopics/resilience-fault-tolerance/rate-limiting.json"
+}

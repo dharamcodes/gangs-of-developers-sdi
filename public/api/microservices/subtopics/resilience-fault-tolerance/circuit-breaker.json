@@ -1,0 +1,52 @@
+{
+  "id": "circuit-breaker",
+  "topicId": "resilience-fault-tolerance",
+  "topicTitle": "4. Distributed Resilience & Fault Tolerance",
+  "topicNumber": 4,
+  "subtopicNumber": "4.1",
+  "title": "Circuit Breaker Pattern",
+  "subtitle": "Preventing cascading systemic collapse via CLOSED, OPEN, and HALF-OPEN states, failure ring buffers, and fast fallback.",
+  "readingTime": "8 min read",
+  "difficulty": "Intermediate",
+  "keyTakeaways": [
+    "A Circuit Breaker wraps remote network calls and trips open when downstream failure rates cross a configured threshold (e.g. > 50%).",
+    "When **OPEN**, requests fail fast immediately without making network calls, preventing client threads from hanging and exhausting resources.",
+    "After a wait duration, the breaker transitions to **HALF-OPEN** and sends trial probe requests; if they succeed, it resets to **CLOSED**."
+  ],
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                  CIRCUIT BREAKER STATE MACHINE TOPOLOGY                 |\n+-------------------------------------------------------------------------+\n                    Failures > Threshold\n       +------------(Trip Circuit)------------+\n       |                                      |\n       v                                      v\n  [CLOSED] <=======(Trial Calls OK)====== [HALF-OPEN]\n  (Normal Traffic)                         (Probe Calls)\n       ^                                      ^\n       |                                      |\n       +-----------(Wait Reset Timeout)-------+\n                      [OPEN: Fast-Fail]",
+  "diagramImageUrl": "/diagrams/microservices/circuit-breaker-block.svg",
+  "flowDiagramUrl": "/diagrams/microservices/circuit-breaker-flow.svg",
+  "sections": [
+    {
+      "heading": "How Circuit Breakers Stop Cascading Blackouts",
+      "body": "When a downstream microservice slows down from 50ms to 30,000ms, calling services don't just experience slowness; their thread pools fill up with blocked worker threads waiting on TCP sockets. Within seconds, upstream gateways and API services run out of threads and crash, turning an isolated downstream issue into a company-wide catastrophic outage. The Circuit Breaker stops this immediately. By tripping open, it fails fast in 1ms, protecting thread pools and allowing the struggling downstream service time to recover.",
+      "bullets": [
+        "Count-based vs Time-based Ring Buffers: Evaluate failure rates over the last 100 calls or last 10 seconds.",
+        "Slow Call Rate Threshold: Trip open not just on HTTP 500 errors, but if calls take longer than 2,000ms.",
+        "Graceful Degradation: Always pair a Circuit Breaker with a meaningful fallback (e.g. stale cache or offline queue)."
+      ],
+      "codeSnippet": {
+        "title": "Resilience4j Circuit Breaker Configuration in Spring Boot",
+        "code": "@CircuitBreaker(name = \"paymentService\", fallbackMethod = \"queueForOfflineReview\")\npublic PaymentResult chargeCard(PaymentRequest request) {\n    return restTemplate.postForObject(\"/charges\", request, PaymentResult.class);\n}\n\n// Fallback executed in 1ms when circuit is OPEN\npublic PaymentResult queueForOfflineReview(PaymentRequest req, Throwable ex) {\n    offlineQueue.publish(req);\n    return PaymentResult.acceptedPendingReview();\n}"
+      },
+      "diagramImageUrl": "/diagrams/microservices/circuit-breaker-block.svg",
+      "flowDiagramUrl": "/diagrams/microservices/circuit-breaker-flow.svg"
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Resilience4j Circuit Breaker",
+      "pros": "Completely prevents cascading thread pool exhaustion, automatic self-healing probe recovery.",
+      "cons": "Adds slight in-memory ring-buffer tracking overhead; requires careful threshold tuning.",
+      "bestFor": "All synchronous network RPCs in production microservices."
+    },
+    {
+      "option": "Naive HTTP Client",
+      "pros": "Zero configuration.",
+      "cons": "Downstream hiccups instantly cause thread pool starvation and bring down upstream services.",
+      "bestFor": "Never acceptable in production microservices."
+    }
+  ],
+  "interviewTip": "In interviews, emphasize the difference between a timeout and a circuit breaker: 'A timeout protects a single request from hanging forever; a circuit breaker protects the entire service from cascading thread exhaustion when thousands of requests hang.'",
+  "jsonUrl": "/api/microservices/subtopics/resilience-fault-tolerance/circuit-breaker.json"
+}

@@ -1,0 +1,1198 @@
+{
+  "id": "data-management",
+  "topicNumber": 3,
+  "title": "3. Distributed Data & Consistency",
+  "description": "Database-per-Service, Distributed Sagas, Transactional Outbox, CQRS, Distributed Locking, and Idempotency patterns.",
+  "jsonUrl": "/api/microservices/topics/data-management.json",
+  "subtopics": [
+    {
+      "id": "database-per-service",
+      "subtopicNumber": "3.1",
+      "title": "Database-per-Service Pattern",
+      "subtitle": "Schema autonomy, polyglot persistence, eliminating cross-database joins and distributed lock contention.",
+      "readingTime": "8 min read",
+      "difficulty": "Intermediate",
+      "accent": "#10b981",
+      "keyTakeaways": [
+        "Each microservice must own its private datastore; no other service may query or mutate its tables directly.",
+        "Sharing a single database across 10 microservices is the #1 cause of the 'Distributed Monolith': schema migrations break peer services and create hidden transactional coupling.",
+        "Cross-domain data retrieval is achieved through APIs, domain events, or CQRS materialized query projections, never SQL `JOIN` across database boundaries."
+      ],
+      "ascii": "+-------------------------------------------------------------------------+\n|                  DATABASE-PER-SERVICE ISOLATION TOPOLOGY                |\n+-------------------------------------------------------------------------+\n[Order Service]          [Customer Service]          [Inventory Service]\n       |                         |                            |\n  (Private DB)              (Private DB)                 (Private DB)\n       v                         v                            v\n[PostgreSQL DB]            [MongoDB DB]                [Cassandra DB]\n (Financial ACID)         (User Profiles)             (Real-time Stock)\n       |                         |                            |\n       +======> (Apache Kafka Event Bus For Sync) <===========+",
+      "blockNodes": [
+        {
+          "x": 50,
+          "y": 110,
+          "w": 260,
+          "h": 200,
+          "title": "Order Service & DB",
+          "stroke": "#10b981",
+          "lines": [
+            "Order Microservice (Go)",
+            "Private PostgreSQL Datastore",
+            "ACID Financial Ledger",
+            "Zero direct access from outside"
+          ],
+          "tag": "Service A"
+        },
+        {
+          "x": 370,
+          "y": 110,
+          "w": 260,
+          "h": 200,
+          "title": "Customer Service & DB",
+          "stroke": "#0284c7",
+          "lines": [
+            "Customer Microservice (Node)",
+            "Private MongoDB Datastore",
+            "Flexible JSON document schema",
+            "Owns KYC and addresses"
+          ],
+          "tag": "Service B"
+        },
+        {
+          "x": 690,
+          "y": 110,
+          "w": 260,
+          "h": 200,
+          "title": "Kafka State Sync Bus",
+          "stroke": "#f59e0b",
+          "lines": [
+            "Asynchronous event sync",
+            "Replicates needed view fields",
+            "Eventual consistency",
+            "Zero shared database locks"
+          ],
+          "tag": "Decoupled"
+        }
+      ],
+      "blockConns": [
+        {
+          "d": "M 310 210 L 370 210",
+          "lx": 340,
+          "ly": 200,
+          "label": "APIs Only"
+        },
+        {
+          "d": "M 630 210 L 690 210",
+          "lx": 660,
+          "ly": 200,
+          "label": "Emit Events"
+        }
+      ],
+      "flowNodes": [
+        {
+          "x": 50,
+          "y": 150,
+          "w": 200,
+          "h": 140,
+          "step": "1",
+          "title": "Local Mutation",
+          "stroke": "#10b981",
+          "lines": [
+            "Order service creates order",
+            "Commits to private Postgres",
+            "Customer DB untouched"
+          ]
+        },
+        {
+          "x": 280,
+          "y": 150,
+          "w": 210,
+          "h": 140,
+          "step": "2",
+          "title": "Event Emission",
+          "stroke": "#f59e0b",
+          "lines": [
+            "OrderPlaced event emitted",
+            "Sent to Kafka topic",
+            "Decoupled from callers"
+          ]
+        },
+        {
+          "x": 520,
+          "y": 150,
+          "w": 210,
+          "h": 140,
+          "step": "3",
+          "title": "Peer Ingestion",
+          "stroke": "#0284c7",
+          "lines": [
+            "Customer service pulls event",
+            "Updates user order counter",
+            "Commits to private Mongo"
+          ]
+        },
+        {
+          "x": 760,
+          "y": 150,
+          "w": 200,
+          "h": 140,
+          "step": "4",
+          "title": "Total Autonomy",
+          "stroke": "#a855f7",
+          "lines": [
+            "Zero lock contention",
+            "Schema migrations safe",
+            "Polyglot persistence achieved"
+          ]
+        }
+      ],
+      "flowConns": [
+        {
+          "d": "M 250 210 L 280 210",
+          "lx": 265,
+          "ly": 200,
+          "label": "Commit"
+        },
+        {
+          "d": "M 490 210 L 520 210",
+          "lx": 505,
+          "ly": 200,
+          "label": "Publish"
+        },
+        {
+          "d": "M 730 210 L 760 210",
+          "lx": 745,
+          "ly": 200,
+          "label": "Update"
+        }
+      ],
+      "sections": [
+        {
+          "heading": "Why Shared Databases Destroy Microservices",
+          "body": "When multiple services read and write to the same relational database, you do not have microservices; you have a distributed monolith with multiple heads. A database schema change initiated by the Order team (e.g. renaming a column or changing a foreign key) will unexpectedly break the Billing team's queries in production. Furthermore, a long-running analytical query executed by one service will acquire table locks that freeze transactional mutations across all other services.",
+          "bullets": [
+            "Polyglot Persistence: Choose the best database engine for the specific domain (e.g., PostgreSQL for transactions, Neo4j for social graphs, Elasticsearch for search, Redis for sessions).",
+            "Eliminating Distributed Deadlocks: Private databases eliminate cross-service lock contention on database rows.",
+            "Handling Queries Across Boundaries: Implement the API Composition pattern for simple lookups, or CQRS projections for complex reporting."
+          ],
+          "diagramImageUrl": "/diagrams/microservices/database-per-service-block.svg",
+          "flowDiagramUrl": "/diagrams/microservices/database-per-service-flow.svg"
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Database-per-Service",
+          "pros": "Complete schema autonomy, isolated blast radius, zero lock contention, polyglot tech choices.",
+          "cons": "Cannot use ACID transactions across services (requires Sagas); complex reporting queries.",
+          "bestFor": "True microservice architectures at scale."
+        },
+        {
+          "option": "Shared Database",
+          "pros": "Simple cross-table SQL JOINs, single ACID transaction across tables.",
+          "cons": "Tight coupling, shared lock contention, schema migration nightmare.",
+          "bestFor": "Monolithic applications only; catastrophic anti-pattern for microservices."
+        }
+      ],
+      "interviewTip": "In architecture interviews, emphasize: 'Services must strictly encapsulate their datastores. To prevent coupling, the Order service will expose an API or publish domain events; under no circumstances will the Customer service query the Order database directly.'",
+      "topicId": "data-management",
+      "topicTitle": "3. Distributed Data & Consistency",
+      "topicNumber": 3,
+      "architectureDiagram": "+-------------------------------------------------------------------------+\n|                  DATABASE-PER-SERVICE ISOLATION TOPOLOGY                |\n+-------------------------------------------------------------------------+\n[Order Service]          [Customer Service]          [Inventory Service]\n       |                         |                            |\n  (Private DB)              (Private DB)                 (Private DB)\n       v                         v                            v\n[PostgreSQL DB]            [MongoDB DB]                [Cassandra DB]\n (Financial ACID)         (User Profiles)             (Real-time Stock)\n       |                         |                            |\n       +======> (Apache Kafka Event Bus For Sync) <===========+",
+      "diagramImageUrl": "/diagrams/microservices/database-per-service-block.svg",
+      "flowDiagramUrl": "/diagrams/microservices/database-per-service-flow.svg",
+      "jsonUrl": "/api/microservices/subtopics/data-management/database-per-service.json"
+    },
+    {
+      "id": "saga-pattern",
+      "subtopicNumber": "3.2",
+      "title": "Distributed Saga Pattern",
+      "subtitle": "Managing multi-service distributed transactions via local commits and compensating rollbacks.",
+      "readingTime": "9 min read",
+      "difficulty": "Staff+",
+      "accent": "#f59e0b",
+      "keyTakeaways": [
+        "Two-Phase Commit (2PC) does not scale across microservices; a **Saga** coordinates multi-service transactions via a sequence of local ACID transactions paired with compensating actions.",
+        "Choose **Choreography** (event-driven) for simple 2–3 step workflows, and **Orchestration** (central coordinator or Temporal) for complex multi-step financial flows.",
+        "Sagas lack ACID **Isolation**: use **Semantic Locks** (e.g. `PENDING` state) to prevent concurrent dirty reads and lost updates."
+      ],
+      "ascii": "+-------------------------------------------------------------------------+\n|                    ORCHESTRATED SAGA EXECUTION & ROLLBACK               |\n+-------------------------------------------------------------------------+\n       [Order Saga Orchestrator]\n                   |\n  1. ReserveStock  |===========> [Inventory Svc] (Local Commit: OK)\n                   |\n  2. ChargePayment |===========> [Payment Svc]   (FAIL: Card Declined!)\n                   |\n  3. Compensate!   |===========> [Inventory Svc] (Undo: Release Stock!)\n                   v\n       [Order Marked CANCELLED]",
+      "blockNodes": [
+        {
+          "x": 50,
+          "y": 110,
+          "w": 240,
+          "h": 200,
+          "title": "Saga Orchestrator",
+          "stroke": "#f59e0b",
+          "lines": [
+            "State Machine Coordinator",
+            "Step 1: Reserve Inventory",
+            "Step 2: Charge Payment",
+            "Step 3: Dispatch Shipping",
+            "On Error: Compensate!"
+          ],
+          "tag": "Coordinator"
+        },
+        {
+          "x": 350,
+          "y": 80,
+          "w": 260,
+          "h": 65,
+          "title": "Inventory Service",
+          "stroke": "#10b981",
+          "lines": [
+            "Local DB Commit | Compensate: Release"
+          ],
+          "tag": "Step 1"
+        },
+        {
+          "x": 350,
+          "y": 155,
+          "w": 260,
+          "h": 65,
+          "title": "Payment Service",
+          "stroke": "#ef4444",
+          "lines": [
+            "Local DB Commit | Compensate: Refund"
+          ],
+          "tag": "Step 2 (Pivot)"
+        },
+        {
+          "x": 350,
+          "y": 230,
+          "w": 260,
+          "h": 65,
+          "title": "Shipping Service",
+          "stroke": "#0284c7",
+          "lines": [
+            "Local DB Commit | Retriable Step"
+          ],
+          "tag": "Step 3"
+        },
+        {
+          "x": 670,
+          "y": 110,
+          "w": 270,
+          "h": 200,
+          "title": "Kafka Saga Topic",
+          "stroke": "#a855f7",
+          "lines": [
+            "saga.order.events",
+            "Persistent Audit Trail",
+            "Durable step recovery",
+            "Idempotent replay on reboot"
+          ],
+          "tag": "Event Log"
+        }
+      ],
+      "blockConns": [
+        {
+          "d": "M 290 145 L 350 115",
+          "lx": 320,
+          "ly": 120,
+          "label": "1. Invk"
+        },
+        {
+          "d": "M 290 190 L 350 185",
+          "lx": 320,
+          "ly": 180,
+          "label": "2. Pay"
+        },
+        {
+          "d": "M 290 235 L 350 255",
+          "lx": 320,
+          "ly": 250,
+          "label": "3. Ship"
+        },
+        {
+          "d": "M 610 185 L 670 185",
+          "lx": 640,
+          "ly": 175,
+          "label": "Log"
+        }
+      ],
+      "flowNodes": [
+        {
+          "x": 50,
+          "y": 150,
+          "w": 200,
+          "h": 140,
+          "step": "1",
+          "title": "Order Created",
+          "stroke": "#38bdf8",
+          "lines": [
+            "POST /orders received",
+            "Saved with status PENDING",
+            "Saga orchestrator triggered"
+          ]
+        },
+        {
+          "x": 280,
+          "y": 150,
+          "w": 210,
+          "h": 140,
+          "step": "2",
+          "title": "Stock Reserved",
+          "stroke": "#10b981",
+          "lines": [
+            "Inventory reserves 2 units",
+            "Local DB transaction committed",
+            "Emits InventoryReserved event"
+          ]
+        },
+        {
+          "x": 520,
+          "y": 150,
+          "w": 210,
+          "h": 140,
+          "step": "3",
+          "title": "Payment Fails",
+          "stroke": "#ef4444",
+          "lines": [
+            "Credit card payment declined",
+            "Payment emits PaymentFailed",
+            "Forward execution halted"
+          ]
+        },
+        {
+          "x": 760,
+          "y": 150,
+          "w": 200,
+          "h": 140,
+          "step": "4",
+          "title": "Compensate Undo",
+          "stroke": "#f59e0b",
+          "lines": [
+            "Send RevertStock command",
+            "Inventory unreserved locally",
+            "Order marked CANCELLED"
+          ]
+        }
+      ],
+      "flowConns": [
+        {
+          "d": "M 250 210 L 280 210",
+          "lx": 265,
+          "ly": 200,
+          "label": "Step 1"
+        },
+        {
+          "d": "M 490 210 L 520 210",
+          "lx": 505,
+          "ly": 200,
+          "label": "Step 2"
+        },
+        {
+          "d": "M 730 210 L 760 210",
+          "lx": 745,
+          "ly": 200,
+          "label": "Rollback"
+        }
+      ],
+      "sections": [
+        {
+          "heading": "Choreography vs Orchestration & Handling Lack of Isolation",
+          "body": "A Saga replaces blocking distributed two-phase commit (2PC) with local ACID transactions that commit immediately. In Choreography, services react to each other's domain events; in Orchestration, a state machine directs each participant explicitly. Because local transactions commit immediately before the whole saga finishes, intermediate state is visible to concurrent transactions (Lack of Isolation). To counter this, apply Semantic Locks: mark rows with `PENDING` status so concurrent users know an operation is in-flight.",
+          "bullets": [
+            "Compensatable Transactions: Steps that precede the pivot and have a clean inverse operation.",
+            "Pivot Transaction: The go/no-go commitment point (e.g. charging the credit card). If it succeeds, the saga must run to completion.",
+            "Retriable Transactions: Steps after the pivot (e.g. sending confirmation email) that are guaranteed to eventually succeed through retries."
+          ],
+          "codeSnippet": {
+            "title": "Idempotent Compensating Transaction in Spring Boot",
+            "code": "@Transactional\npublic void compensateInventoryReservation(UUID orderId) {\n    if (compensationHistoryRepository.existsByOrderId(orderId)) {\n        return; // Idempotency check: already compensated\n    }\n    inventoryRepository.releaseReservedStock(orderId);\n    compensationHistoryRepository.save(new CompensationRecord(orderId, Instant.now()));\n}"
+          },
+          "diagramImageUrl": "/diagrams/microservices/saga-pattern-block.svg",
+          "flowDiagramUrl": "/diagrams/microservices/saga-pattern-flow.svg"
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Orchestrated Saga",
+          "pros": "Centralized state visibility, easy to understand workflow, straightforward error handling.",
+          "cons": "Orchestrator can become a hub of business logic; extra coordinator infrastructure (Temporal).",
+          "bestFor": "Complex workflows with > 3 participants and financial rollbacks."
+        },
+        {
+          "option": "Choreographed Saga",
+          "pros": "Decentralized, loosely coupled, simple to set up for small flows.",
+          "cons": "Risk of cyclic event storms; difficult to trace the global state of a distributed transaction.",
+          "bestFor": "Simple 2-step async workflows (e.g. Order Placed -> Send Email)."
+        }
+      ],
+      "interviewTip": "Never say 'We will use 2PC / XA transactions across microservices.' State: 'I will implement a Saga pattern with compensating transactions. We will use an Orchestrator to track state transitions and ensure all compensations are strictly idempotent.'",
+      "topicId": "data-management",
+      "topicTitle": "3. Distributed Data & Consistency",
+      "topicNumber": 3,
+      "architectureDiagram": "+-------------------------------------------------------------------------+\n|                    ORCHESTRATED SAGA EXECUTION & ROLLBACK               |\n+-------------------------------------------------------------------------+\n       [Order Saga Orchestrator]\n                   |\n  1. ReserveStock  |===========> [Inventory Svc] (Local Commit: OK)\n                   |\n  2. ChargePayment |===========> [Payment Svc]   (FAIL: Card Declined!)\n                   |\n  3. Compensate!   |===========> [Inventory Svc] (Undo: Release Stock!)\n                   v\n       [Order Marked CANCELLED]",
+      "diagramImageUrl": "/diagrams/microservices/saga-pattern-block.svg",
+      "flowDiagramUrl": "/diagrams/microservices/saga-pattern-flow.svg",
+      "jsonUrl": "/api/microservices/subtopics/data-management/saga-pattern.json"
+    },
+    {
+      "id": "transactional-outbox",
+      "subtopicNumber": "3.3",
+      "title": "Transactional Outbox Pattern & CDC",
+      "subtitle": "Solving the dual-write race condition via atomic database commits and Debezium write-ahead log tailing.",
+      "readingTime": "8 min read",
+      "difficulty": "Advanced",
+      "accent": "#f59e0b",
+      "keyTakeaways": [
+        "The **Dual-Write Problem**: Updating a database and publishing a message to Kafka in two separate steps cannot be done atomically; network failure between them causes data drift.",
+        "The **Transactional Outbox Pattern** saves both the business entity and an event record into an `outbox` table within the same local ACID transaction.",
+        "A Change Data Capture (CDC) engine like **Debezium** tails the database write-ahead log (WAL) and publishes events to Kafka with zero polling overhead."
+      ],
+      "ascii": "+-------------------------------------------------------------------------+\n|                  TRANSACTIONAL OUTBOX & CDC ARCHITECTURE                |\n+-------------------------------------------------------------------------+\n  [Order Service]\n         |  BEGIN TRANSACTION\n         v\n  +--------------------------------------------+\n  |             RDBMS (PostgreSQL)             |\n  |  INSERT INTO orders (...)                  |  (Single Atomic ACID Commit)\n  |  INSERT INTO outbox_events (...)           |\n  +----------------------+---------------------+\n                         | WAL (Write-Ahead Log)\n                         v\n             [Debezium / Kafka Connect]\n                         |\n                         v\n                [Apache Kafka Topic] (order.events)",
+      "blockNodes": [
+        {
+          "x": 50,
+          "y": 110,
+          "w": 250,
+          "h": 200,
+          "title": "Application Service",
+          "stroke": "#38bdf8",
+          "lines": [
+            "Order Service (Java / Go)",
+            "Begins local ACID transaction",
+            "Inserts order into orders table",
+            "Inserts event into outbox table"
+          ],
+          "tag": "App"
+        },
+        {
+          "x": 350,
+          "y": 110,
+          "w": 260,
+          "h": 200,
+          "title": "Single RDBMS Instance",
+          "stroke": "#f59e0b",
+          "lines": [
+            "PostgreSQL / MySQL",
+            "Atomic Commit Boundary",
+            "Table: orders",
+            "Table: outbox_events"
+          ],
+          "tag": "Database"
+        },
+        {
+          "x": 670,
+          "y": 110,
+          "w": 280,
+          "h": 200,
+          "title": "CDC Tailer & Kafka",
+          "stroke": "#10b981",
+          "lines": [
+            "Debezium (Kafka Connect)",
+            "Tails PostgreSQL WAL / Binlog",
+            "Publishes to Kafka topic",
+            "Guaranteed At-Least-Once"
+          ],
+          "tag": "CDC & Broker"
+        }
+      ],
+      "blockConns": [
+        {
+          "d": "M 300 210 L 350 210",
+          "lx": 325,
+          "ly": 200,
+          "label": "Single TX"
+        },
+        {
+          "d": "M 610 210 L 670 210",
+          "lx": 640,
+          "ly": 200,
+          "label": "Tail WAL"
+        }
+      ],
+      "flowNodes": [
+        {
+          "x": 50,
+          "y": 150,
+          "w": 200,
+          "h": 140,
+          "step": "1",
+          "title": "Begin Transaction",
+          "stroke": "#38bdf8",
+          "lines": [
+            "Start DB transaction",
+            "Write order row",
+            "Write outbox row with payload"
+          ]
+        },
+        {
+          "x": 280,
+          "y": 150,
+          "w": 210,
+          "h": 140,
+          "step": "2",
+          "title": "Atomic Commit",
+          "stroke": "#f59e0b",
+          "lines": [
+            "COMMIT transaction atomically",
+            "If crash occurs, both rollback",
+            "Zero dual-write inconsistency"
+          ]
+        },
+        {
+          "x": 520,
+          "y": 150,
+          "w": 210,
+          "h": 140,
+          "step": "3",
+          "title": "WAL Streaming",
+          "stroke": "#10b981",
+          "lines": [
+            "Postgres writes to WAL disk",
+            "Debezium reads replication slot",
+            "Extracts outbox JSON payload"
+          ]
+        },
+        {
+          "x": 760,
+          "y": 150,
+          "w": 200,
+          "h": 140,
+          "step": "4",
+          "title": "Kafka Publishing",
+          "stroke": "#a855f7",
+          "lines": [
+            "Publishes to `orders` topic",
+            "Key = order_id (ordering)",
+            "Downstream consumers ingest"
+          ]
+        }
+      ],
+      "flowConns": [
+        {
+          "d": "M 250 210 L 280 210",
+          "lx": 265,
+          "ly": 200,
+          "label": "Insert"
+        },
+        {
+          "d": "M 490 210 L 520 210",
+          "lx": 505,
+          "ly": 200,
+          "label": "Commit"
+        },
+        {
+          "d": "M 730 210 L 760 210",
+          "lx": 745,
+          "ly": 200,
+          "label": "Stream"
+        }
+      ],
+      "sections": [
+        {
+          "heading": "The Dual-Write Anti-Pattern & Why Polling Outbox Sucks",
+          "body": "If your code writes to the database first and then calls `kafkaProducer.send()`, the network can drop before the Kafka call, resulting in an order stored in the database but never published to Kafka. If you publish to Kafka first, Kafka may succeed while the subsequent database commit fails, causing phantom events. The Transactional Outbox pattern leverages the local ACID engine to write both the business entity and the event to the same database. While early implementations polled the outbox table via `SELECT * ... WHERE status = 'PENDING'`, this creates high database CPU load. Modern production architectures use Change Data Capture (CDC) via Debezium.",
+          "bullets": [
+            "Debezium: Hooks directly into PostgreSQL replication slots or MySQL binlogs with zero polling queries.",
+            "At-Least-Once Delivery: CDC guarantees events are published even if the app crashes; consumers must be idempotent.",
+            "Outbox Table Pruning: Automatically purge processed outbox events or configure the CDC connector to delete rows on read."
+          ],
+          "diagramImageUrl": "/diagrams/microservices/transactional-outbox-block.svg",
+          "flowDiagramUrl": "/diagrams/microservices/transactional-outbox-flow.svg"
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Transactional Outbox + CDC (Debezium)",
+          "pros": "100% immune to dual-write loss, zero polling CPU overhead, transparent to app logic.",
+          "cons": "Requires running Kafka Connect cluster; operational overhead of replication slots.",
+          "bestFor": "Mission-critical financial and transactional event streaming."
+        },
+        {
+          "option": "Direct Dual-Write (DB then Kafka)",
+          "pros": "Simple to write in 5 lines of code.",
+          "cons": "Guaranteed data corruption over time under network partitions.",
+          "bestFor": "Never acceptable in production distributed systems."
+        }
+      ],
+      "interviewTip": "Whenever an interviewer asks 'How do you guarantee an event is published when a database record is created?', immediately identify the Dual-Write problem and propose the Transactional Outbox pattern backed by Debezium CDC.",
+      "topicId": "data-management",
+      "topicTitle": "3. Distributed Data & Consistency",
+      "topicNumber": 3,
+      "architectureDiagram": "+-------------------------------------------------------------------------+\n|                  TRANSACTIONAL OUTBOX & CDC ARCHITECTURE                |\n+-------------------------------------------------------------------------+\n  [Order Service]\n         |  BEGIN TRANSACTION\n         v\n  +--------------------------------------------+\n  |             RDBMS (PostgreSQL)             |\n  |  INSERT INTO orders (...)                  |  (Single Atomic ACID Commit)\n  |  INSERT INTO outbox_events (...)           |\n  +----------------------+---------------------+\n                         | WAL (Write-Ahead Log)\n                         v\n             [Debezium / Kafka Connect]\n                         |\n                         v\n                [Apache Kafka Topic] (order.events)",
+      "diagramImageUrl": "/diagrams/microservices/transactional-outbox-block.svg",
+      "flowDiagramUrl": "/diagrams/microservices/transactional-outbox-flow.svg",
+      "jsonUrl": "/api/microservices/subtopics/data-management/transactional-outbox.json"
+    },
+    {
+      "id": "cqrs",
+      "subtopicNumber": "3.4",
+      "title": "CQRS (Command Query Responsibility Segregation)",
+      "subtitle": "Separating normalized write models from denormalized read models, asynchronous projections, and Elasticsearch indexing.",
+      "readingTime": "8 min read",
+      "difficulty": "Advanced",
+      "accent": "#8b5cf6",
+      "keyTakeaways": [
+        "CQRS separates the data model for mutations (**Commands**) from the data model for reads (**Queries**).",
+        "Write models use normalized ACID databases (PostgreSQL) optimized for enforcing business rules; Read models use denormalized stores (Elasticsearch, Redis) optimized for sub-millisecond lookups.",
+        "Projections consume domain events asynchronously from Kafka to update read stores, accepting eventual consistency ($t < 200ms$)."
+      ],
+      "ascii": "+-------------------------------------------------------------------------+\n|                        CQRS ARCHITECTURE TOPOLOGY                       |\n+-------------------------------------------------------------------------+\n  [Command Client: POST /orders]            [Query Client: GET /orders]\n                |                                         |\n                v                                         v\n       [Command Handler]                           [Query Handler]\n                |                                         |\n                v (ACID Write)                            v (Fast Read)\n       [PostgreSQL DB] (3NF)                      [Elasticsearch / Redis]\n                |                                         ^\n                v (Domain Event)                          |\n        [Kafka Broker] =========> [Projection Worker] ====+'",
+      "blockNodes": [
+        {
+          "x": 50,
+          "y": 110,
+          "w": 260,
+          "h": 200,
+          "title": "Command Model (Write)",
+          "stroke": "#ef4444",
+          "lines": [
+            "POST /orders (Mutations)",
+            "Enforces domain invariants",
+            "PostgreSQL (Normalized 3NF)",
+            "Optimized for transactional safety"
+          ],
+          "tag": "Write Tier"
+        },
+        {
+          "x": 370,
+          "y": 110,
+          "w": 260,
+          "h": 200,
+          "title": "Kafka & Projection Engine",
+          "stroke": "#8b5cf6",
+          "lines": [
+            "OrderCreated Domain Event",
+            "Projection consumer worker",
+            "Flattens & denormalizes DTOs",
+            "Eventual consistency sync"
+          ],
+          "tag": "Sync Engine"
+        },
+        {
+          "x": 690,
+          "y": 110,
+          "w": 260,
+          "h": 200,
+          "title": "Query Model (Read)",
+          "stroke": "#10b981",
+          "lines": [
+            "GET /orders/search (Queries)",
+            "Elasticsearch / Redis",
+            "Denormalized pre-joined views",
+            "Sub-millisecond P99 latency"
+          ],
+          "tag": "Read Tier"
+        }
+      ],
+      "blockConns": [
+        {
+          "d": "M 310 210 L 370 210",
+          "lx": 340,
+          "ly": 200,
+          "label": "Emit Events"
+        },
+        {
+          "d": "M 630 210 L 690 210",
+          "lx": 660,
+          "ly": 200,
+          "label": "Project"
+        }
+      ],
+      "flowNodes": [
+        {
+          "x": 50,
+          "y": 150,
+          "w": 200,
+          "h": 140,
+          "step": "1",
+          "title": "Command Validation",
+          "stroke": "#ef4444",
+          "lines": [
+            "Client executes order mutation",
+            "Command checks credit balance",
+            "Writes row to PostgreSQL"
+          ]
+        },
+        {
+          "x": 280,
+          "y": 150,
+          "w": 210,
+          "h": 140,
+          "step": "2",
+          "title": "Domain Event",
+          "stroke": "#8b5cf6",
+          "lines": [
+            "Emits OrderPlaced event",
+            "Appends to Kafka topic",
+            "Command returns 201 Created"
+          ]
+        },
+        {
+          "x": 520,
+          "y": 150,
+          "w": 210,
+          "h": 140,
+          "step": "3",
+          "title": "Projection Worker",
+          "stroke": "#f59e0b",
+          "lines": [
+            "Worker reads Kafka event",
+            "Flattens user, item, and tax info",
+            "Indexes into Elasticsearch"
+          ]
+        },
+        {
+          "x": 760,
+          "y": 150,
+          "w": 200,
+          "h": 140,
+          "step": "4",
+          "title": "Sub-ms Query",
+          "stroke": "#10b981",
+          "lines": [
+            "User loads search screen",
+            "Query hits Elasticsearch",
+            "P99 Latency: 3ms without SQL joins"
+          ]
+        }
+      ],
+      "flowConns": [
+        {
+          "d": "M 250 210 L 280 210",
+          "lx": 265,
+          "ly": 200,
+          "label": "Write"
+        },
+        {
+          "d": "M 490 210 L 520 210",
+          "lx": 505,
+          "ly": 200,
+          "label": "Publish"
+        },
+        {
+          "d": "M 730 210 L 760 210",
+          "lx": 745,
+          "ly": 200,
+          "label": "Index"
+        }
+      ],
+      "sections": [
+        {
+          "heading": "When to Use CQRS and Handling the Consistency Lag",
+          "body": "In high-traffic systems, the read-to-write ratio is often 100:1 or 1,000:1. Optimizing a single relational database for both high-throughput writes (requires 3NF normalization to avoid locking anomalies) and complex analytical reads (requires indexing and heavy joins) leads to performance deadlocks. CQRS splits them cleanly. The challenge is the projection lag: after a user creates an order, the read store may not reflect it for 50 milliseconds. Modern UIs handle this using optimistic client-side updates or passing the generated entity in the command response.",
+          "bullets": [
+            "Independent Scaling: Scale read replicas 10x while keeping write instances small.",
+            "Materialized Views: The read model is pre-computed into the exact JSON shape required by the UI.",
+            "Avoid CQRS for Simple CRUD: Do not use CQRS for basic admin screens where writes and reads map 1:1 to single tables."
+          ],
+          "diagramImageUrl": "/diagrams/microservices/cqrs-block.svg",
+          "flowDiagramUrl": "/diagrams/microservices/cqrs-flow.svg"
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "CQRS Architecture",
+          "pros": "Massive read scalability, optimized data models for queries and writes, clean separation of concerns.",
+          "cons": "Eventual consistency lag, duplicate storage costs, complex projection pipelines.",
+          "bestFor": "High read-to-write ratio systems, complex search engines, e-commerce catalog."
+        },
+        {
+          "option": "Single Unified Model",
+          "pros": "Immediate consistency (read-your-own-writes), single database to manage.",
+          "cons": "Complex joins slow down writes; difficult to scale reads independently.",
+          "bestFor": "Standard CRUD applications and administrative portals."
+        }
+      ],
+      "interviewTip": "In system design rounds for systems like Twitter or Amazon, explain: 'We will use CQRS: the Tweet write pipeline commits to a relational store and emits a TweetCreated event; projection workers update the user's Redis feed timeline asynchronously.'",
+      "topicId": "data-management",
+      "topicTitle": "3. Distributed Data & Consistency",
+      "topicNumber": 3,
+      "architectureDiagram": "+-------------------------------------------------------------------------+\n|                        CQRS ARCHITECTURE TOPOLOGY                       |\n+-------------------------------------------------------------------------+\n  [Command Client: POST /orders]            [Query Client: GET /orders]\n                |                                         |\n                v                                         v\n       [Command Handler]                           [Query Handler]\n                |                                         |\n                v (ACID Write)                            v (Fast Read)\n       [PostgreSQL DB] (3NF)                      [Elasticsearch / Redis]\n                |                                         ^\n                v (Domain Event)                          |\n        [Kafka Broker] =========> [Projection Worker] ====+'",
+      "diagramImageUrl": "/diagrams/microservices/cqrs-block.svg",
+      "flowDiagramUrl": "/diagrams/microservices/cqrs-flow.svg",
+      "jsonUrl": "/api/microservices/subtopics/data-management/cqrs.json"
+    },
+    {
+      "id": "distributed-locking",
+      "subtopicNumber": "3.5",
+      "title": "Distributed Locking & Concurrency",
+      "subtitle": "Redlock algorithm, Redis SETNX with lease expiry, ZooKeeper ephemeral nodes, and optimistic locking.",
+      "readingTime": "8 min read",
+      "difficulty": "Staff+",
+      "accent": "#ef4444",
+      "keyTakeaways": [
+        "In a distributed system with multiple autoscaled service instances, in-memory mutex locks (`synchronized`, `sync.Mutex`) fail; coordination requires a **Distributed Lock**.",
+        "Redis `SET resource_id token NX PX 30000` provides high-performance atomic locking with an automatic TTL lease to prevent deadlocks on process crashes.",
+        "Always use a randomized unique token for the lock value, and release locks via atomic Lua scripts to prevent deleting another client's acquired lock."
+      ],
+      "ascii": "+-------------------------------------------------------------------------+\n|                   DISTRIBUTED LOCK WITH LEASE & RENEWAL                 |\n+-------------------------------------------------------------------------+\n  [Instance A] ===(SET lock_key tokenA NX PX 10000)===> [Redis Cluster]\n  (Acquires Lock: Success!)                                    |\n       |                                                       |\n  [Instance B] ===(SET lock_key tokenB NX PX 10000)============+\n  (Fails: Key Exists! Backs off)                               |\n       |                                                       |\n  [Instance A Finishes] ===(Atomic Lua Script Release)========+'",
+      "blockNodes": [
+        {
+          "x": 50,
+          "y": 110,
+          "w": 260,
+          "h": 200,
+          "title": "Instance A (Worker 1)",
+          "stroke": "#10b981",
+          "lines": [
+            "Acquires lock: lock:order:100",
+            "Unique Token: uuid-aaa",
+            "Lease TTL: 10,000ms",
+            "Background Watchdog renews lease"
+          ],
+          "tag": "Lock Holder"
+        },
+        {
+          "x": 370,
+          "y": 110,
+          "w": 260,
+          "h": 200,
+          "title": "Redis Master Cluster",
+          "stroke": "#ef4444",
+          "lines": [
+            "SET key val NX PX 10000",
+            "Atomic SETNX operation",
+            "Enforces single holder",
+            "TTL expiration protects crashes"
+          ],
+          "tag": "Lock Store"
+        },
+        {
+          "x": 690,
+          "y": 110,
+          "w": 260,
+          "h": 200,
+          "title": "Instance B (Worker 2)",
+          "stroke": "#f59e0b",
+          "lines": [
+            "Attempts lock acquisition",
+            "Receives nil (Lock busy)",
+            "Backs off with jitter",
+            "Prevents double-booking!"
+          ],
+          "tag": "Blocked Caller"
+        }
+      ],
+      "blockConns": [
+        {
+          "d": "M 310 170 L 370 170",
+          "lx": 340,
+          "ly": 160,
+          "label": "SETNX"
+        },
+        {
+          "d": "M 690 170 L 630 170",
+          "lx": 660,
+          "ly": 160,
+          "label": "Rejected"
+        },
+        {
+          "d": "M 310 240 L 370 240",
+          "lx": 340,
+          "ly": 230,
+          "label": "Lua Release"
+        }
+      ],
+      "flowNodes": [
+        {
+          "x": 50,
+          "y": 150,
+          "w": 200,
+          "h": 140,
+          "step": "1",
+          "title": "Generate Token",
+          "stroke": "#38bdf8",
+          "lines": [
+            "Client creates random UUID",
+            "Unique token = tokenA",
+            "Sets lock key = lock:ticket:42"
+          ]
+        },
+        {
+          "x": 280,
+          "y": 150,
+          "w": 210,
+          "h": 140,
+          "step": "2",
+          "title": "Atomic Acquisition",
+          "stroke": "#10b981",
+          "lines": [
+            "Executes SETNX with 10s TTL",
+            "Redis returns 1 (Acquired)",
+            "Watchdog thread renews lease"
+          ]
+        },
+        {
+          "x": 520,
+          "y": 150,
+          "w": 210,
+          "h": 140,
+          "step": "3",
+          "title": "Critical Section",
+          "stroke": "#f59e0b",
+          "lines": [
+            "Mutates critical resource",
+            "Zero concurrent corruption",
+            "Completes business action"
+          ]
+        },
+        {
+          "x": 760,
+          "y": 150,
+          "w": 200,
+          "h": 140,
+          "step": "4",
+          "title": "Atomic Release",
+          "stroke": "#a855f7",
+          "lines": [
+            "Runs Lua script in Redis",
+            "Verifies token == tokenA",
+            "Deletes key atomically"
+          ]
+        }
+      ],
+      "flowConns": [
+        {
+          "d": "M 250 210 L 280 210",
+          "lx": 265,
+          "ly": 200,
+          "label": "Token"
+        },
+        {
+          "d": "M 490 210 L 520 210",
+          "lx": 505,
+          "ly": 200,
+          "label": "Acquire"
+        },
+        {
+          "d": "M 730 210 L 760 210",
+          "lx": 745,
+          "ly": 200,
+          "label": "Execute"
+        }
+      ],
+      "sections": [
+        {
+          "heading": "The Danger of Naive Releases: Why Atomic Lua Scripts Are Mandatory",
+          "body": "If Client A acquires a lock with a 5-second TTL, but suffers a long GC pause lasting 6 seconds, Redis will automatically expire the lock. Client B now legitimately acquires the lock. When Client A wakes up from its GC pause, if it executes a simple `DEL lock_key`, it will accidentally delete Client B's lock! This opens a race condition where Client C acquires the lock, leading to catastrophic double-processing. To solve this, always execute an atomic Lua script that verifies the token before deletion.",
+          "bullets": [
+            "Fencing Tokens: Pass a monotonically increasing number with every write; datastores reject writes with outdated tokens.",
+            "Redlock Algorithm: For high reliability across independent Redis nodes, acquire locks in majority (N/2 + 1) nodes.",
+            "Optimistic Locking Alternative: Prefer database version columns (`WHERE version = 5`) for relational data instead of heavy distributed locks."
+          ],
+          "codeSnippet": {
+            "title": "Safe Atomic Distributed Lock Release via Redis Lua Script",
+            "code": "String luaScript =\n    \"if redis.call('get', KEYS[1]) == ARGV[1] then \" +\n    \"    return redis.call('del', KEYS[1]) \" +\n    \"else \" +\n    \"    return 0 \" +\n    \"end\";\n\n// Guarantees we only delete the lock if we still own the original token!\nredisTemplate.execute(new DefaultRedisScript<>(luaScript, Long.class),\n    Collections.singletonList(lockKey), clientIdToken);"
+          },
+          "diagramImageUrl": "/diagrams/microservices/distributed-locking-block.svg",
+          "flowDiagramUrl": "/diagrams/microservices/distributed-locking-flow.svg"
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Redis Distributed Lock (Redisson / SETNX)",
+          "pros": "Sub-millisecond acquisition latency, automatic TTL expiration, very high throughput.",
+          "cons": "Subject to clock skew and long GC pauses; not 100% formal consensus.",
+          "bestFor": "Deduplicating scheduled jobs, preventing double ticket booking, rate limiting."
+        },
+        {
+          "option": "Database Optimistic Locking (versioning)",
+          "pros": "ACID safety, zero extra infrastructure, no clock skew vulnerabilities.",
+          "cons": "High conflict abort rate under heavy write contention.",
+          "bestFor": "Relational records where updates occasionally conflict."
+        }
+      ],
+      "interviewTip": "In interviews, distinguish between locks for efficiency (speeding things up, avoiding duplicate work) and locks for correctness (financial double spending). For correctness, mention fencing tokens or database optimistic locking.",
+      "topicId": "data-management",
+      "topicTitle": "3. Distributed Data & Consistency",
+      "topicNumber": 3,
+      "architectureDiagram": "+-------------------------------------------------------------------------+\n|                   DISTRIBUTED LOCK WITH LEASE & RENEWAL                 |\n+-------------------------------------------------------------------------+\n  [Instance A] ===(SET lock_key tokenA NX PX 10000)===> [Redis Cluster]\n  (Acquires Lock: Success!)                                    |\n       |                                                       |\n  [Instance B] ===(SET lock_key tokenB NX PX 10000)============+\n  (Fails: Key Exists! Backs off)                               |\n       |                                                       |\n  [Instance A Finishes] ===(Atomic Lua Script Release)========+'",
+      "diagramImageUrl": "/diagrams/microservices/distributed-locking-block.svg",
+      "flowDiagramUrl": "/diagrams/microservices/distributed-locking-flow.svg",
+      "jsonUrl": "/api/microservices/subtopics/data-management/distributed-locking.json"
+    },
+    {
+      "id": "idempotency",
+      "subtopicNumber": "3.6",
+      "title": "Idempotent Consumer & Deduplication Patterns",
+      "subtitle": "Idempotency keys, distributed deduplication filters, atomic state checks, and safe retries.",
+      "readingTime": "8 min read",
+      "difficulty": "Intermediate",
+      "accent": "#10b981",
+      "keyTakeaways": [
+        "In distributed systems, network packets drop frequently; clients retry requests, resulting in duplicate deliveries.",
+        "An **Idempotent API** ensures that making the same request multiple times produces the exact same result as making it once ($f(f(x)) = f(x)$).",
+        "Implement idempotency using client-supplied **Idempotency-Key** headers stored in Redis with an atomic status: `IN_PROGRESS` -> `COMPLETED`."
+      ],
+      "ascii": "+-------------------------------------------------------------------------+\n|                  IDEMPOTENT REQUEST DEDUPLICATION TOPOLOGY              |\n+-------------------------------------------------------------------------+\n[Client] --- POST /charges (Idempotency-Key: uuid-123) ---> [Payment Svc]\n                                                                  |\n                                                           [Check Redis]\n                                                           (Key Exists?)\n                                                              /       \\\n                                                           [NO]       [YES]\n                                                           /             \\\n                         (Lock Key & Process Stripe)       (Return Cached 200)\n                                     |                     (Zero Duplicate Charge)\n                         (Cache 200 Result in Redis)",
+      "blockNodes": [
+        {
+          "x": 50,
+          "y": 110,
+          "w": 260,
+          "h": 200,
+          "title": "Client Invocation",
+          "stroke": "#38bdf8",
+          "lines": [
+            "Header: Idempotency-Key",
+            "POST /api/v1/payments",
+            "Retries automatically on timeout",
+            "Client sends same UUID"
+          ],
+          "tag": "Caller"
+        },
+        {
+          "x": 370,
+          "y": 110,
+          "w": 260,
+          "h": 200,
+          "title": "Idempotency Interceptor",
+          "stroke": "#10b981",
+          "lines": [
+            "Spring Interceptor / Filter",
+            "1. Query Redis for key",
+            "2. If missing: Lock & run",
+            "3. If in-flight: Return 409",
+            "4. If completed: Replay cache"
+          ],
+          "tag": "Deduplication"
+        },
+        {
+          "x": 690,
+          "y": 110,
+          "w": 260,
+          "h": 200,
+          "title": "Core Billing Engine & Cache",
+          "stroke": "#ef4444",
+          "lines": [
+            "Stripe payment processor",
+            "Charges bank card exactly once",
+            "Saves HTTP 200 & body in Redis",
+            "Cache TTL: 24 hours"
+          ],
+          "tag": "Critical Action"
+        }
+      ],
+      "blockConns": [
+        {
+          "d": "M 310 170 L 370 170",
+          "lx": 340,
+          "ly": 160,
+          "label": "Key: uuid"
+        },
+        {
+          "d": "M 630 170 L 690 170",
+          "lx": 660,
+          "ly": 160,
+          "label": "Execute"
+        },
+        {
+          "d": "M 370 240 L 310 240",
+          "lx": 340,
+          "ly": 230,
+          "label": "Replay Cache"
+        }
+      ],
+      "flowNodes": [
+        {
+          "x": 50,
+          "y": 150,
+          "w": 200,
+          "h": 140,
+          "step": "1",
+          "title": "First Request",
+          "stroke": "#38bdf8",
+          "lines": [
+            "Client presents key uuid-123",
+            "Redis SETNX succeeds",
+            "Marks state IN_PROGRESS"
+          ]
+        },
+        {
+          "x": 280,
+          "y": 150,
+          "w": 210,
+          "h": 140,
+          "step": "2",
+          "title": "Execute & Cache",
+          "stroke": "#10b981",
+          "lines": [
+            "Charges banking gateway $50",
+            "Saves response in Redis",
+            "Returns 200 OK to caller"
+          ]
+        },
+        {
+          "x": 520,
+          "y": 150,
+          "w": 210,
+          "h": 140,
+          "step": "3",
+          "title": "Network Drop Retry",
+          "stroke": "#ef4444",
+          "lines": [
+            "Client network drops ACK",
+            "Client retries identical POST",
+            "Sends same key uuid-123"
+          ]
+        },
+        {
+          "x": 760,
+          "y": 150,
+          "w": 200,
+          "h": 140,
+          "step": "4",
+          "title": "Instant Replay",
+          "stroke": "#a855f7",
+          "lines": [
+            "Redis key HIT: COMPLETED",
+            "Returns cached 200 body",
+            "Zero duplicate credit charge!"
+          ]
+        }
+      ],
+      "flowConns": [
+        {
+          "d": "M 250 210 L 280 210",
+          "lx": 265,
+          "ly": 200,
+          "label": "Lock"
+        },
+        {
+          "d": "M 490 210 L 520 210",
+          "lx": 505,
+          "ly": 200,
+          "label": "Charge"
+        },
+        {
+          "d": "M 730 210 L 760 210",
+          "lx": 745,
+          "ly": 200,
+          "label": "Replay"
+        }
+      ],
+      "sections": [
+        {
+          "heading": "How Stripe and Uber Implement Idempotency",
+          "body": "In high-reliability financial systems, networks drop connections at any point. When a client encounters an HTTP 504 Gateway Timeout, it has no way of knowing whether the payment went through or failed before reaching the gateway. The only safe strategy is for the client to generate a unique UUID v4 idempotency key before initiating the call and send it in the HTTP headers. If the call times out, the client safely retries with the exact same key. The server detects the completed record and returns the cached response.",
+          "bullets": [
+            "In-Flight Protection: If a second request arrives while the first is still processing, return HTTP 409 Conflict with 'Request currently in progress'.",
+            "Idempotent Kafka Consumers: Store processed Kafka message offset/ID in a deduplication database before committing state.",
+            "TTL Retention: Store idempotency keys in Redis for 24–72 hours, matching client retry windows."
+          ],
+          "diagramImageUrl": "/diagrams/microservices/idempotency-block.svg",
+          "flowDiagramUrl": "/diagrams/microservices/idempotency-flow.svg"
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Idempotency Key Cache (Redis)",
+          "pros": "Guarantees exactly-once processing semantics for callers, enables safe infinite client retries.",
+          "cons": "Requires storing request/response payloads in cache; cache storage overhead.",
+          "bestFor": "Payment gateways, order creation, subscription billing."
+        },
+        {
+          "option": "Natural Idempotency (PUT/DELETE)",
+          "pros": "No extra keys needed; updating state to absolute value is naturally idempotent.",
+          "cons": "Does not work for relative increments (charging credit card $50).",
+          "bestFor": "Updating user profiles, setting statuses to static values."
+        }
+      ],
+      "interviewTip": "Whenever an interviewer asks 'How do you handle retries without charging the customer twice?', your immediate answer must be: 'We require a client-generated Idempotency-Key header stored in Redis to guarantee idempotent execution.'",
+      "topicId": "data-management",
+      "topicTitle": "3. Distributed Data & Consistency",
+      "topicNumber": 3,
+      "architectureDiagram": "+-------------------------------------------------------------------------+\n|                  IDEMPOTENT REQUEST DEDUPLICATION TOPOLOGY              |\n+-------------------------------------------------------------------------+\n[Client] --- POST /charges (Idempotency-Key: uuid-123) ---> [Payment Svc]\n                                                                  |\n                                                           [Check Redis]\n                                                           (Key Exists?)\n                                                              /       \\\n                                                           [NO]       [YES]\n                                                           /             \\\n                         (Lock Key & Process Stripe)       (Return Cached 200)\n                                     |                     (Zero Duplicate Charge)\n                         (Cache 200 Result in Redis)",
+      "diagramImageUrl": "/diagrams/microservices/idempotency-block.svg",
+      "flowDiagramUrl": "/diagrams/microservices/idempotency-flow.svg",
+      "jsonUrl": "/api/microservices/subtopics/data-management/idempotency.json"
+    }
+  ]
+}

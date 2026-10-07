@@ -1,0 +1,52 @@
+{
+  "id": "distributed-tracing",
+  "topicId": "observability-operations",
+  "topicTitle": "6. Observability, Security & Operations",
+  "topicNumber": 6,
+  "subtopicNumber": "6.1",
+  "title": "Distributed Tracing with OpenTelemetry & W3C",
+  "subtitle": "W3C TraceContext traceparent headers, span hierarchies, context propagation, and Jaeger / Zipkin visualization.",
+  "readingTime": "8 min read",
+  "difficulty": "Advanced",
+  "keyTakeaways": [
+    "In a microservices architecture where a single user click traverses 15 services, traditional single-server logs cannot identify which service caused a 3-second delay.",
+    "**Distributed Tracing** assigns a global `TraceID` to the ingress request and passes it across all HTTP/gRPC boundaries via the W3C `traceparent` header.",
+    "Each service creates a local `Span` with start time, duration, and metadata tags; tracing backends (Jaeger, Tempo) stitch them into a visual waterfall diagram."
+  ],
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                  DISTRIBUTED TRACE WATERFALL VISUALIZATION              |\n+-------------------------------------------------------------------------+\n[TraceID: 4bf92f3577b34da6a3ce929d0e0e4736]\n---------------------------------------------------------------------------\n[Gateway: GET /checkout]       |==========================================| (1200ms)\n  [Order Svc: CreateOrder]     |=============================|             (800ms)\n    [User Svc: ValidateAuth]   |=======|                                   (150ms)\n    [Payment: ChargeCard]              |===================|               (550ms)\n      [Stripe Gateway: HUNG]                 |=============|               (450ms! BOTTLENECK!)",
+  "diagramImageUrl": "/diagrams/microservices/distributed-tracing-block.svg",
+  "flowDiagramUrl": "/diagrams/microservices/distributed-tracing-flow.svg",
+  "sections": [
+    {
+      "heading": "The W3C TraceContext Standard: Anatomy of a Traceparent Header",
+      "body": "Prior to the W3C standard, every tracing vendor used proprietary headers (Zipkin used `X-B3-TraceId`, AWS X-Ray used `X-Amzn-Trace-Id`, Jaeger used `uber-trace-id`), creating integration nightmares. The W3C TraceContext standard unified the industry around a single HTTP header: `traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01`. It consists of 4 hyphen-separated fields: Version (00), 16-byte TraceID, 8-byte Parent SpanID, and Trace Flags (01 = sampled).",
+      "bullets": [
+        "Sampling Strategies: At 100,000 RPS, recording 100% of traces is cost-prohibitive. Use Probabilistic Sampling (1%) or Tail-Based Sampling (sample 100% of errors and slow calls > 2s).",
+        "Baggage Propagation: Propagate business context (e.g. `tenant_id=enterprise_42`) across the entire distributed call chain.",
+        "OpenTelemetry Auto-Instrumentation: Java and Node.js OpenTelemetry agents automatically instrument HTTP clients, gRPC, JDBC, and Redis without code changes."
+      ],
+      "codeSnippet": {
+        "title": "Manual Context Propagation with OpenTelemetry Go SDK",
+        "code": "func callDownstream(ctx context.Context, url string) (*http.Response, error) {\n    tr := otel.Tracer(\"order-service\")\n    ctx, span := tr.Start(ctx, \"callDownstream\", trace.WithSpanKind(trace.SpanKindClient))\n    defer span.End()\n\n    req, _ := http.NewRequestWithContext(ctx, \"GET\", url, nil)\n    // Injects W3C traceparent header into HTTP request\n    otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))\n    return http.DefaultClient.Do(req)\n}"
+      },
+      "diagramImageUrl": "/diagrams/microservices/distributed-tracing-block.svg",
+      "flowDiagramUrl": "/diagrams/microservices/distributed-tracing-flow.svg"
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "OpenTelemetry Distributed Tracing",
+      "pros": "Vendor-neutral standard, pinpoints exact bottleneck microservice in 1 click, automatic instrumentation libraries.",
+      "cons": "Adds slight header serialization overhead; high storage cost if tail-based sampling is not configured.",
+      "bestFor": "Mandatory for all microservice architectures with > 3 services."
+    },
+    {
+      "option": "Isolated Server Logs",
+      "pros": "Simple to write `console.log`.",
+      "cons": "Completely impossible to debug distributed latency issues across 10 services.",
+      "bestFor": "Single-process monoliths only."
+    }
+  ],
+  "interviewTip": "In every system design interview, explicitly mention distributed tracing: 'We will instrument all microservices with OpenTelemetry, propagating the W3C traceparent header to visualize cross-service latency waterfalls in Jaeger.'",
+  "jsonUrl": "/api/microservices/subtopics/observability-operations/distributed-tracing.json"
+}

@@ -1,0 +1,52 @@
+{
+  "id": "distributed-locking",
+  "topicId": "data-management",
+  "topicTitle": "3. Distributed Data & Consistency",
+  "topicNumber": 3,
+  "subtopicNumber": "3.5",
+  "title": "Distributed Locking & Concurrency",
+  "subtitle": "Redlock algorithm, Redis SETNX with lease expiry, ZooKeeper ephemeral nodes, and optimistic locking.",
+  "readingTime": "8 min read",
+  "difficulty": "Staff+",
+  "keyTakeaways": [
+    "In a distributed system with multiple autoscaled service instances, in-memory mutex locks (`synchronized`, `sync.Mutex`) fail; coordination requires a **Distributed Lock**.",
+    "Redis `SET resource_id token NX PX 30000` provides high-performance atomic locking with an automatic TTL lease to prevent deadlocks on process crashes.",
+    "Always use a randomized unique token for the lock value, and release locks via atomic Lua scripts to prevent deleting another client's acquired lock."
+  ],
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                   DISTRIBUTED LOCK WITH LEASE & RENEWAL                 |\n+-------------------------------------------------------------------------+\n  [Instance A] ===(SET lock_key tokenA NX PX 10000)===> [Redis Cluster]\n  (Acquires Lock: Success!)                                    |\n       |                                                       |\n  [Instance B] ===(SET lock_key tokenB NX PX 10000)============+\n  (Fails: Key Exists! Backs off)                               |\n       |                                                       |\n  [Instance A Finishes] ===(Atomic Lua Script Release)========+'",
+  "diagramImageUrl": "/diagrams/microservices/distributed-locking-block.svg",
+  "flowDiagramUrl": "/diagrams/microservices/distributed-locking-flow.svg",
+  "sections": [
+    {
+      "heading": "The Danger of Naive Releases: Why Atomic Lua Scripts Are Mandatory",
+      "body": "If Client A acquires a lock with a 5-second TTL, but suffers a long GC pause lasting 6 seconds, Redis will automatically expire the lock. Client B now legitimately acquires the lock. When Client A wakes up from its GC pause, if it executes a simple `DEL lock_key`, it will accidentally delete Client B's lock! This opens a race condition where Client C acquires the lock, leading to catastrophic double-processing. To solve this, always execute an atomic Lua script that verifies the token before deletion.",
+      "bullets": [
+        "Fencing Tokens: Pass a monotonically increasing number with every write; datastores reject writes with outdated tokens.",
+        "Redlock Algorithm: For high reliability across independent Redis nodes, acquire locks in majority (N/2 + 1) nodes.",
+        "Optimistic Locking Alternative: Prefer database version columns (`WHERE version = 5`) for relational data instead of heavy distributed locks."
+      ],
+      "codeSnippet": {
+        "title": "Safe Atomic Distributed Lock Release via Redis Lua Script",
+        "code": "String luaScript =\n    \"if redis.call('get', KEYS[1]) == ARGV[1] then \" +\n    \"    return redis.call('del', KEYS[1]) \" +\n    \"else \" +\n    \"    return 0 \" +\n    \"end\";\n\n// Guarantees we only delete the lock if we still own the original token!\nredisTemplate.execute(new DefaultRedisScript<>(luaScript, Long.class),\n    Collections.singletonList(lockKey), clientIdToken);"
+      },
+      "diagramImageUrl": "/diagrams/microservices/distributed-locking-block.svg",
+      "flowDiagramUrl": "/diagrams/microservices/distributed-locking-flow.svg"
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Redis Distributed Lock (Redisson / SETNX)",
+      "pros": "Sub-millisecond acquisition latency, automatic TTL expiration, very high throughput.",
+      "cons": "Subject to clock skew and long GC pauses; not 100% formal consensus.",
+      "bestFor": "Deduplicating scheduled jobs, preventing double ticket booking, rate limiting."
+    },
+    {
+      "option": "Database Optimistic Locking (versioning)",
+      "pros": "ACID safety, zero extra infrastructure, no clock skew vulnerabilities.",
+      "cons": "High conflict abort rate under heavy write contention.",
+      "bestFor": "Relational records where updates occasionally conflict."
+    }
+  ],
+  "interviewTip": "In interviews, distinguish between locks for efficiency (speeding things up, avoiding duplicate work) and locks for correctness (financial double spending). For correctness, mention fencing tokens or database optimistic locking.",
+  "jsonUrl": "/api/microservices/subtopics/data-management/distributed-locking.json"
+}

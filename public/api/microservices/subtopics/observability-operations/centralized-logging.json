@@ -1,0 +1,52 @@
+{
+  "id": "centralized-logging",
+  "topicId": "observability-operations",
+  "topicTitle": "6. Observability, Security & Operations",
+  "topicNumber": 6,
+  "subtopicNumber": "6.3",
+  "title": "Centralized Logging & Correlation IDs (MDC)",
+  "subtitle": "Mapped Diagnostic Context (MDC), structured JSON log schemas, log shippers (FluentBit), and ELK / OpenSearch aggregation.",
+  "readingTime": "7 min read",
+  "difficulty": "Intermediate",
+  "keyTakeaways": [
+    "In a microservices ecosystem with 50 containers, SSH-ing into individual servers to grep log files is impossible; logs must be streamed to a centralized index (OpenSearch/ELK).",
+    "Use **Mapped Diagnostic Context (MDC)** to automatically bind `CorrelationId`, `UserId`, and `TraceId` to all log statements on that thread.",
+    "Always output logs in structured **JSON format** with standardized keys (`timestamp`, `level`, `message`, `service`, `trace_id`), enabling instant sub-second filtering."
+  ],
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                  CENTRALIZED STRUCTURED LOGGING PIPELINE                |\n+-------------------------------------------------------------------------+\n[App Container] --- stdout (Structured JSON) ---> [FluentBit DaemonSet]\n                                                          |\n                                                          v (Buffer & Ship)\n                                            [Centralized OpenSearch / ELK]\n                                                          |\n                                                          v\n                                            [Kibana: Query trace_id=\"abc\"]\n                                            (All 50 log lines across 6 services!)",
+  "diagramImageUrl": "/diagrams/microservices/centralized-logging-block.svg",
+  "flowDiagramUrl": "/diagrams/microservices/centralized-logging-flow.svg",
+  "sections": [
+    {
+      "heading": "Mapped Diagnostic Context (MDC) in Java / Spring Boot",
+      "body": "When an engineer writes `log.info(\"Processing payment\")`, that message alone is useless when 5,000 customers are checking out simultaneously. Which customer is it? Which order? In Java, SLF4J provides MDC: a thread-local key-value map. An HTTP filter extracts the `X-Correlation-ID` header upon request entry and puts it into MDC: `MDC.put(\"correlationId\", correlationId)`. From that moment on, every single log statement printed on that thread automatically includes the correlation ID in its JSON output.",
+      "bullets": [
+        "PII Redaction: Ensure your log shipper automatically masks credit card numbers (`4111********1111`) and social security numbers before indexing.",
+        "Log Level Dynamic Configuration: Use Spring Boot Actuator `/actuator/loggers` to dynamically change log levels from INFO to DEBUG in production without restarting pods.",
+        "Asynchronous Appenders: Never use synchronous file logging inside the app; use LMAX Disruptor or AsyncAppender to prevent slow disks from blocking HTTP worker threads."
+      ],
+      "codeSnippet": {
+        "title": "Spring Boot Filter Binding Correlation ID to SLF4J MDC",
+        "code": "@Component\npublic class CorrelationIdFilter extends OncePerRequestFilter {\n    @Override\n    protected void doFilterInternal(HttpServletRequest req, HttpServletResponse res, FilterChain chain)\n            throws ServletException, IOException {\n        String corrId = req.getHeader(\"X-Correlation-ID\");\n        if (corrId == null || corrId.isBlank()) {\n            corrId = UUID.randomUUID().toString();\n        }\n        MDC.put(\"correlationId\", corrId);\n        res.setHeader(\"X-Correlation-ID\", corrId);\n        try {\n            chain.doFilter(req, res);\n        } finally {\n            MDC.clear(); // Always clear thread-local to prevent leaks!\n        }\n    }\n}"
+      },
+      "diagramImageUrl": "/diagrams/microservices/centralized-logging-block.svg",
+      "flowDiagramUrl": "/diagrams/microservices/centralized-logging-flow.svg"
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Centralized Structured JSON Logging",
+      "pros": "Instant searchability across millions of log lines, zero container disk consumption, easy alerting.",
+      "cons": "Storage costs can explode if debug logging is left enabled; requires running OpenSearch/ELK.",
+      "bestFor": "Standard production microservices."
+    },
+    {
+      "option": "Local File Logging (/var/log/app.log)",
+      "pros": "Zero external dependencies.",
+      "cons": "Logs lost permanently when Kubernetes pods restart; impossible to correlate cross-service errors.",
+      "bestFor": "Local developer laptop debugging only."
+    }
+  ],
+  "interviewTip": "Explain: 'We log strictly to stdout in structured JSON format. An HTTP filter populates the SLF4J MDC with a Correlation ID, which is propagated across all downstream RPC headers, allowing us to query Kibana by Correlation ID to reconstruct the exact cross-service request journey.'",
+  "jsonUrl": "/api/microservices/subtopics/observability-operations/centralized-logging.json"
+}

@@ -1,0 +1,52 @@
+{
+  "id": "adapter",
+  "topicId": "structural-patterns",
+  "topicTitle": "2. Structural Patterns",
+  "topicNumber": 2,
+  "subtopicNumber": "2.1",
+  "title": "Adapter Pattern",
+  "subtitle": "Allows objects with incompatible interfaces to collaborate by converting the interface of a class into another interface clients expect.",
+  "readingTime": "7 min read",
+  "difficulty": "Foundational",
+  "keyTakeaways": [
+    "Acts as a translator wrapper between two existing, incompatible APIs or legacy interfaces.",
+    "Object Adapter uses object composition (wraps Adaptee instance) rather than multiple inheritance, which is favored by the 'composition over inheritance' design principle.",
+    "Essential when integrating third-party SDKs, legacy SOAP services, or differing data format schemas without polluting core domain models."
+  ],
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                         ADAPTER UML CLASS MODEL                         |\n+-------------------------------------------------------------------------+\n+-----------------------+              +-----------------------+\n|        Client         |  uses --->   |     <<interface>>     |\n|                       |              |     PaymentGateway    |\n+-----------------------+              +-----------------------+\n                                       | + pay(cents): boolean |\n                                       +-----------^-----------+\n                                                   | implements\n                                       +-----------+-----------+\n                                       |     StripeAdapter     |\n                                       +-----------------------+\n                                       | - stripeSdk: StripeApi|\n                                       | + pay(cents): boolean |\n                                       +-----------+-----------+\n                                                   | delegates to\n                                       +-----------v-----------+\n                                       |   Legacy StripeApi    |\n                                       +-----------------------+\n                                       | + makeCharge(currency)|\n                                       +-----------------------+",
+  "diagramImageUrl": "/diagrams/design-patterns/adapter-block.svg",
+  "flowDiagramUrl": "/diagrams/design-patterns/adapter-flow.svg",
+  "sections": [
+    {
+      "heading": "Bridging Legacy Interfaces and Vendor SDK Boundaries",
+      "body": "In production engineering, third-party libraries and legacy internal systems rarely match modern internal domain interfaces. Without an adapter, vendor-specific method names, exceptions, and argument structures leak directly into core application business logic, locking your system to a single vendor. The Adapter pattern encapsulates third-party interactions behind a standard internal domain interface.",
+      "bullets": [
+        "Single Responsibility Principle: Data conversion and vendor translation logic is cleanly separated from primary business rules.",
+        "Open/Closed Principle: You can swap payment providers (e.g., Stripe to Adyen or PayPal) simply by introducing a new adapter class without changing a single line of client code.",
+        "Encapsulates Vendor Exceptions: Translates vendor-specific HTTP/gRPC runtime exceptions into domain-level checked/unchecked exceptions."
+      ],
+      "codeSnippet": {
+        "title": "Production Adapter Pattern in Java 21",
+        "code": "// Domain Target Interface\npublic interface PaymentProcessor {\n    boolean processPayment(String customerId, long amountInCents);\n}\n\n// Incompatible Third-Party SDK\npublic class LegacyPayPalService {\n    public int sendMoney(String email, double amountInDollars, String token) {\n        System.out.printf(\"PayPal: Charged $%.2f for %s%n\", amountInDollars, email);\n        return 200; // Success code\n    }\n}\n\n// The Object Adapter\npublic class PayPalPaymentAdapter implements PaymentProcessor {\n    private final LegacyPayPalService payPalService;\n    private final String apiToken;\n\n    public PayPalPaymentAdapter(LegacyPayPalService payPalService, String apiToken) {\n        this.payPalService = payPalService;\n        this.apiToken = apiToken;\n    }\n\n    @Override\n    public boolean processPayment(String customerId, long amountInCents) {\n        // Adapt parameters: convert cents to dollars\n        double dollars = amountInCents / 100.0;\n        int responseCode = payPalService.sendMoney(customerId, dollars, apiToken);\n        return responseCode == 200;\n    }\n}"
+      },
+      "flowDiagramUrl": "/diagrams/design-patterns/adapter-flow.svg",
+      "diagramImageUrl": "/diagrams/design-patterns/adapter-block.svg"
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Adapter Pattern",
+      "pros": "Protects business logic from vendor lock-in, enables seamless mocking in unit tests.",
+      "cons": "Adds an additional layer of method indirection and small object memory overhead.",
+      "bestFor": "Integrating third-party SDKs, payment gateways, cloud vendor storage services."
+    },
+    {
+      "option": "Direct SDK Invocation",
+      "pros": "Faster to code initially; direct access to all vendor-specific parameters.",
+      "cons": "Tightly couples your entire application to external APIs; replacing the SDK requires rewriting all callers.",
+      "bestFor": "Disposable prototypes and small internal scripts."
+    }
+  ],
+  "interviewTip": "Distinguish between Object Adapter (composition based, wraps the adaptee instance) and Class Adapter (uses multiple inheritance to inherit both interfaces, impossible in Java classes). Always emphasize that Object Adapter is superior because it can adapt any subclass of the adaptee.",
+  "jsonUrl": "/api/design-patterns/subtopics/structural-patterns/adapter.json"
+}

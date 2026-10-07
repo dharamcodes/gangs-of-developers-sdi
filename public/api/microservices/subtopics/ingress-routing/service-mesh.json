@@ -1,0 +1,52 @@
+{
+  "id": "service-mesh",
+  "topicId": "ingress-routing",
+  "topicTitle": "2. Edge Ingress, Routing & Service Mesh",
+  "topicNumber": 2,
+  "subtopicNumber": "2.4",
+  "title": "Service Mesh Architecture (Istio / Envoy)",
+  "subtitle": "Control plane vs data plane, transparent mTLS encryption, zero-trust security, and canary traffic routing.",
+  "readingTime": "9 min read",
+  "difficulty": "Staff+",
+  "keyTakeaways": [
+    "A Service Mesh separates application business logic from network infrastructure by injecting a sidecar proxy (Envoy) next to every container.",
+    "The Data Plane (Envoy proxies) intercepts all inbound and outbound network packets; the Control Plane (Istiod) manages policies and certificates.",
+    "Provides transparent mutual TLS (mTLS) with SPIFFE/SPIRE cryptographic identities, zero-trust network encryption, and dynamic canary traffic splitting without code changes."
+  ],
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                   ISTIO SERVICE MESH CONTROL & DATA PLANE               |\n+-------------------------------------------------------------------------+\n  [Control Plane: Istiod] (Distributes Policies, Rotates mTLS X.509 Certs)\n           |                                          |\n           v (Dynamic xDS Configs)                    v\n  +-----------------------+                  +-----------------------+\n  |  Service A Pod        |                  |  Service B Pod        |\n  |  [App A Container]    |                  |  [App B Container]    |\n  |         ^             |                  |         ^             |\n  |  (localhost loopback) |                  |  (localhost loopback) |\n  |         v             |   mTLS Tunnel    |         v             |\n  |  [Envoy Sidecar]      |=================>|  [Envoy Sidecar]      |\n  +-----------------------+ (Encrypted Wire) +-----------------------+",
+  "diagramImageUrl": "/diagrams/microservices/service-mesh-block.svg",
+  "flowDiagramUrl": "/diagrams/microservices/service-mesh-flow.svg",
+  "sections": [
+    {
+      "heading": "The Power and Latency Tax of the Service Mesh",
+      "body": "Before Service Mesh, every engineering team had to import language-specific libraries (Resilience4j in Java, Polly in C#, Hystrix) to handle retries, circuit breaking, distributed tracing, and mTLS. If you had 4 programming languages, you had to maintain 4 different client libraries. A Service Mesh extracts these infrastructure concerns out of application code into the Envoy proxy. The downside is the proxy latency tax: each inter-service call hops through two Envoy proxies (Client -> Envoy A -> Envoy B -> Target), adding 1–3 milliseconds of latency and extra memory footprint per pod.",
+      "bullets": [
+        "SPIFFE/SPIRE: Secure Production Identity Framework for Enterprise provides cryptographically verifiable service IDs.",
+        "Canary Releases & Fault Injection: Shift 5% of production traffic to new releases or inject 500ms delay to test resilience.",
+        "Ambient Mesh: Istio Ambient mesh eliminates sidecars by running shared node-level Layer 4 proxies (ztunnel), slashing memory overhead by 80%."
+      ],
+      "codeSnippet": {
+        "title": "Istio VirtualService Defining a 90/10 Canary Traffic Split",
+        "code": "apiVersion: networking.istio.io/v1alpha3\nkind: VirtualService\nmetadata:\n  name: payment-route\nspec:\n  hosts:\n  - payment-service\n  http:\n  - route:\n    - destination:\n        host: payment-service\n        subset: v1\n      weight: 90\n    - destination:\n        host: payment-service\n        subset: v2\n      weight: 10"
+      },
+      "diagramImageUrl": "/diagrams/microservices/service-mesh-block.svg",
+      "flowDiagramUrl": "/diagrams/microservices/service-mesh-flow.svg"
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Service Mesh (Istio / Envoy)",
+      "pros": "Language-agnostic mTLS encryption, transparent distributed tracing, advanced canary routing, zero app code changes.",
+      "cons": "Adds 1–3ms latency overhead per hop; significant memory footprint (50–100MB per pod); steep operational complexity.",
+      "bestFor": "Large polyglot enterprises with strict zero-trust security or complex compliance mandates."
+    },
+    {
+      "option": "Application Libraries (gRPC + Resilience4j)",
+      "pros": "Zero extra proxy processes, lowest possible latency, simple local debugging.",
+      "cons": "Must re-implement and update libraries across every language stack; no centralized policy management.",
+      "bestFor": "Monoglot shops (e.g. 100% Go or 100% Java) with extreme sub-millisecond latency requirements."
+    }
+  ],
+  "interviewTip": "In Staff+ interviews, discuss trade-offs: 'While a Service Mesh provides automated mTLS and observability, I will evaluate the 2ms proxy latency overhead and memory cost against our system's SLA before deciding to adopt Istio.'",
+  "jsonUrl": "/api/microservices/subtopics/ingress-routing/service-mesh.json"
+}

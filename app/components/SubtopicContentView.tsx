@@ -726,10 +726,40 @@ export default function SubtopicContentView({
         </Box>
 
         {/* ========================================================= */}
+        {/* PRIMARY ARCHITECTURAL BLUEPRINT & EXECUTION PIPELINE     */}
+        {/* ========================================================= */}
+        {(Boolean(subtopic.diagramImageUrl) ||
+          Boolean(subtopic.sections?.[0]?.diagramImageUrl) ||
+          Boolean(subtopic.architectureDiagram) ||
+          Boolean(subtopic.flowDiagramUrl) ||
+          Boolean(subtopic.sections?.[0]?.flowDiagramUrl)) && (
+          <Box sx={{ maxWidth: PROSE_MAX_WIDTH, mb: 6 }}>
+            <ArchitectureDiagramCard
+              ui={ui}
+              mode={mode}
+              diagramImageUrl={
+                subtopic.diagramImageUrl ||
+                subtopic.sections?.[0]?.diagramImageUrl
+              }
+              flowDiagramUrl={
+                subtopic.flowDiagramUrl ||
+                subtopic.sections?.[0]?.flowDiagramUrl
+              }
+              asciiDiagram={
+                subtopic.architectureDiagram ||
+                subtopic.sections?.[0]?.asciiDiagram ||
+                ""
+              }
+              altText={`${subtopic.subtopicNumber} ${subtopic.title}`}
+            />
+          </Box>
+        )}
+
+        {/* ========================================================= */}
         {/* 3. IN-DEPTH ARCHITECTURE SECTIONS                         */}
         {/* ========================================================= */}
         <Stack spacing={6} sx={{ mb: 6 }}>
-          {subtopic.sections.map((section, idx) => {
+          {(subtopic.sections || []).map((section, idx) => {
             const stepMatch = section.heading.match(/^(\d+)\.\s+(.*)$/);
             const stepNum = stepMatch ? stepMatch[1] : null;
             const cleanHeading = stepMatch ? stepMatch[2] : section.heading;
@@ -740,9 +770,9 @@ export default function SubtopicContentView({
                 id={`section-${idx}`}
                 sx={{
                   scrollMarginTop: "96px",
-                  pb: idx < subtopic.sections.length - 1 ? 5 : 0,
+                  pb: idx < (subtopic.sections || []).length - 1 ? 5 : 0,
                   borderBottom:
-                    idx < subtopic.sections.length - 1 ? "1px solid" : "none",
+                    idx < (subtopic.sections || []).length - 1 ? "1px solid" : "none",
                   borderColor: "divider",
                 }}
               >
@@ -957,23 +987,23 @@ export default function SubtopicContentView({
                   </Box>
                 )}
 
-                {/* System Architecture Diagram (renders strictly when visual diagram image exists and not a flow diagram) */}
-                {Boolean(section.diagramImageUrl) && !section.flowDiagramUrl && (
+                {/* System Architecture Diagram (renders strictly when visual diagram image exists and not on section 0) */}
+                {Boolean(section.diagramImageUrl) && !section.flowDiagramUrl && idx > 0 && (
                   <Box sx={{ my: 3.5 }}>
                     <ArchitectureDiagramCard
                       ui={ui}
                       mode={mode}
                       diagramImageUrl={section.diagramImageUrl}
                       asciiDiagram={
-                        section.asciiDiagram || subtopic.architectureDiagram || ""
+                        section.asciiDiagram || ""
                       }
                       altText={`${subtopic.subtopicNumber} ${subtopic.title}`}
                     />
                   </Box>
                 )}
 
-                {/* Deep-Dive Request Flow Diagram (Section 6) */}
-                {Boolean(section.flowDiagramUrl) && (
+                {/* Deep-Dive Request Flow Diagram (Section 6 or dedicated subsection) */}
+                {Boolean(section.flowDiagramUrl) && idx > 0 && (
                   <Box sx={{ my: 3.5 }}>
                     <Paper
                       variant="outlined"
@@ -1043,7 +1073,7 @@ export default function SubtopicContentView({
                         onClick={() => setFlowZoomUrl(section.flowDiagramUrl ?? null)}
                         sx={{
                           p: { xs: 1.5, sm: 3 },
-                          bgcolor: "#ffffff",
+                          bgcolor: mode === "light" ? "#ffffff" : "#070b14",
                           overflowX: "auto",
                           cursor: "zoom-in",
                           WebkitOverflowScrolling: "touch",
@@ -1742,7 +1772,7 @@ export default function SubtopicContentView({
             <CloseIcon />
           </IconButton>
         </Stack>
-        <DialogContent sx={{ bgcolor: "#ffffff", p: { xs: 1.5, sm: 3 } }}>
+        <DialogContent sx={{ bgcolor: mode === "light" ? "#ffffff" : "#070b14", p: { xs: 1.5, sm: 3 } }}>
           {flowZoomUrl && (
             <Box
               component="img"

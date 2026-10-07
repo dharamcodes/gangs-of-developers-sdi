@@ -1,0 +1,52 @@
+{
+  "id": "chain-of-responsibility",
+  "topicId": "behavioral-patterns",
+  "topicTitle": "3. Behavioral Patterns",
+  "topicNumber": 3,
+  "subtopicNumber": "3.1",
+  "title": "Chain of Responsibility Pattern",
+  "subtitle": "Passes requests along a chain of handlers; upon receiving a request, each handler decides either to process it or pass it to the next handler.",
+  "readingTime": "7 min read",
+  "difficulty": "Foundational",
+  "keyTakeaways": [
+    "Decouples senders of a request from its receivers by giving multiple objects a chance to handle the request.",
+    "Handlers are chained sequentially; a handler can short-circuit the pipeline (e.g., rejecting unauthorized requests) or decorate and forward it.",
+    "Standard foundation for Servlet Filter chains, Express.js middleware, Spring Security interceptors, and ATM cash dispensing logic."
+  ],
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                  CHAIN OF RESPONSIBILITY UML CLASS MODEL                |\n+-------------------------------------------------------------------------+\n+------------------+                   +----------------------------------+\n|      Client      |   sends ---->     |          <<abstract>>            |\n+------------------+                   |         Handler (Base)           |\n                                       +----------------------------------+\n                                       | - next: Handler                  |\n                                       | + setNext(h: Handler): Handler   |\n                                       | + handle(req: Request): boolean  |\n                                       +-----------------^----------------+\n                                                         |\n                   +-------------------+-----------------+-------------------+\n                   |                                                         |\n         +---------+--------+                                      +---------+--------+\n         | AuthValidationHdl|   --- next: RateLimitHdl --->        | SanitizeInputHdl |\n         +------------------+                                      +------------------+\n         | + handle(): bool |                                      | + handle(): bool |\n         +------------------+                                      +------------------+",
+  "diagramImageUrl": "/diagrams/design-patterns/chain-of-responsibility-block.svg",
+  "flowDiagramUrl": "/diagrams/design-patterns/chain-of-responsibility-flow.svg",
+  "sections": [
+    {
+      "heading": "Dynamic Request Pipelines and Interceptor Decoupling",
+      "body": "When processing incoming requests, hardcoding authorization checks, rate-limiting rules, caching, and input sanitization directly into a controller creates monolithic code that violates the Single Responsibility Principle. The Chain of Responsibility pattern allows you to compose standalone handler units into dynamic linear pipelines.",
+      "bullets": [
+        "Single Responsibility Principle: Each handler class does one thing (e.g. rate limiting or authentication).",
+        "Open/Closed Principle: You can inject new inspection or filtering handlers into the pipeline without modifying existing handlers.",
+        "Short-Circuit Capability: Handlers can abort execution early if validation conditions fail."
+      ],
+      "codeSnippet": {
+        "title": "Production Request Middleware Chain in Java 21",
+        "code": "public record HttpRequest(String token, String ipAddress, String body) {}\n\npublic abstract class RequestHandler {\n    private RequestHandler next;\n\n    public RequestHandler linkWith(RequestHandler next) {\n        this.next = next;\n        return next;\n    }\n\n    public boolean handle(HttpRequest request) {\n        if (next == null) return true;\n        return next.handle(request);\n    }\n}\n\npublic class AuthHandler extends RequestHandler {\n    @Override public boolean handle(HttpRequest request) {\n        if (!\"VALID_JWT_TOKEN\".equals(request.token())) {\n            System.out.println(\"401 Unauthorized: Invalid token\");\n            return false; // Short-circuit\n        }\n        return super.handle(request);\n    }\n}\n\npublic class RateLimitHandler extends RequestHandler {\n    @Override public boolean handle(HttpRequest request) {\n        if (\"192.168.1.100\".equals(request.ipAddress())) {\n            System.out.println(\"429 Too Many Requests: Rate limit exceeded\");\n            return false; // Short-circuit\n        }\n        return super.handle(request);\n    }\n}"
+      },
+      "flowDiagramUrl": "/diagrams/design-patterns/chain-of-responsibility-flow.svg",
+      "diagramImageUrl": "/diagrams/design-patterns/chain-of-responsibility-block.svg"
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Chain of Responsibility",
+      "pros": "Decouples senders from receivers; high runtime composability; easy to reorder filters.",
+      "cons": "A request can reach the end of the chain unhandled without notification if not configured carefully.",
+      "bestFor": "HTTP request filters, event validation pipelines, GUI event bubbling."
+    },
+    {
+      "option": "Direct Imperative Conditionals",
+      "pros": "Straightforward linear procedural flow; very easy to read for 1-2 static checks.",
+      "cons": "Tightly couples validation rules; impossible to dynamically reorder or skip steps via config.",
+      "bestFor": "Simple scripts with zero dynamic filtering requirements."
+    }
+  ],
+  "interviewTip": "In interviews, cite `javax.servlet.FilterChain` or Spring `HandlerInterceptor` as real-world examples of Chain of Responsibility. Point out that unlike Decorator (which wraps an object to augment behavior and returns results back up), Chain of Responsibility can terminate execution at any link without invoking the rest of the chain.",
+  "jsonUrl": "/api/design-patterns/subtopics/behavioral-patterns/chain-of-responsibility.json"
+}

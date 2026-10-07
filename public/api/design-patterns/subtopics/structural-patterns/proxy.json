@@ -1,0 +1,52 @@
+{
+  "id": "proxy",
+  "topicId": "structural-patterns",
+  "topicTitle": "2. Structural Patterns",
+  "topicNumber": 2,
+  "subtopicNumber": "2.7",
+  "title": "Proxy Pattern",
+  "subtitle": "Provides a placeholder or surrogate for another object to control access to it.",
+  "readingTime": "7 min read",
+  "difficulty": "Intermediate",
+  "keyTakeaways": [
+    "Provides an identical interface to the target service while intercepting method calls to perform auxiliary concerns: lazy initialization, caching, access control, or remote networking.",
+    "Canonical variants: Virtual Proxy (lazy loading), Protection Proxy (authorization), Remote Proxy (gRPC/RMI stubs), and Caching Proxy.",
+    "Forms the foundational bedrock of Spring `@Transactional`, Hibernate lazy loading collections, and dynamic mock libraries (Mockito)."
+  ],
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                          PROXY UML CLASS MODEL                          |\n+-------------------------------------------------------------------------+\n                       +-----------------------------+\n                       |        <<interface>>        |\n                       |       DatabaseService       |\n                       +-----------------------------+\n                       | + query(sql): List<Record>  |\n                       +--------------^--------------+\n                                      |\n              +-----------------------+-----------------------+\n              |                                               |\n+-------------+---------------+               +---------------+-------------+\n|    RealDatabaseService      |               |     CachingSecurityProxy    |\n+-----------------------------+               +-----------------------------+\n| + query(sql): [Heavy Disk]  |               | - realService: DbService    |\n+-----------------------------+               | - cache: Map<String, Cache> |\n                                              | + query(sql): auth & cache  |\n                                              +---------------+-------------+\n                                                              | delegates\n                                                              +-------> Real",
+  "diagramImageUrl": "/diagrams/design-patterns/proxy-block.svg",
+  "flowDiagramUrl": "/diagrams/design-patterns/proxy-flow.svg",
+  "sections": [
+    {
+      "heading": "Controlling Access, Lazy Loading, and Framework Interceptors",
+      "body": "Direct access to heavyweight resources (database connections, remote RPC servers, large video binaries) is dangerous without rate limiting, authorization, and caching. The Proxy pattern wraps the real service behind the exact same interface, intercepting requests to perform lifecycle management before and after delegating to the target object.",
+      "bullets": [
+        "Virtual Proxy: Defers the creation of expensive objects until the exact moment a method is invoked (e.g. Hibernate lazy loading of database child tables).",
+        "Protection Proxy: Verifies authorization credentials and security privileges prior to forwarding calls.",
+        "Open/Closed Principle: You can introduce caching, metric logging, and access control without modifying the actual service."
+      ],
+      "codeSnippet": {
+        "title": "Production Caching & Lazy-Loading Proxy in Java 21",
+        "code": "public interface VideoService {\n    byte[] fetchVideo(String videoId);\n}\n\n// Heavy Real Service\npublic class HeavyVideoService implements VideoService {\n    public HeavyVideoService() {\n        System.out.println(\"Initializing expensive cloud connection...\");\n    }\n    @Override public byte[] fetchVideo(String videoId) {\n        System.out.println(\"Downloading 500MB from S3: \" + videoId);\n        return new byte[]{0x1, 0x2, 0x3};\n    }\n}\n\n// The Proxy\npublic class CachingVideoProxy implements VideoService {\n    private VideoService realService; // Lazy-loaded reference\n    private final Map<String, byte[]> cache = new ConcurrentHashMap<>();\n\n    @Override\n    public byte[] fetchVideo(String videoId) {\n        // Fast-path: In-memory cache hit\n        byte[] cached = cache.get(videoId);\n        if (cached != null) {\n            System.out.println(\"Returning cached video for: \" + videoId);\n            return cached;\n        }\n\n        // Lazy initialization of heavy real service\n        if (realService == null) {\n            realService = new HeavyVideoService();\n        }\n\n        byte[] video = realService.fetchVideo(videoId);\n        cache.put(videoId, video);\n        return video;\n    }\n}"
+      },
+      "flowDiagramUrl": "/diagrams/design-patterns/proxy-flow.svg",
+      "diagramImageUrl": "/diagrams/design-patterns/proxy-block.svg"
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Proxy Pattern",
+      "pros": "Manages heavy object lifecycles; enables transparent security, caching, and lazy loading.",
+      "cons": "Introduces response latency for interceptor checks; multiple proxy layers can obscure debugging.",
+      "bestFor": "Hibernate entity lazy loading, Spring AOP transaction interceptors, RPC network stubs."
+    },
+    {
+      "option": "Direct Object Access",
+      "pros": "Maximum direct execution speed with zero wrapper overhead.",
+      "cons": "Eager initialization wastes memory; zero centralized enforcement of security or caching policies.",
+      "bestFor": "Lightweight local utility classes and pure value records."
+    }
+  ],
+  "interviewTip": "Distinguish Proxy from Decorator: Although both wrap an object and implement the same interface, their INTENT is fundamentally different. Decorator enhances or adds new behaviors; Proxy controls access to the underlying object (managing its lifecycle, access permissions, or network communication).",
+  "jsonUrl": "/api/design-patterns/subtopics/structural-patterns/proxy.json"
+}

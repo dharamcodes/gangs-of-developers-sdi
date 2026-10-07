@@ -1,0 +1,52 @@
+{
+  "id": "flyweight",
+  "topicId": "structural-patterns",
+  "topicTitle": "2. Structural Patterns",
+  "topicNumber": 2,
+  "subtopicNumber": "2.6",
+  "title": "Flyweight Pattern",
+  "subtitle": "Minimizes memory usage by sharing as much data as possible with similar objects.",
+  "readingTime": "7 min read",
+  "difficulty": "Advanced",
+  "keyTakeaways": [
+    "Separates object state into Intrinsic State (invariant, shared across thousands of objects) and Extrinsic State (context-dependent, passed in as method parameters).",
+    "Prevents Out-Of-Memory (OOM) errors in graphics engines, gaming entities (particles, bullets, trees), and document text editors (millions of glyph characters).",
+    "Powering core Java standard libraries: `Integer.valueOf()` caches numbers -128 to 127 using the Flyweight pattern; Java String deduplication/interning is a classic Flyweight."
+  ],
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                        FLYWEIGHT UML CLASS MODEL                        |\n+-------------------------------------------------------------------------+\n+-----------------------+              +----------------------------------+\n|    TreeFactory        |  caches ---> |       TreeType (Flyweight)       |\n+-----------------------+              +----------------------------------+\n| - types: Map<String,  |              | - name: String                   |\n|          TreeType>    |              | - color: Color    [Intrinsic]    |\n| + getTreeType(...)    |              | - texture: byte[]                |\n+-----------------------+              +----------------------------------+\n                                       | + render(x, y, scale) [Extrinsic]|\n                                       +-----------------^----------------+\n                                                         | shared by 1,000,000x\n                                       +-----------------+----------------+\n                                       |         Tree (Context)           |\n                                       +----------------------------------+\n                                       | - x: int, y: int [Extrinsic]     |\n                                       | - type: TreeType [Shared Ref]    |\n                                       +----------------------------------+",
+  "diagramImageUrl": "/diagrams/design-patterns/flyweight-block.svg",
+  "flowDiagramUrl": "/diagrams/design-patterns/flyweight-flow.svg",
+  "sections": [
+    {
+      "heading": "Intrinsic vs Extrinsic State: Slashing Memory Footprints by 99%",
+      "body": "When rendering a 3D forest with 1,000,000 trees, creating an independent object for each tree that stores its 3D polygon mesh and texture bitmaps requires 100+ Gigabytes of RAM, crashing the JVM. However, 99.9% of that data (the mesh geometry, texture atlas) is identical across all oak trees. Flyweight extracts that invariant data into an immutable shared instance, leaving only coordinates (x, y, z) in the individual tree context.",
+      "bullets": [
+        "Intrinsic State: Stored directly inside the Flyweight object. It is immutable, context-independent, and shared.",
+        "Extrinsic State: Belongs to the specific context (position, timestamp, caller ID) and is passed to Flyweight methods on demand.",
+        "Immutable by Contract: Because Flyweights are shared across concurrent threads, their internal state must never mutate."
+      ],
+      "codeSnippet": {
+        "title": "High-Performance Forest Simulator in Java 21",
+        "code": "// The Flyweight (Immutable, Intrinsic State)\npublic record TreeType(String name, String color, byte[] heavy3dMesh) {\n    public void draw(int x, int y, double windSpeed) {\n        // Extrinsic state passed dynamically as arguments\n        System.out.printf(\"Rendering %s at (%d, %d) with wind: %.1f%n\", name, x, y, windSpeed);\n    }\n}\n\n// Flyweight Factory\npublic class TreeTypeFactory {\n    private static final Map<String, TreeType> cache = new HashMap<>();\n\n    public static TreeType getTreeType(String name, String color) {\n        String key = name + \"_\" + color;\n        return cache.computeIfAbsent(key, k -> {\n            byte[] mesh = new byte[1024 * 1024]; // 1 MB heavy asset\n            return new TreeType(name, color, mesh);\n        });\n    }\n}\n\n// Context Object (Stores tiny Extrinsic State + Flyweight Pointer)\npublic record Tree(int x, int y, TreeType type) {\n    public void render(double wind) {\n        type.draw(x, y, wind);\n    }\n}"
+      },
+      "flowDiagramUrl": "/diagrams/design-patterns/flyweight-flow.svg",
+      "diagramImageUrl": "/diagrams/design-patterns/flyweight-block.svg"
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Flyweight Pattern",
+      "pros": "Saves massive amounts of heap memory; prevents JVM GC thrashing and Out-Of-Memory crashes.",
+      "cons": "Trades RAM for CPU cycles (calculating extrinsic state on the fly); more complex architecture.",
+      "bestFor": "Game particle systems, UI text rendering engines, caching financial market order books."
+    },
+    {
+      "option": "Standard Fat Objects",
+      "pros": "Simple, highly self-contained objects; state and logic are bundled together.",
+      "cons": "Devours memory when scaling to millions of active instances.",
+      "bestFor": "Domain models with small instance counts (< 10,000)."
+    }
+  ],
+  "interviewTip": "In interviews, cite `Integer.valueOf(int)` as Java's built-in Flyweight: Java pre-allocates and caches `Integer` objects from -128 to 127 in memory. Calling `Integer.valueOf(5) == Integer.valueOf(5)` returns `true` because they point to the exact same shared Flyweight instance.",
+  "jsonUrl": "/api/design-patterns/subtopics/structural-patterns/flyweight.json"
+}

@@ -1,0 +1,48 @@
+{
+  "id": "database-per-service",
+  "topicId": "data-management",
+  "topicTitle": "3. Distributed Data & Consistency",
+  "topicNumber": 3,
+  "subtopicNumber": "3.1",
+  "title": "Database-per-Service Pattern",
+  "subtitle": "Schema autonomy, polyglot persistence, eliminating cross-database joins and distributed lock contention.",
+  "readingTime": "8 min read",
+  "difficulty": "Intermediate",
+  "keyTakeaways": [
+    "Each microservice must own its private datastore; no other service may query or mutate its tables directly.",
+    "Sharing a single database across 10 microservices is the #1 cause of the 'Distributed Monolith': schema migrations break peer services and create hidden transactional coupling.",
+    "Cross-domain data retrieval is achieved through APIs, domain events, or CQRS materialized query projections, never SQL `JOIN` across database boundaries."
+  ],
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                  DATABASE-PER-SERVICE ISOLATION TOPOLOGY                |\n+-------------------------------------------------------------------------+\n[Order Service]          [Customer Service]          [Inventory Service]\n       |                         |                            |\n  (Private DB)              (Private DB)                 (Private DB)\n       v                         v                            v\n[PostgreSQL DB]            [MongoDB DB]                [Cassandra DB]\n (Financial ACID)         (User Profiles)             (Real-time Stock)\n       |                         |                            |\n       +======> (Apache Kafka Event Bus For Sync) <===========+",
+  "diagramImageUrl": "/diagrams/microservices/database-per-service-block.svg",
+  "flowDiagramUrl": "/diagrams/microservices/database-per-service-flow.svg",
+  "sections": [
+    {
+      "heading": "Why Shared Databases Destroy Microservices",
+      "body": "When multiple services read and write to the same relational database, you do not have microservices; you have a distributed monolith with multiple heads. A database schema change initiated by the Order team (e.g. renaming a column or changing a foreign key) will unexpectedly break the Billing team's queries in production. Furthermore, a long-running analytical query executed by one service will acquire table locks that freeze transactional mutations across all other services.",
+      "bullets": [
+        "Polyglot Persistence: Choose the best database engine for the specific domain (e.g., PostgreSQL for transactions, Neo4j for social graphs, Elasticsearch for search, Redis for sessions).",
+        "Eliminating Distributed Deadlocks: Private databases eliminate cross-service lock contention on database rows.",
+        "Handling Queries Across Boundaries: Implement the API Composition pattern for simple lookups, or CQRS projections for complex reporting."
+      ],
+      "diagramImageUrl": "/diagrams/microservices/database-per-service-block.svg",
+      "flowDiagramUrl": "/diagrams/microservices/database-per-service-flow.svg"
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Database-per-Service",
+      "pros": "Complete schema autonomy, isolated blast radius, zero lock contention, polyglot tech choices.",
+      "cons": "Cannot use ACID transactions across services (requires Sagas); complex reporting queries.",
+      "bestFor": "True microservice architectures at scale."
+    },
+    {
+      "option": "Shared Database",
+      "pros": "Simple cross-table SQL JOINs, single ACID transaction across tables.",
+      "cons": "Tight coupling, shared lock contention, schema migration nightmare.",
+      "bestFor": "Monolithic applications only; catastrophic anti-pattern for microservices."
+    }
+  ],
+  "interviewTip": "In architecture interviews, emphasize: 'Services must strictly encapsulate their datastores. To prevent coupling, the Order service will expose an API or publish domain events; under no circumstances will the Customer service query the Order database directly.'",
+  "jsonUrl": "/api/microservices/subtopics/data-management/database-per-service.json"
+}

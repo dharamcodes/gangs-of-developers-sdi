@@ -1,0 +1,48 @@
+{
+  "id": "cqrs",
+  "topicId": "data-management",
+  "topicTitle": "3. Distributed Data & Consistency",
+  "topicNumber": 3,
+  "subtopicNumber": "3.4",
+  "title": "CQRS (Command Query Responsibility Segregation)",
+  "subtitle": "Separating normalized write models from denormalized read models, asynchronous projections, and Elasticsearch indexing.",
+  "readingTime": "8 min read",
+  "difficulty": "Advanced",
+  "keyTakeaways": [
+    "CQRS separates the data model for mutations (**Commands**) from the data model for reads (**Queries**).",
+    "Write models use normalized ACID databases (PostgreSQL) optimized for enforcing business rules; Read models use denormalized stores (Elasticsearch, Redis) optimized for sub-millisecond lookups.",
+    "Projections consume domain events asynchronously from Kafka to update read stores, accepting eventual consistency ($t < 200ms$)."
+  ],
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                        CQRS ARCHITECTURE TOPOLOGY                       |\n+-------------------------------------------------------------------------+\n  [Command Client: POST /orders]            [Query Client: GET /orders]\n                |                                         |\n                v                                         v\n       [Command Handler]                           [Query Handler]\n                |                                         |\n                v (ACID Write)                            v (Fast Read)\n       [PostgreSQL DB] (3NF)                      [Elasticsearch / Redis]\n                |                                         ^\n                v (Domain Event)                          |\n        [Kafka Broker] =========> [Projection Worker] ====+'",
+  "diagramImageUrl": "/diagrams/microservices/cqrs-block.svg",
+  "flowDiagramUrl": "/diagrams/microservices/cqrs-flow.svg",
+  "sections": [
+    {
+      "heading": "When to Use CQRS and Handling the Consistency Lag",
+      "body": "In high-traffic systems, the read-to-write ratio is often 100:1 or 1,000:1. Optimizing a single relational database for both high-throughput writes (requires 3NF normalization to avoid locking anomalies) and complex analytical reads (requires indexing and heavy joins) leads to performance deadlocks. CQRS splits them cleanly. The challenge is the projection lag: after a user creates an order, the read store may not reflect it for 50 milliseconds. Modern UIs handle this using optimistic client-side updates or passing the generated entity in the command response.",
+      "bullets": [
+        "Independent Scaling: Scale read replicas 10x while keeping write instances small.",
+        "Materialized Views: The read model is pre-computed into the exact JSON shape required by the UI.",
+        "Avoid CQRS for Simple CRUD: Do not use CQRS for basic admin screens where writes and reads map 1:1 to single tables."
+      ],
+      "diagramImageUrl": "/diagrams/microservices/cqrs-block.svg",
+      "flowDiagramUrl": "/diagrams/microservices/cqrs-flow.svg"
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "CQRS Architecture",
+      "pros": "Massive read scalability, optimized data models for queries and writes, clean separation of concerns.",
+      "cons": "Eventual consistency lag, duplicate storage costs, complex projection pipelines.",
+      "bestFor": "High read-to-write ratio systems, complex search engines, e-commerce catalog."
+    },
+    {
+      "option": "Single Unified Model",
+      "pros": "Immediate consistency (read-your-own-writes), single database to manage.",
+      "cons": "Complex joins slow down writes; difficult to scale reads independently.",
+      "bestFor": "Standard CRUD applications and administrative portals."
+    }
+  ],
+  "interviewTip": "In system design rounds for systems like Twitter or Amazon, explain: 'We will use CQRS: the Tweet write pipeline commits to a relational store and emits a TweetCreated event; projection workers update the user's Redis feed timeline asynchronously.'",
+  "jsonUrl": "/api/microservices/subtopics/data-management/cqrs.json"
+}

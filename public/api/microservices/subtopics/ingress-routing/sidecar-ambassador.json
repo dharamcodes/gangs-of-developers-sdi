@@ -1,0 +1,48 @@
+{
+  "id": "sidecar-ambassador",
+  "topicId": "ingress-routing",
+  "topicTitle": "2. Edge Ingress, Routing & Service Mesh",
+  "topicNumber": 2,
+  "subtopicNumber": "2.5",
+  "title": "Sidecar & Ambassador Proxy Patterns",
+  "subtitle": "Loopback IPC, logging sidecars (FluentBit), Vault secret injection, and proxying egress third-party calls.",
+  "readingTime": "7 min read",
+  "difficulty": "Intermediate",
+  "keyTakeaways": [
+    "The **Sidecar Pattern** deploys a helper container alongside the primary application container in the same Kubernetes Pod, sharing network namespace and storage volumes.",
+    "The **Ambassador Pattern** acts as an out-of-process egress proxy, mediating calls from the application to external third-party APIs or legacy databases.",
+    "Communication between the primary application and sidecar happens over high-speed localhost IPC (`127.0.0.1`), eliminating physical network serialization."
+  ],
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                  SIDECAR & AMBASSADOR POD TOPOLOGY                      |\n+-------------------------------------------------------------------------+\n  +---------------------------------------------------------------------+\n  |                       KUBERNETES POD BOUNDARY                       |\n  |  +--------------------+   localhost:8080   +---------------------+  |\n  |  | Main Application   | <================> | Envoy Sidecar Proxy |  |\n  |  | (Node.js/Go logic) |                    | (Ingress/mTLS Guard)|  |\n  |  +---------+----------+                    +----------+----------+  |\n  |            | shared volume                            |             |\n  |            v                                          v             |\n  |  +--------------------+                    +---------------------+  |\n  |  | FluentBit Sidecar  |                    | Ambassador Proxy    |  |\n  |  | (Log Shipper)      |                    | (Egress to Stripe)  |  |\n  |  +--------------------+                    +---------------------+  |\n  +---------------------------------------------------------------------+",
+  "diagramImageUrl": "/diagrams/microservices/sidecar-ambassador-block.svg",
+  "flowDiagramUrl": "/diagrams/microservices/sidecar-ambassador-flow.svg",
+  "sections": [
+    {
+      "heading": "Practical Uses: Secrets, Logging, and Database Proxies",
+      "body": "The Sidecar pattern shines when you want to augment a service without modifying its source code. In Kubernetes, Vault Agent sidecars automatically authenticate with HashiCorp Vault, fetch dynamic database credentials, write them to a shared in-memory volume (`/vault/secrets`), and keep them refreshed before token expiry. The application simply reads credentials from a local file without needing Vault SDKs or custom auth logic.",
+      "bullets": [
+        "AWS Secrets / Vault Agent: Injects database passwords into shared `/dev/shm` RAM disk.",
+        "Database Connection Pooling: Run a PgBouncer sidecar inside the pod to multiplex thousands of transient PostgreSQL connections.",
+        "Localhost Speed: Calls between main container and sidecar over loopback `127.0.0.1` take under 0.1ms."
+      ],
+      "diagramImageUrl": "/diagrams/microservices/sidecar-ambassador-block.svg",
+      "flowDiagramUrl": "/diagrams/microservices/sidecar-ambassador-flow.svg"
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Sidecar Pattern",
+      "pros": "Clean separation of operational concerns, language-independent, shares pod lifecycle and security context.",
+      "cons": "Increases pod startup time; uses extra CPU/RAM per pod.",
+      "bestFor": "Logging agents, secret injection, and mesh proxies."
+    },
+    {
+      "option": "In-Process Library",
+      "pros": "Lowest memory footprint, zero extra container management overhead.",
+      "cons": "Ties application to specific language version; upgrades require redeploying app binary.",
+      "bestFor": "High-performance microbenchmarks where container count must be minimized."
+    }
+  ],
+  "interviewTip": "When asked about managing secret rotation in microservices, suggest: 'I prefer using a HashiCorp Vault Agent sidecar inside the pod that automatically rotates database credentials in a shared RAM volume, preventing developers from hardcoding secrets in environment variables.'",
+  "jsonUrl": "/api/microservices/subtopics/ingress-routing/sidecar-ambassador.json"
+}

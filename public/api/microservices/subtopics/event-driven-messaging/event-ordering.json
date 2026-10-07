@@ -1,0 +1,48 @@
+{
+  "id": "event-ordering",
+  "topicId": "event-driven-messaging",
+  "topicTitle": "5. Event-Driven Architecture & Messaging",
+  "topicNumber": 5,
+  "subtopicNumber": "5.4",
+  "title": "Distributed Event Ordering & Key Skew Mitigation",
+  "subtitle": "Partition hashing, handling celebrity hot keys, out-of-order network arrival resolution, and sequence numbers.",
+  "readingTime": "8 min read",
+  "difficulty": "Advanced",
+  "keyTakeaways": [
+    "Total ordering across an entire distributed cluster is physically impossible without a centralized bottleneck; Kafka guarantees total ordering **only within a partition**.",
+    "Assigning partition keys by entity ID (`order_id`) guarantees all state mutations for that order arrive in strict chronological order.",
+    "Beware **Partition Key Skew**: if a celebrity user (Elon Musk, Nike) generates 1,000x more events than other users, their partition becomes a hot spot, overwhelming a single consumer worker."
+  ],
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                  PARTITION SKEW & CELEBRITY KEY MITIGATION             |\n+-------------------------------------------------------------------------+\n[Celebrity Hot Key: user_id=nike (1,000,000 events)]\n  Naive Hashing: MurmurHash2(\"nike\") % 4 ===> ALL 1M Events Hit Partition 2!\n  (Partition 2 Lag Explodes; Consumer 2 Crashes with OOM!)\n\n[Compound Salted Key Hashing Solution]\n  Salted Key: \"nike\" + \"_\" + random(0..9)\n  (Spreads Nike traffic across 10 partitions uniformly!)",
+  "diagramImageUrl": "/diagrams/microservices/event-ordering-block.svg",
+  "flowDiagramUrl": "/diagrams/microservices/event-ordering-flow.svg",
+  "sections": [
+    {
+      "heading": "How to Solve Celebrity Hot Partition Skew",
+      "body": "When you partition by customer ID, all events for a given customer route to the same partition. If a major enterprise client generates 100,000 events per minute while standard users generate 5, the partition assigned to that enterprise customer will experience catastrophic consumer lag while other partitions sit idle. To mitigate hot keys, implement Key Salting: identify hot entities and append a random suffix (`nike_0`, `nike_1`, ..., `nike_9`) to distribute the traffic across 10 partitions.",
+      "bullets": [
+        "Idempotent Out-of-Order Rejection: In the consumer, store `last_processed_version`. If an event arrives with `version <= last_processed_version`, drop it immediately.",
+        "Causal Consistency: Use vector clocks or monotonic database transaction IDs to order events when consumers aggregate across multiple partitions.",
+        "Rebalancing Awareness: Remember that increasing partition count changes the hash modulus (`hash(key) % N`), routing subsequent events for an existing entity to a different partition."
+      ],
+      "diagramImageUrl": "/diagrams/microservices/event-ordering-block.svg",
+      "flowDiagramUrl": "/diagrams/microservices/event-ordering-flow.svg"
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Entity-Key Partitioning (orderId)",
+      "pros": "Guarantees strict FIFO ordering per entity, zero race conditions for that entity.",
+      "cons": "Subject to partition skew if single entities generate huge traffic spikes.",
+      "bestFor": "Transactional orders, user profiles, banking transactions."
+    },
+    {
+      "option": "Round-Robin / Random Partitioning",
+      "pros": "Perfect uniform load balancing across all broker nodes and consumers.",
+      "cons": "Zero ordering guarantees; events for the same order arrive out of order.",
+      "bestFor": "Stateless telemetry, clickstream analytics, metric collection."
+    }
+  ],
+  "interviewTip": "In Twitter or Instagram system design interviews, bring up the celebrity problem: 'Partitioning tweets by author ID will create hot partitions for celebrities like Cristiano Ronaldo. We will salt celebrity keys or route celebrity fan-outs to a separate read-path architecture.'",
+  "jsonUrl": "/api/microservices/subtopics/event-driven-messaging/event-ordering.json"
+}

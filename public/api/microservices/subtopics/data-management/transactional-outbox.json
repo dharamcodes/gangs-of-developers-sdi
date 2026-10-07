@@ -1,0 +1,48 @@
+{
+  "id": "transactional-outbox",
+  "topicId": "data-management",
+  "topicTitle": "3. Distributed Data & Consistency",
+  "topicNumber": 3,
+  "subtopicNumber": "3.3",
+  "title": "Transactional Outbox Pattern & CDC",
+  "subtitle": "Solving the dual-write race condition via atomic database commits and Debezium write-ahead log tailing.",
+  "readingTime": "8 min read",
+  "difficulty": "Advanced",
+  "keyTakeaways": [
+    "The **Dual-Write Problem**: Updating a database and publishing a message to Kafka in two separate steps cannot be done atomically; network failure between them causes data drift.",
+    "The **Transactional Outbox Pattern** saves both the business entity and an event record into an `outbox` table within the same local ACID transaction.",
+    "A Change Data Capture (CDC) engine like **Debezium** tails the database write-ahead log (WAL) and publishes events to Kafka with zero polling overhead."
+  ],
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                  TRANSACTIONAL OUTBOX & CDC ARCHITECTURE                |\n+-------------------------------------------------------------------------+\n  [Order Service]\n         |  BEGIN TRANSACTION\n         v\n  +--------------------------------------------+\n  |             RDBMS (PostgreSQL)             |\n  |  INSERT INTO orders (...)                  |  (Single Atomic ACID Commit)\n  |  INSERT INTO outbox_events (...)           |\n  +----------------------+---------------------+\n                         | WAL (Write-Ahead Log)\n                         v\n             [Debezium / Kafka Connect]\n                         |\n                         v\n                [Apache Kafka Topic] (order.events)",
+  "diagramImageUrl": "/diagrams/microservices/transactional-outbox-block.svg",
+  "flowDiagramUrl": "/diagrams/microservices/transactional-outbox-flow.svg",
+  "sections": [
+    {
+      "heading": "The Dual-Write Anti-Pattern & Why Polling Outbox Sucks",
+      "body": "If your code writes to the database first and then calls `kafkaProducer.send()`, the network can drop before the Kafka call, resulting in an order stored in the database but never published to Kafka. If you publish to Kafka first, Kafka may succeed while the subsequent database commit fails, causing phantom events. The Transactional Outbox pattern leverages the local ACID engine to write both the business entity and the event to the same database. While early implementations polled the outbox table via `SELECT * ... WHERE status = 'PENDING'`, this creates high database CPU load. Modern production architectures use Change Data Capture (CDC) via Debezium.",
+      "bullets": [
+        "Debezium: Hooks directly into PostgreSQL replication slots or MySQL binlogs with zero polling queries.",
+        "At-Least-Once Delivery: CDC guarantees events are published even if the app crashes; consumers must be idempotent.",
+        "Outbox Table Pruning: Automatically purge processed outbox events or configure the CDC connector to delete rows on read."
+      ],
+      "diagramImageUrl": "/diagrams/microservices/transactional-outbox-block.svg",
+      "flowDiagramUrl": "/diagrams/microservices/transactional-outbox-flow.svg"
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Transactional Outbox + CDC (Debezium)",
+      "pros": "100% immune to dual-write loss, zero polling CPU overhead, transparent to app logic.",
+      "cons": "Requires running Kafka Connect cluster; operational overhead of replication slots.",
+      "bestFor": "Mission-critical financial and transactional event streaming."
+    },
+    {
+      "option": "Direct Dual-Write (DB then Kafka)",
+      "pros": "Simple to write in 5 lines of code.",
+      "cons": "Guaranteed data corruption over time under network partitions.",
+      "bestFor": "Never acceptable in production distributed systems."
+    }
+  ],
+  "interviewTip": "Whenever an interviewer asks 'How do you guarantee an event is published when a database record is created?', immediately identify the Dual-Write problem and propose the Transactional Outbox pattern backed by Debezium CDC.",
+  "jsonUrl": "/api/microservices/subtopics/data-management/transactional-outbox.json"
+}

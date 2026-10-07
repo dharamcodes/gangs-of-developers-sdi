@@ -1,0 +1,52 @@
+{
+  "id": "observer",
+  "topicId": "behavioral-patterns",
+  "topicTitle": "3. Behavioral Patterns",
+  "topicNumber": 3,
+  "subtopicNumber": "3.7",
+  "title": "Observer Pattern",
+  "subtitle": "Defines a one-to-many dependency between objects so that when one object changes state, all its dependents are notified and updated automatically.",
+  "readingTime": "8 min read",
+  "difficulty": "Foundational",
+  "keyTakeaways": [
+    "Defines a publisher-subscriber contract where Subject publishes state updates to an arbitrary number of registered Observers.",
+    "Subject does not know the concrete class of any Observer, adhering strictly to the Open/Closed Principle.",
+    "The bedrock of event-driven architectures, reactive programming (RxJava, Project Reactor), GUI button listeners, and message queues."
+  ],
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                         OBSERVER UML CLASS MODEL                        |\n+-------------------------------------------------------------------------+\n   +-----------------------------+               +-----------------------------+\n   |        <<interface>>        |               |        <<interface>>        |\n   |           Subject           |  notifies --> |           Observer          |\n   +-----------------------------+               +-----------------------------+\n   | + attach(o: Observer): void |               | + update(event): void       |\n   | + detach(o: Observer): void |               +--------------^--------------+\n   | + notifyObservers(): void   |                              |\n   +--------------^--------------+               +--------------+--------------+\n                  |                              |                             |\n   +--------------+--------------+     +---------+----------+       +----------+---------+\n   |         StockTicker         |     |   MobileAppDisplay |       |   EmailAlertSubscriber |\n   +-----------------------------+     +--------------------+       +--------------------+\n   | - price: BigDecimal         |     | + update(): render |       | + update(): send   |\n   +-----------------------------+     +--------------------+       +--------------------+",
+  "diagramImageUrl": "/diagrams/design-patterns/observer-block.svg",
+  "flowDiagramUrl": "/diagrams/design-patterns/observer-flow.svg",
+  "sections": [
+    {
+      "heading": "Decoupled Event Broadcasting and Memory Leak Hazards",
+      "body": "When business state changes need to trigger updates across disparate services (e.g. user signup triggers welcome emails, analytics tracking, and fraud checks), coupling the signup service to all three modules creates an unmaintainable tangle. The Observer pattern allows subscribers to register and deregister dynamically.",
+      "bullets": [
+        "Open/Closed Principle: Add new subscribers without modifying a single line of the publisher.",
+        "Lapsed Listener Problem: Observers that fail to unregister can remain in the Subject's reference list forever, creating silent memory leaks.",
+        "Push vs Pull Models: Push sends all event data directly in method parameters; Pull passes only a reference so the observer queries what it needs."
+      ],
+      "codeSnippet": {
+        "title": "Thread-Safe Stock Market Publisher in Java 21",
+        "code": "public interface MarketObserver {\n    void onPriceUpdate(String symbol, double price);\n}\n\npublic class StockTicker {\n    private final List<MarketObserver> observers = new CopyOnWriteArrayList<>();\n    private final Map<String, Double> prices = new ConcurrentHashMap<>();\n\n    public void subscribe(MarketObserver observer) {\n        observers.add(observer);\n    }\n\n    public void unsubscribe(MarketObserver observer) {\n        observers.remove(observer);\n    }\n\n    public void setPrice(String symbol, double price) {\n        prices.put(symbol, price);\n        for (MarketObserver observer : observers) {\n            observer.onPriceUpdate(symbol, price);\n        }\n    }\n}"
+      },
+      "flowDiagramUrl": "/diagrams/design-patterns/observer-flow.svg",
+      "diagramImageUrl": "/diagrams/design-patterns/observer-block.svg"
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Observer Pattern",
+      "pros": "Loosely coupled publisher/subscriber; dynamic runtime subscription; clean Open/Closed design.",
+      "cons": "Subscribers are notified in random/unspecified order; potential memory leaks if not unsubscribed.",
+      "bestFor": "Event-driven systems, UI button event listeners, stock price updates, sensor networks."
+    },
+    {
+      "option": "Synchronous Polling",
+      "pros": "Very simple; client controls when to query for updates.",
+      "cons": "Wastes CPU cycles and network bandwidth checking for changes that haven't occurred.",
+      "bestFor": "Low-frequency batch jobs."
+    }
+  ],
+  "interviewTip": "In interviews, discuss the 'Lapsed Listener Problem' (memory leak caused by strong references from Subject to Observers preventing GC). Explain how using `WeakReference` or explicit lifecycle cleanup methods prevents this in long-running services.",
+  "jsonUrl": "/api/design-patterns/subtopics/behavioral-patterns/observer.json"
+}

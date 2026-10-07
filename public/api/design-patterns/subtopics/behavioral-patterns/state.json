@@ -1,0 +1,52 @@
+{
+  "id": "state",
+  "topicId": "behavioral-patterns",
+  "topicTitle": "3. Behavioral Patterns",
+  "topicNumber": 3,
+  "subtopicNumber": "3.8",
+  "title": "State Pattern",
+  "subtitle": "Allows an object to alter its behavior when its internal state changes, appearing to change its class.",
+  "readingTime": "7 min read",
+  "difficulty": "Intermediate",
+  "keyTakeaways": [
+    "Eliminates gargantuan switch-case statements that check `if (state == PAID)` across dozens of class methods.",
+    "Encapsulates state-specific behavior into independent State classes; state transitions are handled cleanly by delegating to new State instances.",
+    "Underpins Finite State Machines (FSMs), order checkout lifecycles, TCP connection handling, and game character animations."
+  ],
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                           STATE UML CLASS MODEL                         |\n+-------------------------------------------------------------------------+\n   +-----------------------------+               +-----------------------------+\n   |       OrderContext          |               |        <<interface>>        |\n   |                             |  delegates -> |          OrderState         |\n   +-----------------------------+               +-----------------------------+\n   | - state: OrderState         |               | + pay(): void               |\n   | + setState(s: OrderState)   |               | + ship(): void              |\n   | + pay(): void               |               | + cancel(): void            |\n   +-----------------------------+               +--------------^--------------+\n                                                                |\n                                 +------------------------------+------------------------------+\n                                 |                                                             |\n                   +-------------+---------------+                               +-------------+---------------+\n                   |        CreatedState         |                               |          PaidState          |\n                   +-----------------------------+                               +-----------------------------+\n                   | + pay(): ctx.setState(Paid) |                               | + ship(): ctx.setState(Ship)|\n                   | + ship(): throw Error       |                               | + cancel(): refund & cancel |\n                   +-----------------------------+                               +-----------------------------+",
+  "diagramImageUrl": "/diagrams/design-patterns/state-block.svg",
+  "flowDiagramUrl": "/diagrams/design-patterns/state-flow.svg",
+  "sections": [
+    {
+      "heading": "Eliminating Massive Switch-Case State Machines",
+      "body": "When an entity's behavior depends entirely on its lifecycle state, imperative code fills up with giant conditional statements: `switch(order.status) { case PENDING: ... case SHIPPED: ... }`. Every time a new state is added, developers must find and edit every switch statement. The State pattern extracts each state into an autonomous class.",
+      "bullets": [
+        "Single Responsibility Principle: Organizes all behavior specific to a particular state into a single cohesive class.",
+        "Open/Closed Principle: Introduce new states without modifying existing state classes or context methods.",
+        "Type-Safe State Transitions: Impossible transitions (e.g., shipping an unpaid order) throw clear compile or runtime exceptions."
+      ],
+      "codeSnippet": {
+        "title": "Order Lifecycle Finite State Machine in Java 21",
+        "code": "public interface OrderState {\n    void pay(OrderContext ctx);\n    void ship(OrderContext ctx);\n}\n\npublic class OrderContext {\n    private OrderState state = new CreatedState();\n\n    public void setState(OrderState state) { this.state = state; }\n    public void pay() { state.pay(this); }\n    public void ship() { state.ship(this); }\n}\n\npublic class CreatedState implements OrderState {\n    @Override public void pay(OrderContext ctx) {\n        System.out.println(\"Payment processed successfully.\");\n        ctx.setState(new PaidState());\n    }\n\n    @Override public void ship(OrderContext ctx) {\n        throw new IllegalStateException(\"Cannot ship an unpaid order!\");\n    }\n}\n\npublic class PaidState implements OrderState {\n    @Override public void pay(OrderContext ctx) {\n        throw new IllegalStateException(\"Order is already paid.\");\n    }\n\n    @Override public void ship(OrderContext ctx) {\n        System.out.println(\"Dispatched to warehouse for shipping.\");\n        ctx.setState(new ShippedState());\n    }\n}"
+      },
+      "flowDiagramUrl": "/diagrams/design-patterns/state-flow.svg",
+      "diagramImageUrl": "/diagrams/design-patterns/state-block.svg"
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "State Pattern",
+      "pros": "Eliminates duplicate switch statements; encapsulates state transitions; highly extensible.",
+      "cons": "Overkill if the state machine has only 2 simple states that rarely change.",
+      "bestFor": "Complex order lifecycles, payment workflows, game AI states, document publishing flows."
+    },
+    {
+      "option": "Enum with Switch Cases",
+      "pros": "Compact and easy to read for tiny state machines with 2-3 states.",
+      "cons": "Violates Open/Closed; state machine logic becomes scattered across all business methods.",
+      "bestFor": "Trivial binary states (e.g. ENABLED / DISABLED)."
+    }
+  ],
+  "interviewTip": "Distinguish State from Strategy: While both rely on composition and have similar UML class diagrams, their intent is completely opposite. In Strategy, the client chooses an algorithm once and usually does not change it. In State, the states transition dynamically and automatically as internal operations occur.",
+  "jsonUrl": "/api/design-patterns/subtopics/behavioral-patterns/state.json"
+}

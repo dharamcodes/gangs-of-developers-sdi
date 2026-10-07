@@ -1,0 +1,48 @@
+{
+  "id": "change-data-capture",
+  "topicId": "event-driven-messaging",
+  "topicTitle": "5. Event-Driven Architecture & Messaging",
+  "topicNumber": 5,
+  "subtopicNumber": "5.5",
+  "title": "Change Data Capture (CDC) & Debezium Streaming",
+  "subtitle": "Tailing PostgreSQL write-ahead logs, MySQL binlogs, streaming database mutations, and zero-impact event sourcing.",
+  "readingTime": "7 min read",
+  "difficulty": "Advanced",
+  "keyTakeaways": [
+    "Change Data Capture (CDC) streams row-level changes (INSERT, UPDATE, DELETE) directly from a database's transaction log (WAL / binlog) into Kafka.",
+    "CDC requires zero changes to application code: developers write normal SQL transactions, and the CDC engine automatically extracts the stream.",
+    "Use Debezium with Kafka Connect for low-latency ($t < 50ms$), high-throughput data replication without placing polling load on the database."
+  ],
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                  CHANGE DATA CAPTURE (CDC) WITH DEBEZIUM                |\n+-------------------------------------------------------------------------+\n[Application] ---> [PostgreSQL Database Engine]\n                         | (Normal SQL Commits)\n                         v\n             [Write-Ahead Log (WAL Disk)]\n                         |\n                         v (Logical Replication Slot)\n             [Debezium / Kafka Connect Engine]\n                         |\n                         v (Streams JSON / Avro Row Deltas)\n               [Apache Kafka Topic] (dbserver1.orders)",
+  "diagramImageUrl": "/diagrams/microservices/change-data-capture-block.svg",
+  "flowDiagramUrl": "/diagrams/microservices/change-data-capture-flow.svg",
+  "sections": [
+    {
+      "heading": "How CDC Revolutionizes Cache Invalidation and Search Indexing",
+      "body": "Keeping a cache (Redis) or search engine (Elasticsearch) in sync with a primary relational database has historically been error-prone. When developers manually write dual-writes (`db.save(); redis.set()`), crashes cause the cache to drift out of sync. With CDC, the database itself is the event source. Debezium reads the WAL directly. If the database crashes, it rolls back; if it commits, Debezium streams the exact diff. Cache invalidation workers consume the CDC stream and update Redis with 100% mathematical fidelity.",
+      "bullets": [
+        "Zero Application Overhead: Legacy codebases can be turned into event-driven systems without modifying a single line of application source code.",
+        "Before/After Payloads: Debezium events contain both the old row values and new row values, enabling rich audit logging.",
+        "Replication Slot Monitoring: Monitor PostgreSQL `pg_replication_slots`. If Kafka Connect stops consuming, the WAL disk on the database can fill up!"
+      ],
+      "diagramImageUrl": "/diagrams/microservices/change-data-capture-block.svg",
+      "flowDiagramUrl": "/diagrams/microservices/change-data-capture-flow.svg"
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Change Data Capture (Debezium)",
+      "pros": "Zero application code changes, impossible to miss an event, sub-50ms latency, zero polling query load.",
+      "cons": "Requires Kafka Connect infrastructure; unconsumed replication slots can exhaust database disk.",
+      "bestFor": "Cache invalidation, CQRS search indexing, data warehouse ingestion."
+    },
+    {
+      "option": "Scheduled Polling (SELECT WHERE updated_at > t)",
+      "pros": "Simple to write in a cron job.",
+      "cons": "High database CPU consumption; misses deletes; latency bound by polling interval.",
+      "bestFor": "Simple batch ETL jobs only."
+    }
+  ],
+  "interviewTip": "When asked 'How do we keep our Elasticsearch search index in sync with PostgreSQL?', recommend: 'We will use Change Data Capture with Debezium tailing PostgreSQL's Write-Ahead Log. This guarantees real-time synchronization without dual-write inconsistencies or polling load on the database.'",
+  "jsonUrl": "/api/microservices/subtopics/event-driven-messaging/change-data-capture.json"
+}

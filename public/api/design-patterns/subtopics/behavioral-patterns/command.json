@@ -1,0 +1,52 @@
+{
+  "id": "command",
+  "topicId": "behavioral-patterns",
+  "topicTitle": "3. Behavioral Patterns",
+  "topicNumber": 3,
+  "subtopicNumber": "3.2",
+  "title": "Command Pattern",
+  "subtitle": "Encapsulates a request as an object, thereby letting you parameterize clients with different requests, queue or log requests, and support undoable operations.",
+  "readingTime": "8 min read",
+  "difficulty": "Foundational",
+  "keyTakeaways": [
+    "Turns a business operation into a standalone first-class object containing all necessary parameters and receiver references.",
+    "Enables deferred execution, asynchronous task queues, command scheduling, transaction replay logging, and multi-level Undo/Redo stacks.",
+    "Underpins CQRS architectures, database write-ahead logging (WAL), GUI menu actions, and macro recording engines."
+  ],
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                          COMMAND UML CLASS MODEL                        |\n+-------------------------------------------------------------------------+\n   +------------------+                   +-----------------------------+\n   |  Invoker (UI)    |  holds ---->      |        <<interface>>        |\n   +------------------+                   |           Command           |\n   | - onCommand: Cmd |                   +-----------------------------+\n   | + click(): void  |                   | + execute(): void           |\n   +------------------+                   | + undo(): void              |\n                                          +--------------^--------------+\n                                                         |\n                                          +--------------+--------------+\n                                          |        ConcreteCommand      |\n                                          +-----------------------------+\n                                          | - receiver: Database        |\n                                          | - backupState: Snapshot     |\n                                          | + execute(): receiver.op()  |\n                                          | + undo(): receiver.restore()|\n                                          +-----------------------------+",
+  "diagramImageUrl": "/diagrams/design-patterns/command-block.svg",
+  "flowDiagramUrl": "/diagrams/design-patterns/command-flow.svg",
+  "sections": [
+    {
+      "heading": "Reifying Invocations into First-Class Objects",
+      "body": "Direct method invocations (`account.deposit(500)`) tie the call site directly to execution time, precluding delayed scheduling, queuing, or rollback. By turning the request into an independent Command object, you can serialize commands to disk, ship them across Kafka to remote workers, or maintain an undo buffer.",
+      "bullets": [
+        "Single Responsibility Principle: Decouples classes that invoke operations from classes that know how to execute them.",
+        "Open/Closed Principle: Introduce new commands into your system without altering existing invoker or receiver code.",
+        "Enables CQRS (Command Query Responsibility Segregation): Clean separation of write commands from read queries."
+      ],
+      "codeSnippet": {
+        "title": "Undoable Bank Account Command Architecture in Java 21",
+        "code": "public interface Command {\n    void execute();\n    void undo();\n}\n\npublic class BankAccount {\n    private int balance = 0;\n    public void deposit(int amount) { balance += amount; }\n    public void withdraw(int amount) { balance -= amount; }\n    public int getBalance() { return balance; }\n}\n\npublic class DepositCommand implements Command {\n    private final BankAccount account;\n    private final int amount;\n\n    public DepositCommand(BankAccount account, int amount) {\n        this.account = account;\n        this.amount = amount;\n    }\n\n    @Override public void execute() { account.deposit(amount); }\n    @Override public void undo() { account.withdraw(amount); }\n}\n\npublic class TransactionManager {\n    private final Deque<Command> undoStack = new ArrayDeque<>();\n\n    public void executeCommand(Command cmd) {\n        cmd.execute();\n        undoStack.push(cmd);\n    }\n\n    public void undoLast() {\n        if (!undoStack.isEmpty()) {\n            Command cmd = undoStack.pop();\n            cmd.undo();\n        }\n    }\n}"
+      },
+      "flowDiagramUrl": "/diagrams/design-patterns/command-flow.svg",
+      "diagramImageUrl": "/diagrams/design-patterns/command-block.svg"
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Command Pattern",
+      "pros": "Enables multi-level undo, asynchronous task queues, transaction replay, and decoupling.",
+      "cons": "Creates dozens of individual command classes for every minor operation in the system.",
+      "bestFor": "Text editors (undo/redo), CQRS distributed architectures, job schedulers, transactional sagas."
+    },
+    {
+      "option": "Direct Method Invocations",
+      "pros": "Immediate execution, minimal classes, direct stack traces.",
+      "cons": "Cannot defer execution; impossible to implement undo without complex ad-hoc state tracking.",
+      "bestFor": "Simple read-only lookups and stateless calculation services."
+    }
+  ],
+  "interviewTip": "In distributed architecture interviews, connect the Command pattern directly to Command Query Responsibility Segregation (CQRS) and the Outbox pattern. Mention that in modern event-driven architectures, commands are dispatched to event brokers for guaranteed asynchronous execution.",
+  "jsonUrl": "/api/design-patterns/subtopics/behavioral-patterns/command.json"
+}

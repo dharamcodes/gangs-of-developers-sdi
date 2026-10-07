@@ -1,0 +1,48 @@
+{
+  "id": "event-driven-architecture",
+  "topicId": "event-driven-messaging",
+  "topicTitle": "5. Event-Driven Architecture & Messaging",
+  "topicNumber": 5,
+  "subtopicNumber": "5.1",
+  "title": "Event-Driven Architecture & Event Sourcing",
+  "subtitle": "Event notifications vs event-carried state transfer, append-only immutable event stores, and temporal query reconstruction.",
+  "readingTime": "8 min read",
+  "difficulty": "Advanced",
+  "keyTakeaways": [
+    "In **Event Notification**, producers emit minimal signals (`OrderPlaced: id=123`); consumers must call back via RPC to fetch details.",
+    "In **Event-Carried State Transfer (ECST)**, events include full state payloads, allowing consumers to update local read models without back-and-forth RPCs.",
+    "In **Event Sourcing**, state is not stored as mutable rows; the sequence of immutable domain events is the authoritative source of truth."
+  ],
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                    EVENT SOURCING & EVENT STREAMING                     |\n+-------------------------------------------------------------------------+\n[Order Aggregate Mutations]\n     |\n     v (Append Only Commit Log)\n+-----------------------------------------------------------------------+\n| Event 1: OrderCreated    (items: [A, B], total: $50)                  |\n| Event 2: ItemAdded       (item: C, total: $75)                        |\n| Event 3: OrderDiscounted (discount: 10%, total: $67.50)               |\n| Event 4: OrderShipped    (tracking: 1Z999)                            |\n+-----------------------------------------------------------------------+\n     |\n     v (Replay & Project)\n[Current State: Status=SHIPPED, Total=$67.50, Full Temporal Audit Trail]",
+  "diagramImageUrl": "/diagrams/microservices/event-driven-architecture-block.svg",
+  "flowDiagramUrl": "/diagrams/microservices/event-driven-architecture-flow.svg",
+  "sections": [
+    {
+      "heading": "Event Notification vs Event-Carried State Transfer",
+      "body": "In Event Notification, the producer publishes a lightweight notification (`{ event: 'OrderCreated', orderId: '123' }`). When 10 downstream services receive this event, each makes a synchronous HTTP/gRPC call back to the Order Service to fetch the customer name, items, and address. This triggers a 10x query storm. In Event-Carried State Transfer (ECST), the event payload contains all relevant domain attributes. Consumers store the data locally in their own databases, achieving complete runtime autonomy without query callbacks.",
+      "bullets": [
+        "Snapshots in Event Sourcing: For aggregates with thousands of events, persist periodic state snapshots (e.g. every 100 events) to speed up hydration.",
+        "Schema Evolution: Use Confluent Schema Registry with Avro to enforce backward and forward schema compatibility.",
+        "Idempotency: Because Kafka guarantees at-least-once delivery, every consumer must be idempotent."
+      ],
+      "diagramImageUrl": "/diagrams/microservices/event-driven-architecture-block.svg",
+      "flowDiagramUrl": "/diagrams/microservices/event-driven-architecture-flow.svg"
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Event-Carried State Transfer",
+      "pros": "Consumers are 100% decoupled; zero query storms back to origin service.",
+      "cons": "Larger message payload sizes; risk of stale replicated data if events lag.",
+      "bestFor": "High-scale asynchronous microservices."
+    },
+    {
+      "option": "Event Sourcing",
+      "pros": "Complete immutable audit log, native time travel debugging, eliminates write lock contention.",
+      "cons": "Steep learning curve, complex schema migrations over long historical events.",
+      "bestFor": "Fintech ledgers, legal compliance, order tracking systems."
+    }
+  ],
+  "interviewTip": "In interviews, distinguish between Event Notification and Event-Carried State Transfer: 'I will use Event-Carried State Transfer so our downstream analytics and notification services don't bombard the Order service with synchronous GET requests.'",
+  "jsonUrl": "/api/microservices/subtopics/event-driven-messaging/event-driven-architecture.json"
+}

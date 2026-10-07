@@ -1,0 +1,48 @@
+{
+  "id": "retry-exponential-backoff",
+  "topicId": "resilience-fault-tolerance",
+  "topicTitle": "4. Distributed Resilience & Fault Tolerance",
+  "topicNumber": 4,
+  "subtopicNumber": "4.2",
+  "title": "Retry with Exponential Backoff & Full Jitter",
+  "subtitle": "Preventing thundering herd retry storms via randomized jitter and transient error categorization.",
+  "readingTime": "7 min read",
+  "difficulty": "Intermediate",
+  "keyTakeaways": [
+    "Retrying immediately against a struggling service causes a **Retry Storm** (Thundering Herd) that guarantees the service will never recover.",
+    "Apply **Exponential Backoff**: sleep $t = \\text{base} \\times 2^{\\text{attempt}}$ before retrying.",
+    "Always add **Full Jitter**: randomize the sleep duration ($t_{\\text{sleep}} = \\text{random}(0, t)$) to decorrelate concurrent retries across thousands of clients."
+  ],
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                    RETRY STORMS VS RANDOMIZED FULL JITTER               |\n+-------------------------------------------------------------------------+\n[Naive Retry: Thundering Herd Stampede]\n1,000 Clients Fail ---> Sleep Exactly 2s ---> 1,000 Clients Hit DB at Once! (CRASH)\n\n[Full Jitter Retry: Smooth Uniform Distribution]\n1,000 Clients Fail ---> Sleep random(0..2s) -> Traffic Spreads Uniformly (RECOVERS)",
+  "diagramImageUrl": "/diagrams/microservices/retry-exponential-backoff-block.svg",
+  "flowDiagramUrl": "/diagrams/microservices/retry-exponential-backoff-flow.svg",
+  "sections": [
+    {
+      "heading": "The Math of Full Jitter vs Equal Jitter",
+      "body": "AWS Architecture research proved that exponential backoff without jitter is completely useless during widespread outages: if 10,000 clients fail simultaneously, exponential backoff simply synchronizes them to retry at the exact same future seconds (t = 1s, t = 2s, t = 4s), hammering the database with cyclical traffic waves. Full Jitter chooses a uniform random distribution between 0 and the exponential cap: $$t_{\\text{sleep}} = \\text{random}(0, \\min(\\text{max\\_wait}, \\text{base} \\times 2^{\\text{attempt}}))$$. This spreads the retries smoothly over time, allowing the downstream system to recover.",
+      "bullets": [
+        "Idempotency Requirement: Only retry operations that are naturally idempotent (GET/PUT) or have an Idempotency-Key header.",
+        "Never Retry 4xx Errors: Retrying HTTP 400 (Bad Request) or 401 (Unauthorized) burns CPU and will never succeed.",
+        "Retry Budgets: Limit retries to at most 10% of total incoming traffic to prevent retry amplification."
+      ],
+      "diagramImageUrl": "/diagrams/microservices/retry-exponential-backoff-block.svg",
+      "flowDiagramUrl": "/diagrams/microservices/retry-exponential-backoff-flow.svg"
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Exponential Backoff + Full Jitter",
+      "pros": "Dramatically reduces peak load during recovery, spreads retries evenly, prevents thundering herds.",
+      "cons": "Adds variable latency to failed requests.",
+      "bestFor": "All transient network and database retries."
+    },
+    {
+      "option": "Constant Interval Retry",
+      "pros": "Simple constant sleep duration.",
+      "cons": "Creates synchronized cyclic retry spikes that keep struggling databases knocked down.",
+      "bestFor": "Never use in high-throughput distributed systems."
+    }
+  ],
+  "interviewTip": "In interviews, explicitly mention 'Full Jitter': 'We will use exponential backoff with full jitter to decorrelate retries across our fleet and avoid thundering herd stampedes against the recovering database.'",
+  "jsonUrl": "/api/microservices/subtopics/resilience-fault-tolerance/retry-exponential-backoff.json"
+}

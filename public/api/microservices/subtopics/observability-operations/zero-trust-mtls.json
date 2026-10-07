@@ -1,0 +1,48 @@
+{
+  "id": "zero-trust-mtls",
+  "topicId": "observability-operations",
+  "topicTitle": "6. Observability, Security & Operations",
+  "topicNumber": 6,
+  "subtopicNumber": "6.4",
+  "title": "Zero-Trust Security, mTLS & JWT Propagation",
+  "subtitle": "SPIFFE/SPIRE cryptographic identities, service-to-service mutual TLS, OAuth2 Resource Server, and claims propagation.",
+  "readingTime": "8 min read",
+  "difficulty": "Staff+",
+  "keyTakeaways": [
+    "In a modern cloud environment, the internal network is not trusted (**Zero-Trust Model**): every inter-service call must be authenticated and encrypted.",
+    "Mutual TLS (**mTLS**) authenticates both the client and server using X.509 cryptographic certificates, encrypting traffic on the wire.",
+    "Combine mTLS (service-to-service identity) with **JWT Token Propagation** (user context and permissions) to enforce fine-grained role-based access control (RBAC)."
+  ],
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                  ZERO-TRUST DUAL SECURITY LAYER (mTLS + JWT)            |\n+-------------------------------------------------------------------------+\n[Client User] --- (Bearer JWT: user_id=42, role=admin) ---> [API Gateway]\n                                                                  |\n                  (Layer 1: Mutual TLS Encryption & SPIFFE Identity)\n                  (Layer 2: Forwards Verified JWT Claims Header)\n                                                                  v\n                                                           [Order Service]\n                                                                  |\n                  (Validates: Caller is Gateway AND User is Admin)\n                                                                  v\n                                                           [Payment Service]",
+  "diagramImageUrl": "/diagrams/microservices/zero-trust-mtls-block.svg",
+  "flowDiagramUrl": "/diagrams/microservices/zero-trust-mtls-flow.svg",
+  "sections": [
+    {
+      "heading": "The Castle-and-Moat Anti-Pattern vs Zero Trust",
+      "body": "The traditional 'Castle-and-Moat' security model assumes that once traffic enters the internal private VPC, everything inside is trusted and can communicate unencrypted via plain HTTP. This is a fatal flaw: an attacker who compromises a single low-security microservice (e.g. an image resize utility) can sniff internal network traffic, intercept unencrypted credit card numbers, and make arbitrary internal RPC calls to billing. Zero Trust mandates that network location implies zero trust: every microservice must authenticate its peers via mTLS and verify user authorizations.",
+      "bullets": [
+        "SPIFFE/SPIRE: Gives every pod a cryptographic identity (`spiffe://prod/ns/payments/sa/payment-sa`) backed by short-lived X.509 certificates rotated hourly.",
+        "Token Chaining: Using OAuth2 Token Exchange (RFC 8693) to exchange a client token for a downscoped inter-service delegation token.",
+        "Kubernetes NetworkPolicies: Complement mTLS with Layer 4 firewall rules that block unauthorized Pod-to-Pod TCP connections."
+      ],
+      "diagramImageUrl": "/diagrams/microservices/zero-trust-mtls-block.svg",
+      "flowDiagramUrl": "/diagrams/microservices/zero-trust-mtls-flow.svg"
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Zero-Trust mTLS + JWT Propagation",
+      "pros": "Defense-in-depth, immune to internal packet sniffing, cryptographically verifiable caller identities.",
+      "cons": "Certificate rotation operational overhead; CPU overhead of TLS handshakes (mitigated by session resumption).",
+      "bestFor": "Fintech, healthcare, and modern enterprise microservices."
+    },
+    {
+      "option": "Perimeter Security Only (Plain HTTP Internally)",
+      "pros": "Zero encryption CPU overhead.",
+      "cons": "Catastrophic lateral movement risk if any container is breached.",
+      "bestFor": "Never recommended in modern cloud environments."
+    }
+  ],
+  "interviewTip": "In security rounds, distinguish between service identity and user identity: 'We enforce dual-layer security: Istio mTLS authenticates service identity via SPIFFE certificates, while a signed JWT propagated in the headers carries the authenticated user's context and roles.'",
+  "jsonUrl": "/api/microservices/subtopics/observability-operations/zero-trust-mtls.json"
+}

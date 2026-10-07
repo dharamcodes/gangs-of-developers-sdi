@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import {
   Box,
+  Button,
   CircularProgress,
   CssBaseline,
   Drawer,
@@ -387,16 +388,6 @@ export default function HandbookReader() {
     [indexData]
   );
 
-  const handleCycleFontScale = React.useCallback(() => {
-    const current = getFontScaleSnapshot();
-    const next =
-      current === "normal" ? "large" : current === "large" ? "xlarge" : "normal";
-    try {
-      localStorage.setItem(FONT_SCALE_STORAGE_KEY, next);
-      notifyStorage();
-    } catch {}
-  }, []);
-
   const handleToggleThemeMode = React.useCallback(() => {
     const current = getThemeSnapshot();
     const next = current === "light" ? "dark" : "light";
@@ -408,24 +399,6 @@ export default function HandbookReader() {
         document.documentElement.style.backgroundColor =
           next === "dark" ? "#070b14" : "#f4f1ea";
       }
-      notifyStorage();
-    } catch {}
-  }, []);
-
-  const handleToggleFullWidth = React.useCallback(() => {
-    const current = getFullWidthSnapshot();
-    const next = !current;
-    try {
-      localStorage.setItem(FULL_WIDTH_STORAGE_KEY, String(next));
-      notifyStorage();
-    } catch {}
-  }, []);
-
-  const handleToggleDesktopSidebar = React.useCallback(() => {
-    const current = getDesktopSidebarSnapshot();
-    const next = !current;
-    try {
-      localStorage.setItem(SIDEBAR_OPEN_STORAGE_KEY, String(next));
       notifyStorage();
     } catch {}
   }, []);
@@ -443,7 +416,7 @@ export default function HandbookReader() {
   useEffect(() => {
     if (!activeSubtopicDetail || typeof window === "undefined") return;
     const sectionIds = [
-      ...activeSubtopicDetail.sections.map((_, idx) => `section-${idx}`),
+      ...(activeSubtopicDetail.sections || []).map((_, idx) => `section-${idx}`),
       ...(activeSubtopicDetail.tradeOffs ? ["section-tradeoffs"] : []),
       "section-interview-tip",
     ];
@@ -512,17 +485,7 @@ export default function HandbookReader() {
         <HeaderBar
           ui={indexData.ui}
           mode={mode}
-          currentNav="home"
-          activeSubtopic={activeSubtopicDetail}
-          activeIndex={activeIndex}
-          totalSubtopics={allSubtopicsFlat.length}
-          desktopSidebarOpen={desktopSidebarOpen}
-          isFullWidth={isFullWidth}
-          fontScale={fontScale}
-          onToggleMobileMenu={() => setMobileOpen(!mobileOpen)}
-          onToggleDesktopSidebar={handleToggleDesktopSidebar}
-          onToggleFullWidth={handleToggleFullWidth}
-          onCycleFontScale={handleCycleFontScale}
+          currentNav="system-design"
           onToggleThemeMode={handleToggleThemeMode}
         />
 
@@ -590,6 +553,50 @@ export default function HandbookReader() {
             >
               {/* Primary Book Page Column */}
               <Box sx={{ flex: 1, minWidth: 0 }}>
+                {/* Mobile / Tablet Quick Navigation & TOC Drawer Trigger */}
+                <Box
+                  sx={{
+                    display: { xs: "flex", md: "none" },
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    mb: 2,
+                    p: 1.25,
+                    px: 1.75,
+                    borderRadius: 2,
+                    bgcolor:
+                      mode === "light"
+                        ? "rgba(255, 255, 255, 0.9)"
+                        : "rgba(30, 41, 59, 0.75)",
+                    backdropFilter: "blur(8px)",
+                    border: "1px solid",
+                    borderColor: "divider",
+                    boxShadow: "0 2px 8px rgba(0,0,0,0.03)",
+                  }}
+                >
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={<FormatListBulletedIcon />}
+                    onClick={() => setMobileOpen(true)}
+                    sx={{
+                      textTransform: "none",
+                      fontWeight: 750,
+                      fontSize: "0.82rem",
+                      borderRadius: 1.5,
+                      borderColor: "divider",
+                      color: "text.primary",
+                    }}
+                  >
+                    Table of Contents
+                  </Button>
+                  <Typography
+                    variant="caption"
+                    sx={{ fontWeight: 700, color: "text.secondary" }}
+                  >
+                    {activeSubtopicDetail?.subtopicNumber} ({activeIndex + 1}/{allSubtopicsFlat.length})
+                  </Typography>
+                </Box>
+
                 {activeTopicGroup && (
                   <SubtopicQuickBar
                     ui={indexData.ui}
@@ -659,7 +666,7 @@ export default function HandbookReader() {
                       </Typography>
                     </Box>
                     <List dense disablePadding>
-                      {activeSubtopicDetail.sections.map((sec, sIdx) => {
+                      {(activeSubtopicDetail.sections || []).map((sec, sIdx) => {
                         const secId = `section-${sIdx}`;
                         const isCurrent = activeSectionId === secId;
                         return (

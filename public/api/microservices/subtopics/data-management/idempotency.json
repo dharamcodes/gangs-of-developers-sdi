@@ -1,0 +1,48 @@
+{
+  "id": "idempotency",
+  "topicId": "data-management",
+  "topicTitle": "3. Distributed Data & Consistency",
+  "topicNumber": 3,
+  "subtopicNumber": "3.6",
+  "title": "Idempotent Consumer & Deduplication Patterns",
+  "subtitle": "Idempotency keys, distributed deduplication filters, atomic state checks, and safe retries.",
+  "readingTime": "8 min read",
+  "difficulty": "Intermediate",
+  "keyTakeaways": [
+    "In distributed systems, network packets drop frequently; clients retry requests, resulting in duplicate deliveries.",
+    "An **Idempotent API** ensures that making the same request multiple times produces the exact same result as making it once ($f(f(x)) = f(x)$).",
+    "Implement idempotency using client-supplied **Idempotency-Key** headers stored in Redis with an atomic status: `IN_PROGRESS` -> `COMPLETED`."
+  ],
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                  IDEMPOTENT REQUEST DEDUPLICATION TOPOLOGY              |\n+-------------------------------------------------------------------------+\n[Client] --- POST /charges (Idempotency-Key: uuid-123) ---> [Payment Svc]\n                                                                  |\n                                                           [Check Redis]\n                                                           (Key Exists?)\n                                                              /       \\\n                                                           [NO]       [YES]\n                                                           /             \\\n                         (Lock Key & Process Stripe)       (Return Cached 200)\n                                     |                     (Zero Duplicate Charge)\n                         (Cache 200 Result in Redis)",
+  "diagramImageUrl": "/diagrams/microservices/idempotency-block.svg",
+  "flowDiagramUrl": "/diagrams/microservices/idempotency-flow.svg",
+  "sections": [
+    {
+      "heading": "How Stripe and Uber Implement Idempotency",
+      "body": "In high-reliability financial systems, networks drop connections at any point. When a client encounters an HTTP 504 Gateway Timeout, it has no way of knowing whether the payment went through or failed before reaching the gateway. The only safe strategy is for the client to generate a unique UUID v4 idempotency key before initiating the call and send it in the HTTP headers. If the call times out, the client safely retries with the exact same key. The server detects the completed record and returns the cached response.",
+      "bullets": [
+        "In-Flight Protection: If a second request arrives while the first is still processing, return HTTP 409 Conflict with 'Request currently in progress'.",
+        "Idempotent Kafka Consumers: Store processed Kafka message offset/ID in a deduplication database before committing state.",
+        "TTL Retention: Store idempotency keys in Redis for 24–72 hours, matching client retry windows."
+      ],
+      "diagramImageUrl": "/diagrams/microservices/idempotency-block.svg",
+      "flowDiagramUrl": "/diagrams/microservices/idempotency-flow.svg"
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Idempotency Key Cache (Redis)",
+      "pros": "Guarantees exactly-once processing semantics for callers, enables safe infinite client retries.",
+      "cons": "Requires storing request/response payloads in cache; cache storage overhead.",
+      "bestFor": "Payment gateways, order creation, subscription billing."
+    },
+    {
+      "option": "Natural Idempotency (PUT/DELETE)",
+      "pros": "No extra keys needed; updating state to absolute value is naturally idempotent.",
+      "cons": "Does not work for relative increments (charging credit card $50).",
+      "bestFor": "Updating user profiles, setting statuses to static values."
+    }
+  ],
+  "interviewTip": "Whenever an interviewer asks 'How do you handle retries without charging the customer twice?', your immediate answer must be: 'We require a client-generated Idempotency-Key header stored in Redis to guarantee idempotent execution.'",
+  "jsonUrl": "/api/microservices/subtopics/data-management/idempotency.json"
+}

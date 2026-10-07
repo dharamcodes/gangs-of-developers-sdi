@@ -1,0 +1,52 @@
+{
+  "id": "facade",
+  "topicId": "structural-patterns",
+  "topicTitle": "2. Structural Patterns",
+  "topicNumber": 2,
+  "subtopicNumber": "2.5",
+  "title": "Facade Pattern",
+  "subtitle": "Provides a unified, simplified interface to a complex subsystem, making the subsystem easier to use.",
+  "readingTime": "6 min read",
+  "difficulty": "Foundational",
+  "keyTakeaways": [
+    "Shields client code from the convoluted internal workings and cascading dependencies of complex subsystems.",
+    "Does not encapsulate or lock the subsystem: advanced clients that require fine-grained control can still bypass the Facade to interact directly with subsystem classes.",
+    "Crucial for reducing architectural coupling between microservice modules and establishing clean API boundaries."
+  ],
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                          FACADE UML CLASS MODEL                         |\n+-------------------------------------------------------------------------+\n+------------------+                   +----------------------------------+\n|      Client      |   calls ---->     |          OrderFacade             |\n+------------------+                   +----------------------------------+\n                                       | + placeOrder(cart, card): UUID   |\n                                       +-----------------+----------------+\n                                                         |\n                   +-------------------+-----------------+-------------------+\n                   |                   |                                     |\n         +---------v--------+  +-------v----------+                +---------v--------+\n         | InventoryService |  | PaymentProcessor |                | LogisticsService |\n         +------------------+  +------------------+                +------------------+\n         | - checkStock()   |  | - authorizeCard()|                | - scheduleTruck()|\n         +------------------+  +------------------+                +------------------+",
+  "diagramImageUrl": "/diagrams/design-patterns/facade-block.svg",
+  "flowDiagramUrl": "/diagrams/design-patterns/facade-flow.svg",
+  "sections": [
+    {
+      "heading": "Taming Subsystem Complexity and Establishing Cohesive Boundaries",
+      "body": "As enterprise architectures grow, completing a single high-level business requirement often requires orchestrating 5 to 10 independent subsystems. Exposing this orchestration directly to UI controllers creates massive coupling: any change in a subsystem breaks all consumers. A Facade provides an intentional, ergonomic entry point while insulating consumers from lower-level churn.",
+      "bullets": [
+        "Encapsulation without Confinement: Simplifies the 95% common use cases while allowing power users to interact with underlying subsystems directly if required.",
+        "Layered Architecture: Facades define natural boundaries between architectural layers in distributed backends.",
+        "Reduced Compilation Dependencies: Changes to internal subsystem classes do not force recompilation of client modules."
+      ],
+      "codeSnippet": {
+        "title": "E-Commerce Checkout Facade in Java 21",
+        "code": "public record OrderReceipt(UUID orderId, String trackingNumber, boolean successful) {}\n\npublic class CheckoutFacade {\n    private final InventorySubsystem inventory;\n    private final PaymentSubsystem payment;\n    private final ShippingSubsystem shipping;\n\n    public CheckoutFacade(InventorySubsystem inventory, PaymentSubsystem payment, ShippingSubsystem shipping) {\n        this.inventory = inventory;\n        this.payment = payment;\n        this.shipping = shipping;\n    }\n\n    public OrderReceipt placeOrder(String sku, int quantity, String creditCard, String address) {\n        // Step 1: Check and reserve stock\n        if (!inventory.reserveStock(sku, quantity)) {\n            throw new IllegalStateException(\"Insufficient inventory for: \" + sku);\n        }\n\n        // Step 2: Charge payment\n        boolean paid = payment.charge(creditCard, inventory.calculatePrice(sku, quantity));\n        if (!paid) {\n            inventory.releaseStock(sku, quantity);\n            throw new PaymentFailedException(\"Card authorization declined\");\n        }\n\n        // Step 3: Dispatch shipping\n        String tracking = shipping.createShipment(sku, quantity, address);\n        return new OrderReceipt(UUID.randomUUID(), tracking, true);\n    }\n}"
+      },
+      "flowDiagramUrl": "/diagrams/design-patterns/facade-flow.svg",
+      "diagramImageUrl": "/diagrams/design-patterns/facade-block.svg"
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Facade Pattern",
+      "pros": "Reduces client complexity, minimizes coupling between client code and complex subsystems.",
+      "cons": "Risk of becoming a 'God Object' if too many disparate responsibilities are crammed into a single facade.",
+      "bestFor": "Complex SDKs, multi-step business transactions, microservice boundary orchestrators."
+    },
+    {
+      "option": "Direct Subsystem Interfacing",
+      "pros": "Maximum fine-grained control; no extra layer between caller and implementation.",
+      "cons": "Massive code duplication across clients; high cognitive load on development teams.",
+      "bestFor": "Specialized tools where clients genuinely need low-level customization of every single parameter."
+    }
+  ],
+  "interviewTip": "Emphasize to interviewers that a Facade provides an *optional* simplified interface; it does not hide or seal the subsystem classes. Contrast Facade with Adapter (Adapter adapts one existing interface to another; Facade creates a completely new, simplified interface over many subsystems).",
+  "jsonUrl": "/api/design-patterns/subtopics/structural-patterns/facade.json"
+}

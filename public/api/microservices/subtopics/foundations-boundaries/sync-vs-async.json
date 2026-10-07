@@ -1,0 +1,48 @@
+{
+  "id": "sync-vs-async",
+  "topicId": "foundations-boundaries",
+  "topicTitle": "1. Foundations & Boundaries",
+  "topicNumber": 1,
+  "subtopicNumber": "1.5",
+  "title": "Synchronous RPC vs Asynchronous Messaging",
+  "subtitle": "Temporal coupling, cascading failure vulnerabilities, backpressure, and decoupling availability.",
+  "readingTime": "7 min read",
+  "difficulty": "Intermediate",
+  "keyTakeaways": [
+    "Synchronous calls introduce Temporal Coupling: Service A cannot succeed unless Service B is online and responsive right now.",
+    "Chaining 4 synchronous services with 99.9% uptime each yields a cumulative availability of only 99.6% ($0.999^4$), severely degrading reliability.",
+    "Asynchronous messaging decouples sender and receiver in time: Service A emits an event to a persistent broker (Kafka) and immediately returns success to the user."
+  ],
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                  TEMPORAL COUPLING VS ASYNC BUFFERING                   |\n+-------------------------------------------------------------------------+\n[Synchronous RPC Chain: Cascading Hang Risk]\n[Client] ---> [Order Svc] ---> [Billing Svc] ---> [Email Svc] (Hangs! Timeout!)\n\n[Asynchronous Decoupled Event Flow]\n[Client] ---> [Order Svc] ===> [Kafka Topic] ===> [Email Svc Worker]\n                | (Immediate 202 Accepted)\n                v\n        (User gets fast ACK; Email worker retries safely in background)",
+  "diagramImageUrl": "/diagrams/microservices/sync-vs-async-block.svg",
+  "flowDiagramUrl": "/diagrams/microservices/sync-vs-async-flow.svg",
+  "sections": [
+    {
+      "heading": "Availability Math: The Cascading Downtime Formula",
+      "body": "If Service A calls Service B synchronously, which calls Service C synchronously, the total availability is the product of their individual availabilities: A_total = A1 * A2 * A3. If each service boasts an impressive 99.9% uptime, the three-service chain achieves only 99.7%. In a microservice ecosystem with 20 synchronous hops, overall availability plunges below 98% (over 7 days of downtime per year). Asynchronous messaging breaks this multiplicative degradation by severing the temporal dependency: if Service C is offline, Service A still succeeds by safely queuing the event in Kafka.",
+      "bullets": [
+        "Temporal Decoupling: The consumer doesn't need to be running when the message is sent.",
+        "Backpressure Absorption: When traffic spikes 10x, consumers pull messages at their max capacity without crashing or returning 503 errors.",
+        "Eventual Consistency Trade-off: The client does not receive immediate confirmation of downstream actions, requiring asynchronous UI status polling or WebSockets."
+      ],
+      "diagramImageUrl": "/diagrams/microservices/sync-vs-async-block.svg",
+      "flowDiagramUrl": "/diagrams/microservices/sync-vs-async-flow.svg"
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Synchronous RPC (gRPC / REST)",
+      "pros": "Immediate feedback, simple mental model, natural read queries (GET).",
+      "cons": "Cascading failure risk, thread pool exhaustion under downstream slowness.",
+      "bestFor": "Immediate read queries and operations requiring immediate synchronous validation."
+    },
+    {
+      "option": "Asynchronous Messaging (Kafka / SQS)",
+      "pros": "Isolated availability, natural backpressure absorption, fan-out to multiple subscribers.",
+      "cons": "Eventual consistency, out-of-order delivery risks, complex distributed debugging.",
+      "bestFor": "State-changing mutations, business workflows, notifications, and analytics pipelines."
+    }
+  ],
+  "interviewTip": "Never design a checkout flow where the Order service synchronously calls Notification Service, Analytics Service, and Recommendation Service. State: 'Order Service will commit the order and publish an OrderPlaced event to Kafka; notifications and analytics will process asynchronously.'",
+  "jsonUrl": "/api/microservices/subtopics/foundations-boundaries/sync-vs-async.json"
+}

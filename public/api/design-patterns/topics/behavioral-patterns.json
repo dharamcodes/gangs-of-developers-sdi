@@ -1,0 +1,580 @@
+{
+  "id": "behavioral-patterns",
+  "topicNumber": 3,
+  "title": "3. Behavioral Patterns",
+  "description": "Algorithms, communication, and assignment of responsibilities between objects: Chain of Responsibility, Command, Interpreter, Iterator, Mediator, Memento, Observer, State, Strategy, Template Method, and Visitor.",
+  "subtopics": [
+    {
+      "id": "chain-of-responsibility",
+      "topicId": "behavioral-patterns",
+      "topicTitle": "3. Behavioral Patterns",
+      "topicNumber": 3,
+      "subtopicNumber": "3.1",
+      "title": "Chain of Responsibility Pattern",
+      "subtitle": "Passes requests along a chain of handlers; upon receiving a request, each handler decides either to process it or pass it to the next handler.",
+      "readingTime": "7 min read",
+      "difficulty": "Foundational",
+      "keyTakeaways": [
+        "Decouples senders of a request from its receivers by giving multiple objects a chance to handle the request.",
+        "Handlers are chained sequentially; a handler can short-circuit the pipeline (e.g., rejecting unauthorized requests) or decorate and forward it.",
+        "Standard foundation for Servlet Filter chains, Express.js middleware, Spring Security interceptors, and ATM cash dispensing logic."
+      ],
+      "architectureDiagram": "+-------------------------------------------------------------------------+\n|                  CHAIN OF RESPONSIBILITY UML CLASS MODEL                |\n+-------------------------------------------------------------------------+\n+------------------+                   +----------------------------------+\n|      Client      |   sends ---->     |          <<abstract>>            |\n+------------------+                   |         Handler (Base)           |\n                                       +----------------------------------+\n                                       | - next: Handler                  |\n                                       | + setNext(h: Handler): Handler   |\n                                       | + handle(req: Request): boolean  |\n                                       +-----------------^----------------+\n                                                         |\n                   +-------------------+-----------------+-------------------+\n                   |                                                         |\n         +---------+--------+                                      +---------+--------+\n         | AuthValidationHdl|   --- next: RateLimitHdl --->        | SanitizeInputHdl |\n         +------------------+                                      +------------------+\n         | + handle(): bool |                                      | + handle(): bool |\n         +------------------+                                      +------------------+",
+      "diagramImageUrl": "/diagrams/design-patterns/chain-of-responsibility-block.svg",
+      "flowDiagramUrl": "/diagrams/design-patterns/chain-of-responsibility-flow.svg",
+      "sections": [
+        {
+          "heading": "Dynamic Request Pipelines and Interceptor Decoupling",
+          "body": "When processing incoming requests, hardcoding authorization checks, rate-limiting rules, caching, and input sanitization directly into a controller creates monolithic code that violates the Single Responsibility Principle. The Chain of Responsibility pattern allows you to compose standalone handler units into dynamic linear pipelines.",
+          "bullets": [
+            "Single Responsibility Principle: Each handler class does one thing (e.g. rate limiting or authentication).",
+            "Open/Closed Principle: You can inject new inspection or filtering handlers into the pipeline without modifying existing handlers.",
+            "Short-Circuit Capability: Handlers can abort execution early if validation conditions fail."
+          ],
+          "codeSnippet": {
+            "title": "Production Request Middleware Chain in Java 21",
+            "code": "public record HttpRequest(String token, String ipAddress, String body) {}\n\npublic abstract class RequestHandler {\n    private RequestHandler next;\n\n    public RequestHandler linkWith(RequestHandler next) {\n        this.next = next;\n        return next;\n    }\n\n    public boolean handle(HttpRequest request) {\n        if (next == null) return true;\n        return next.handle(request);\n    }\n}\n\npublic class AuthHandler extends RequestHandler {\n    @Override public boolean handle(HttpRequest request) {\n        if (!\"VALID_JWT_TOKEN\".equals(request.token())) {\n            System.out.println(\"401 Unauthorized: Invalid token\");\n            return false; // Short-circuit\n        }\n        return super.handle(request);\n    }\n}\n\npublic class RateLimitHandler extends RequestHandler {\n    @Override public boolean handle(HttpRequest request) {\n        if (\"192.168.1.100\".equals(request.ipAddress())) {\n            System.out.println(\"429 Too Many Requests: Rate limit exceeded\");\n            return false; // Short-circuit\n        }\n        return super.handle(request);\n    }\n}"
+          },
+          "flowDiagramUrl": "/diagrams/design-patterns/chain-of-responsibility-flow.svg",
+          "diagramImageUrl": "/diagrams/design-patterns/chain-of-responsibility-block.svg"
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Chain of Responsibility",
+          "pros": "Decouples senders from receivers; high runtime composability; easy to reorder filters.",
+          "cons": "A request can reach the end of the chain unhandled without notification if not configured carefully.",
+          "bestFor": "HTTP request filters, event validation pipelines, GUI event bubbling."
+        },
+        {
+          "option": "Direct Imperative Conditionals",
+          "pros": "Straightforward linear procedural flow; very easy to read for 1-2 static checks.",
+          "cons": "Tightly couples validation rules; impossible to dynamically reorder or skip steps via config.",
+          "bestFor": "Simple scripts with zero dynamic filtering requirements."
+        }
+      ],
+      "interviewTip": "In interviews, cite `javax.servlet.FilterChain` or Spring `HandlerInterceptor` as real-world examples of Chain of Responsibility. Point out that unlike Decorator (which wraps an object to augment behavior and returns results back up), Chain of Responsibility can terminate execution at any link without invoking the rest of the chain.",
+      "jsonUrl": "/api/design-patterns/subtopics/behavioral-patterns/chain-of-responsibility.json"
+    },
+    {
+      "id": "command",
+      "topicId": "behavioral-patterns",
+      "topicTitle": "3. Behavioral Patterns",
+      "topicNumber": 3,
+      "subtopicNumber": "3.2",
+      "title": "Command Pattern",
+      "subtitle": "Encapsulates a request as an object, thereby letting you parameterize clients with different requests, queue or log requests, and support undoable operations.",
+      "readingTime": "8 min read",
+      "difficulty": "Foundational",
+      "keyTakeaways": [
+        "Turns a business operation into a standalone first-class object containing all necessary parameters and receiver references.",
+        "Enables deferred execution, asynchronous task queues, command scheduling, transaction replay logging, and multi-level Undo/Redo stacks.",
+        "Underpins CQRS architectures, database write-ahead logging (WAL), GUI menu actions, and macro recording engines."
+      ],
+      "architectureDiagram": "+-------------------------------------------------------------------------+\n|                          COMMAND UML CLASS MODEL                        |\n+-------------------------------------------------------------------------+\n   +------------------+                   +-----------------------------+\n   |  Invoker (UI)    |  holds ---->      |        <<interface>>        |\n   +------------------+                   |           Command           |\n   | - onCommand: Cmd |                   +-----------------------------+\n   | + click(): void  |                   | + execute(): void           |\n   +------------------+                   | + undo(): void              |\n                                          +--------------^--------------+\n                                                         |\n                                          +--------------+--------------+\n                                          |        ConcreteCommand      |\n                                          +-----------------------------+\n                                          | - receiver: Database        |\n                                          | - backupState: Snapshot     |\n                                          | + execute(): receiver.op()  |\n                                          | + undo(): receiver.restore()|\n                                          +-----------------------------+",
+      "diagramImageUrl": "/diagrams/design-patterns/command-block.svg",
+      "flowDiagramUrl": "/diagrams/design-patterns/command-flow.svg",
+      "sections": [
+        {
+          "heading": "Reifying Invocations into First-Class Objects",
+          "body": "Direct method invocations (`account.deposit(500)`) tie the call site directly to execution time, precluding delayed scheduling, queuing, or rollback. By turning the request into an independent Command object, you can serialize commands to disk, ship them across Kafka to remote workers, or maintain an undo buffer.",
+          "bullets": [
+            "Single Responsibility Principle: Decouples classes that invoke operations from classes that know how to execute them.",
+            "Open/Closed Principle: Introduce new commands into your system without altering existing invoker or receiver code.",
+            "Enables CQRS (Command Query Responsibility Segregation): Clean separation of write commands from read queries."
+          ],
+          "codeSnippet": {
+            "title": "Undoable Bank Account Command Architecture in Java 21",
+            "code": "public interface Command {\n    void execute();\n    void undo();\n}\n\npublic class BankAccount {\n    private int balance = 0;\n    public void deposit(int amount) { balance += amount; }\n    public void withdraw(int amount) { balance -= amount; }\n    public int getBalance() { return balance; }\n}\n\npublic class DepositCommand implements Command {\n    private final BankAccount account;\n    private final int amount;\n\n    public DepositCommand(BankAccount account, int amount) {\n        this.account = account;\n        this.amount = amount;\n    }\n\n    @Override public void execute() { account.deposit(amount); }\n    @Override public void undo() { account.withdraw(amount); }\n}\n\npublic class TransactionManager {\n    private final Deque<Command> undoStack = new ArrayDeque<>();\n\n    public void executeCommand(Command cmd) {\n        cmd.execute();\n        undoStack.push(cmd);\n    }\n\n    public void undoLast() {\n        if (!undoStack.isEmpty()) {\n            Command cmd = undoStack.pop();\n            cmd.undo();\n        }\n    }\n}"
+          },
+          "flowDiagramUrl": "/diagrams/design-patterns/command-flow.svg",
+          "diagramImageUrl": "/diagrams/design-patterns/command-block.svg"
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Command Pattern",
+          "pros": "Enables multi-level undo, asynchronous task queues, transaction replay, and decoupling.",
+          "cons": "Creates dozens of individual command classes for every minor operation in the system.",
+          "bestFor": "Text editors (undo/redo), CQRS distributed architectures, job schedulers, transactional sagas."
+        },
+        {
+          "option": "Direct Method Invocations",
+          "pros": "Immediate execution, minimal classes, direct stack traces.",
+          "cons": "Cannot defer execution; impossible to implement undo without complex ad-hoc state tracking.",
+          "bestFor": "Simple read-only lookups and stateless calculation services."
+        }
+      ],
+      "interviewTip": "In distributed architecture interviews, connect the Command pattern directly to Command Query Responsibility Segregation (CQRS) and the Outbox pattern. Mention that in modern event-driven architectures, commands are dispatched to event brokers for guaranteed asynchronous execution.",
+      "jsonUrl": "/api/design-patterns/subtopics/behavioral-patterns/command.json"
+    },
+    {
+      "id": "interpreter",
+      "topicId": "behavioral-patterns",
+      "topicTitle": "3. Behavioral Patterns",
+      "topicNumber": 3,
+      "subtopicNumber": "3.3",
+      "title": "Interpreter Pattern",
+      "subtitle": "Given a language, defines a representation for its grammar along with an interpreter that uses the representation to interpret sentences in the language.",
+      "readingTime": "7 min read",
+      "difficulty": "Advanced",
+      "keyTakeaways": [
+        "Defines an Abstract Syntax Tree (AST) where terminal and non-terminal grammar rules are represented by classes.",
+        "Allows evaluating domain-specific languages (DSLs), mathematical formulas, SQL-like query filters, or JSON path expressions.",
+        "For complex languages, dedicated parser generators (ANTLR, Lex/Yacc) are preferred over manual GoF Interpreter class trees."
+      ],
+      "architectureDiagram": "+-------------------------------------------------------------------------+\n|                        INTERPRETER UML CLASS MODEL                      |\n+-------------------------------------------------------------------------+\n                       +-----------------------------+\n                       |        <<interface>>        |\n                       |         Expression          |\n                       +-----------------------------+\n                       | + interpret(ctx): boolean   |\n                       +--------------^--------------+\n                                      |\n              +-----------------------+-----------------------+\n              |                                               |\n+-------------+---------------+               +---------------+-------------+\n|     TerminalExpression      |               |     OrExpression (Non-term) |\n+-----------------------------+               +-----------------------------+\n| - literal: String           |               | - expr1: Expression         |\n| + interpret(ctx): match     |               | - expr2: Expression         |\n+-----------------------------+               | + interpret(ctx): e1 || e2  |\n                                              +-----------------------------+",
+      "diagramImageUrl": "/diagrams/design-patterns/interpreter-block.svg",
+      "flowDiagramUrl": "/diagrams/design-patterns/interpreter-flow.svg",
+      "sections": [
+        {
+          "heading": "Evaluating Domain-Specific Rules via Recursive AST Trees",
+          "body": "When building business rule engines (e.g. 'Discount eligible if order total > $100 AND user is VIP'), hardcoding rules into procedural code requires redeploying software whenever business analysts change marketing rules. The Interpreter pattern maps grammar production rules into an object-oriented composite tree evaluated against a context.",
+          "bullets": [
+            "Easy Grammar Extensibility: Adding a new operator (e.g. `XOR` or `NOT`) simply requires introducing a new Expression subclass.",
+            "Decoupled Context: The evaluation context holds runtime variables without coupling to AST grammar structure.",
+            "Performance Trade-off: Deep AST trees incur method recursion overhead; for high-frequency trading rules, compiling to bytecode or using ANTLR is superior."
+          ],
+          "codeSnippet": {
+            "title": "Rule Engine Boolean Interpreter in Java 21",
+            "code": "public interface Expression {\n    boolean interpret(Set<String> context);\n}\n\npublic record TerminalExpression(String data) implements Expression {\n    @Override public boolean interpret(Set<String> context) {\n        return context.contains(data);\n    }\n}\n\npublic record OrExpression(Expression expr1, Expression expr2) implements Expression {\n    @Override public boolean interpret(Set<String> context) {\n        return expr1.interpret(context) || expr2.interpret(context);\n    }\n}\n\npublic record AndExpression(Expression expr1, Expression expr2) implements Expression {\n    @Override public boolean interpret(Set<String> context) {\n        return expr1.interpret(context) && expr2.interpret(context);\n    }\n}"
+          },
+          "flowDiagramUrl": "/diagrams/design-patterns/interpreter-flow.svg",
+          "diagramImageUrl": "/diagrams/design-patterns/interpreter-block.svg"
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Interpreter Pattern",
+          "pros": "Simple to implement for small Domain Specific Languages (DSLs); flexible rule modifications.",
+          "cons": "Not scalable for complex grammars; creates massive class trees; inefficient compared to bytecode compilers.",
+          "bestFor": "Simple SQL query filter parsers, regex evaluation, calculation rule engines."
+        },
+        {
+          "option": "Dedicated Parser Generator (ANTLR / JavaCC)",
+          "pros": "Handles complex BNF grammars, generates efficient ASTs, industrial-grade error reporting.",
+          "cons": "Steep learning curve, additional build tooling dependencies.",
+          "bestFor": "Full programming language compilers and complex data query dialects."
+        }
+      ],
+      "interviewTip": "In interviews, explicitly state the limitation of the GoF Interpreter pattern: it is only suitable for simple grammars. For anything complex, recommend parser generator tools like ANTLR or using lightweight scripting engines like SpEL (Spring Expression Language).",
+      "jsonUrl": "/api/design-patterns/subtopics/behavioral-patterns/interpreter.json"
+    },
+    {
+      "id": "iterator",
+      "topicId": "behavioral-patterns",
+      "topicTitle": "3. Behavioral Patterns",
+      "topicNumber": 3,
+      "subtopicNumber": "3.4",
+      "title": "Iterator Pattern",
+      "subtitle": "Provides a way to access the elements of an aggregate object sequentially without exposing its underlying representation.",
+      "readingTime": "6 min read",
+      "difficulty": "Foundational",
+      "keyTakeaways": [
+        "Encapsulates collection traversal algorithms (Depth-First Search, Breadth-First Search, reverse order) away from the collection itself.",
+        "Allows multiple concurrent iterations over the same collection without modifying collection internal state.",
+        "The standard underpinning of Java's `java.util.Iterator`, `Iterable`, and the enhanced `for-each` loop."
+      ],
+      "architectureDiagram": "+-------------------------------------------------------------------------+\n|                         ITERATOR UML CLASS MODEL                        |\n+-------------------------------------------------------------------------+\n+--------------------------+               +-----------------------------+\n|      <<interface>>       |               |        <<interface>>        |\n|      IterableList<T>     |  creates ---> |         Iterator<T>         |\n+--------------------------+               +-----------------------------+\n| + createIterator(): Iter |               | + hasNext(): boolean        |\n+------------^-------------+               | + next(): T                 |\n             |                             +--------------^--------------+\n+------------+-------------+                              |\n|     CustomArrayList      |               +--------------+--------------+\n+--------------------------+               |     CustomArrayIterator     |\n| - items: Object[]        |               +-----------------------------+\n| + createIterator(): Iter |               | - cursor: int = 0           |\n+--------------------------+               | + next(): items[cursor++]   |\n                                           +-----------------------------+",
+      "diagramImageUrl": "/diagrams/design-patterns/iterator-block.svg",
+      "flowDiagramUrl": "/diagrams/design-patterns/iterator-flow.svg",
+      "sections": [
+        {
+          "heading": "Uniform Traversal without Breaking Internal Encapsulation",
+          "body": "Exposing internal collection structures (arrays, binary tree nodes, skip lists) to client code exposes private pointers and breaks encapsulation. The Iterator pattern provides a standardized cursor interface, allowing developers to switch from an array list to a balanced AVL tree without changing any client traversal loops.",
+          "bullets": [
+            "Single Responsibility Principle: Traversal algorithms are extracted away from the data structure classes into dedicated iterator classes.",
+            "Open/Closed Principle: Introduce custom iterators (e.g., Breadth-First or Depth-First) without changing the data structure.",
+            "Fail-Fast Semantics: Modern iterators detect concurrent modifications using version counters (`modCount`), throwing `ConcurrentModificationException`."
+          ],
+          "codeSnippet": {
+            "title": "Custom In-Order Binary Tree Iterator in Java 21",
+            "code": "public record TreeNode<T>(T val, TreeNode<T> left, TreeNode<T> right) {}\n\npublic class InOrderTreeIterator<T> implements Iterator<T> {\n    private final Deque<TreeNode<T>> stack = new ArrayDeque<>();\n\n    public InOrderTreeIterator(TreeNode<T> root) {\n        pushLeft(root);\n    }\n\n    private void pushLeft(TreeNode<T> node) {\n        while (node != null) {\n            stack.push(node);\n            node = node.left();\n        }\n    }\n\n    @Override\n    public boolean hasNext() {\n        return !stack.isEmpty();\n    }\n\n    @Override\n    public T next() {\n        if (!hasNext()) throw new NoSuchElementException();\n        TreeNode<T> current = stack.pop();\n        pushLeft(current.right());\n        return current.val();\n    }\n}"
+          },
+          "flowDiagramUrl": "/diagrams/design-patterns/iterator-flow.svg",
+          "diagramImageUrl": "/diagrams/design-patterns/iterator-block.svg"
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Iterator Pattern",
+          "pros": "Hides data structure representation; supports multiple simultaneous traversals; clean unified API.",
+          "cons": "Overkill for simple arrays where indexed `for` loops are marginally faster and simpler.",
+          "bestFor": "Complex graphs, binary trees, paginated database cursor streams."
+        },
+        {
+          "option": "Direct Array/Index Access",
+          "pros": "Zero object allocation overhead; direct memory pointer access.",
+          "cons": "Tightly binds client to array indexing; fails for trees and linked graphs.",
+          "bestFor": "High-performance primitives arrays in numerical computing."
+        }
+      ],
+      "interviewTip": "In interviews, explain Java's Fail-Fast vs Fail-Safe iterators: Fail-Fast (e.g. `ArrayList.iterator()`) throws `ConcurrentModificationException` if the underlying list changes during iteration. Fail-Safe (e.g. `CopyOnWriteArrayList`) operates on a clone of the collection and never throws.",
+      "jsonUrl": "/api/design-patterns/subtopics/behavioral-patterns/iterator.json"
+    },
+    {
+      "id": "mediator",
+      "topicId": "behavioral-patterns",
+      "topicTitle": "3. Behavioral Patterns",
+      "topicNumber": 3,
+      "subtopicNumber": "3.5",
+      "title": "Mediator Pattern",
+      "subtitle": "Defines an object that encapsulates how a set of objects interact, preventing them from referring to each other explicitly.",
+      "readingTime": "7 min read",
+      "difficulty": "Intermediate",
+      "keyTakeaways": [
+        "Replaces many-to-many dependencies ($O(N^2)$ coupling) between colleagues with one-to-many dependencies ($O(N)$ coupling) via a central Mediator.",
+        "Colleagues only know about the Mediator; they send notifications to it, and the Mediator orchestrates the reactions of other components.",
+        "Underpins Air Traffic Control systems, chatroom message hubs, and complex UI dialog forms with interdependent form inputs."
+      ],
+      "architectureDiagram": "+-------------------------------------------------------------------------+\n|                         MEDIATOR UML CLASS MODEL                        |\n+-------------------------------------------------------------------------+\n [Without Mediator: Many-to-Many]            [With Mediator: Star Topology]\n      (A) <--------> (B)                                  (A)\n       ^ \\          / ^                                    ^\n       |   \\      /   |                                    |\n       |     \\  /     |                                    v\n      (C) <--------> (D)                            (B) <-> [Mediator] <-> (C)\n     (Complex Spagetti Links)                              ^\n                                                           |\n                                                           v\n                                                          (D)",
+      "diagramImageUrl": "/diagrams/design-patterns/mediator-block.svg",
+      "flowDiagramUrl": "/diagrams/design-patterns/mediator-flow.svg",
+      "sections": [
+        {
+          "heading": "Preventing Sprawling Spiderweb Dependencies",
+          "body": "When UI dialogs contain checkboxes that disable text inputs, which trigger validation errors, which change button colors, objects become tightly coupled in an $O(N^2)$ tangle. Changing one component breaks three others. The Mediator pattern extracts all communication logic into a centralized controller.",
+          "bullets": [
+            "Single Responsibility Principle: Centralizes communication and orchestration logic between disparate objects into one dedicated class.",
+            "Open/Closed Principle: You can introduce new colleagues into the system without changing existing colleagues.",
+            "Risk of God Object: The mediator can easily devolve into an overly complex 'God Object' if not subdivided properly."
+          ],
+          "codeSnippet": {
+            "title": "Chatroom Hub Mediator in Java 21",
+            "code": "public interface ChatMediator {\n    void sendMessage(String message, User sender);\n    void addUser(User user);\n}\n\npublic abstract class User {\n    protected final ChatMediator mediator;\n    protected final String name;\n\n    public User(ChatMediator mediator, String name) {\n        this.mediator = mediator;\n        this.name = name;\n    }\n\n    public abstract void send(String message);\n    public abstract void receive(String message);\n}\n\npublic class ChatRoomMediator implements ChatMediator {\n    private final List<User> users = new ArrayList<>();\n\n    @Override public void addUser(User user) { users.add(user); }\n\n    @Override\n    public void sendMessage(String message, User sender) {\n        for (User u : users) {\n            // Do not echo back to sender\n            if (u != sender) u.receive(sender.name + \": \" + message);\n        }\n    }\n}"
+          },
+          "flowDiagramUrl": "/diagrams/design-patterns/mediator-flow.svg",
+          "diagramImageUrl": "/diagrams/design-patterns/mediator-block.svg"
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Mediator Pattern",
+          "pros": "Reduces coupling between multiple classes; centralizes complex relationships.",
+          "cons": "The mediator itself can evolve into an unmaintainable monolith over time.",
+          "bestFor": "Air traffic control, chatrooms, interconnected UI form wizard steps."
+        },
+        {
+          "option": "Direct Colleague References",
+          "pros": "Direct and simple when there are only 2 classes interacting.",
+          "cons": "Combinatorial spaghetti code as the number of interacting classes grows past 4.",
+          "bestFor": "Simple 1-to-1 relationships."
+        }
+      ],
+      "interviewTip": "Contrast Mediator with Observer: In Observer, communication flows dynamically from 1 Subject to many Observers in a publisher-subscriber model. In Mediator, communication flows multidirectionally between Colleagues through a centralized hub that encapsulates complex cross-cutting coordination logic.",
+      "jsonUrl": "/api/design-patterns/subtopics/behavioral-patterns/mediator.json"
+    },
+    {
+      "id": "memento",
+      "topicId": "behavioral-patterns",
+      "topicTitle": "3. Behavioral Patterns",
+      "topicNumber": 3,
+      "subtopicNumber": "3.6",
+      "title": "Memento Pattern",
+      "subtitle": "Captures and externalizes an object's internal state without violating encapsulation, allowing the object to be restored to this state later.",
+      "readingTime": "7 min read",
+      "difficulty": "Intermediate",
+      "keyTakeaways": [
+        "Provides state snapshotting and restoration without exposing private fields or internal implementation details.",
+        "The Caretaker (e.g. history manager) stores mementos but can never read or mutate their internal contents ('black box' token).",
+        "Essential for database transaction savepoints, graphic editor history checkpoints, and text editor undo buffers."
+      ],
+      "architectureDiagram": "+-------------------------------------------------------------------------+\n|                         MEMENTO UML CLASS MODEL                         |\n+-------------------------------------------------------------------------+\n+----------------------------+             +----------------------------+\n|         Originator         |             |          Memento           |\n+----------------------------+             +----------------------------+\n| - state: String            | creates ->  | - state: String (private)  |\n| + createMemento(): Memento |             | + getState(): String       |\n| + restore(m: Memento): void|             +----------------------------+\n+----------------------------+                           ^\n                                                         | stores\n                                           +-------------+--------------+\n                                           |         Caretaker          |\n                                           +----------------------------+\n                                           | - history: Deque<Memento>  |\n                                           | + save(): void             |\n                                           | + undo(): void             |\n                                           +----------------------------+",
+      "diagramImageUrl": "/diagrams/design-patterns/memento-block.svg",
+      "flowDiagramUrl": "/diagrams/design-patterns/memento-flow.svg",
+      "sections": [
+        {
+          "heading": "Encapsulated State Restoration without Breaking Privacy",
+          "body": "Directly exposing an object's internal fields via public getters and setters to allow external classes to take backups breaks encapsulation. If the internal data structure changes from a String to a Rope or Tree, external backup classes break. Memento ensures that the Originator is the only class capable of reading and writing the snapshot data.",
+          "bullets": [
+            "Preserves Encapsulation Boundaries: The internal state of the originator remains strictly private.",
+            "Simplified Caretaker: The caretaker only stores and passes memento objects without knowing anything about their contents.",
+            "Memory Consumption Caution: Storing frequent deep-state mementos can exhaust heap memory; consider delta/diff compression."
+          ],
+          "codeSnippet": {
+            "title": "Type-Safe Memento Snapshot in Java 21",
+            "code": "// Originator\npublic class TextDocument {\n    private String text = \"\";\n\n    public void write(String words) { text += words; }\n    public String getText() { return text; }\n\n    // Creates Snapshot\n    public Memento save() { return new Memento(this.text); }\n\n    // Restores Snapshot\n    public void restore(Memento memento) { this.text = memento.state(); }\n\n    // The Memento (Immutable record)\n    public record Memento(String state) {}\n}\n\n// Caretaker\npublic class DocumentHistory {\n    private final Deque<TextDocument.Memento> history = new ArrayDeque<>();\n\n    public void backup(TextDocument doc) {\n        history.push(doc.save());\n    }\n\n    public void undo(TextDocument doc) {\n        if (!history.isEmpty()) {\n            doc.restore(history.pop());\n        }\n    }\n}"
+          },
+          "flowDiagramUrl": "/diagrams/design-patterns/memento-flow.svg",
+          "diagramImageUrl": "/diagrams/design-patterns/memento-block.svg"
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Memento Pattern",
+          "pros": "Protects encapsulation; allows clean restoration of historical states.",
+          "cons": "High memory footprint if snapshots are taken frequently on large objects.",
+          "bestFor": "Transaction savepoints, graphic design undo stacks, game save files."
+        },
+        {
+          "option": "Public Getters/Setters State Cloning",
+          "pros": "Simple to write quickly without dedicated memento classes.",
+          "cons": "Destroys encapsulation; leaks private internal state across the codebase.",
+          "bestFor": "Simple anemic DTO records with no private invariants."
+        }
+      ],
+      "interviewTip": "In interviews, explain how Memento combines with Command: A Command object can store a Memento of the Receiver's state right before executing `execute()`. When `undo()` is called, the Command passes the saved Memento back to the Receiver to revert it cleanly.",
+      "jsonUrl": "/api/design-patterns/subtopics/behavioral-patterns/memento.json"
+    },
+    {
+      "id": "observer",
+      "topicId": "behavioral-patterns",
+      "topicTitle": "3. Behavioral Patterns",
+      "topicNumber": 3,
+      "subtopicNumber": "3.7",
+      "title": "Observer Pattern",
+      "subtitle": "Defines a one-to-many dependency between objects so that when one object changes state, all its dependents are notified and updated automatically.",
+      "readingTime": "8 min read",
+      "difficulty": "Foundational",
+      "keyTakeaways": [
+        "Defines a publisher-subscriber contract where Subject publishes state updates to an arbitrary number of registered Observers.",
+        "Subject does not know the concrete class of any Observer, adhering strictly to the Open/Closed Principle.",
+        "The bedrock of event-driven architectures, reactive programming (RxJava, Project Reactor), GUI button listeners, and message queues."
+      ],
+      "architectureDiagram": "+-------------------------------------------------------------------------+\n|                         OBSERVER UML CLASS MODEL                        |\n+-------------------------------------------------------------------------+\n   +-----------------------------+               +-----------------------------+\n   |        <<interface>>        |               |        <<interface>>        |\n   |           Subject           |  notifies --> |           Observer          |\n   +-----------------------------+               +-----------------------------+\n   | + attach(o: Observer): void |               | + update(event): void       |\n   | + detach(o: Observer): void |               +--------------^--------------+\n   | + notifyObservers(): void   |                              |\n   +--------------^--------------+               +--------------+--------------+\n                  |                              |                             |\n   +--------------+--------------+     +---------+----------+       +----------+---------+\n   |         StockTicker         |     |   MobileAppDisplay |       |   EmailAlertSubscriber |\n   +-----------------------------+     +--------------------+       +--------------------+\n   | - price: BigDecimal         |     | + update(): render |       | + update(): send   |\n   +-----------------------------+     +--------------------+       +--------------------+",
+      "diagramImageUrl": "/diagrams/design-patterns/observer-block.svg",
+      "flowDiagramUrl": "/diagrams/design-patterns/observer-flow.svg",
+      "sections": [
+        {
+          "heading": "Decoupled Event Broadcasting and Memory Leak Hazards",
+          "body": "When business state changes need to trigger updates across disparate services (e.g. user signup triggers welcome emails, analytics tracking, and fraud checks), coupling the signup service to all three modules creates an unmaintainable tangle. The Observer pattern allows subscribers to register and deregister dynamically.",
+          "bullets": [
+            "Open/Closed Principle: Add new subscribers without modifying a single line of the publisher.",
+            "Lapsed Listener Problem: Observers that fail to unregister can remain in the Subject's reference list forever, creating silent memory leaks.",
+            "Push vs Pull Models: Push sends all event data directly in method parameters; Pull passes only a reference so the observer queries what it needs."
+          ],
+          "codeSnippet": {
+            "title": "Thread-Safe Stock Market Publisher in Java 21",
+            "code": "public interface MarketObserver {\n    void onPriceUpdate(String symbol, double price);\n}\n\npublic class StockTicker {\n    private final List<MarketObserver> observers = new CopyOnWriteArrayList<>();\n    private final Map<String, Double> prices = new ConcurrentHashMap<>();\n\n    public void subscribe(MarketObserver observer) {\n        observers.add(observer);\n    }\n\n    public void unsubscribe(MarketObserver observer) {\n        observers.remove(observer);\n    }\n\n    public void setPrice(String symbol, double price) {\n        prices.put(symbol, price);\n        for (MarketObserver observer : observers) {\n            observer.onPriceUpdate(symbol, price);\n        }\n    }\n}"
+          },
+          "flowDiagramUrl": "/diagrams/design-patterns/observer-flow.svg",
+          "diagramImageUrl": "/diagrams/design-patterns/observer-block.svg"
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Observer Pattern",
+          "pros": "Loosely coupled publisher/subscriber; dynamic runtime subscription; clean Open/Closed design.",
+          "cons": "Subscribers are notified in random/unspecified order; potential memory leaks if not unsubscribed.",
+          "bestFor": "Event-driven systems, UI button event listeners, stock price updates, sensor networks."
+        },
+        {
+          "option": "Synchronous Polling",
+          "pros": "Very simple; client controls when to query for updates.",
+          "cons": "Wastes CPU cycles and network bandwidth checking for changes that haven't occurred.",
+          "bestFor": "Low-frequency batch jobs."
+        }
+      ],
+      "interviewTip": "In interviews, discuss the 'Lapsed Listener Problem' (memory leak caused by strong references from Subject to Observers preventing GC). Explain how using `WeakReference` or explicit lifecycle cleanup methods prevents this in long-running services.",
+      "jsonUrl": "/api/design-patterns/subtopics/behavioral-patterns/observer.json"
+    },
+    {
+      "id": "state",
+      "topicId": "behavioral-patterns",
+      "topicTitle": "3. Behavioral Patterns",
+      "topicNumber": 3,
+      "subtopicNumber": "3.8",
+      "title": "State Pattern",
+      "subtitle": "Allows an object to alter its behavior when its internal state changes, appearing to change its class.",
+      "readingTime": "7 min read",
+      "difficulty": "Intermediate",
+      "keyTakeaways": [
+        "Eliminates gargantuan switch-case statements that check `if (state == PAID)` across dozens of class methods.",
+        "Encapsulates state-specific behavior into independent State classes; state transitions are handled cleanly by delegating to new State instances.",
+        "Underpins Finite State Machines (FSMs), order checkout lifecycles, TCP connection handling, and game character animations."
+      ],
+      "architectureDiagram": "+-------------------------------------------------------------------------+\n|                           STATE UML CLASS MODEL                         |\n+-------------------------------------------------------------------------+\n   +-----------------------------+               +-----------------------------+\n   |       OrderContext          |               |        <<interface>>        |\n   |                             |  delegates -> |          OrderState         |\n   +-----------------------------+               +-----------------------------+\n   | - state: OrderState         |               | + pay(): void               |\n   | + setState(s: OrderState)   |               | + ship(): void              |\n   | + pay(): void               |               | + cancel(): void            |\n   +-----------------------------+               +--------------^--------------+\n                                                                |\n                                 +------------------------------+------------------------------+\n                                 |                                                             |\n                   +-------------+---------------+                               +-------------+---------------+\n                   |        CreatedState         |                               |          PaidState          |\n                   +-----------------------------+                               +-----------------------------+\n                   | + pay(): ctx.setState(Paid) |                               | + ship(): ctx.setState(Ship)|\n                   | + ship(): throw Error       |                               | + cancel(): refund & cancel |\n                   +-----------------------------+                               +-----------------------------+",
+      "diagramImageUrl": "/diagrams/design-patterns/state-block.svg",
+      "flowDiagramUrl": "/diagrams/design-patterns/state-flow.svg",
+      "sections": [
+        {
+          "heading": "Eliminating Massive Switch-Case State Machines",
+          "body": "When an entity's behavior depends entirely on its lifecycle state, imperative code fills up with giant conditional statements: `switch(order.status) { case PENDING: ... case SHIPPED: ... }`. Every time a new state is added, developers must find and edit every switch statement. The State pattern extracts each state into an autonomous class.",
+          "bullets": [
+            "Single Responsibility Principle: Organizes all behavior specific to a particular state into a single cohesive class.",
+            "Open/Closed Principle: Introduce new states without modifying existing state classes or context methods.",
+            "Type-Safe State Transitions: Impossible transitions (e.g., shipping an unpaid order) throw clear compile or runtime exceptions."
+          ],
+          "codeSnippet": {
+            "title": "Order Lifecycle Finite State Machine in Java 21",
+            "code": "public interface OrderState {\n    void pay(OrderContext ctx);\n    void ship(OrderContext ctx);\n}\n\npublic class OrderContext {\n    private OrderState state = new CreatedState();\n\n    public void setState(OrderState state) { this.state = state; }\n    public void pay() { state.pay(this); }\n    public void ship() { state.ship(this); }\n}\n\npublic class CreatedState implements OrderState {\n    @Override public void pay(OrderContext ctx) {\n        System.out.println(\"Payment processed successfully.\");\n        ctx.setState(new PaidState());\n    }\n\n    @Override public void ship(OrderContext ctx) {\n        throw new IllegalStateException(\"Cannot ship an unpaid order!\");\n    }\n}\n\npublic class PaidState implements OrderState {\n    @Override public void pay(OrderContext ctx) {\n        throw new IllegalStateException(\"Order is already paid.\");\n    }\n\n    @Override public void ship(OrderContext ctx) {\n        System.out.println(\"Dispatched to warehouse for shipping.\");\n        ctx.setState(new ShippedState());\n    }\n}"
+          },
+          "flowDiagramUrl": "/diagrams/design-patterns/state-flow.svg",
+          "diagramImageUrl": "/diagrams/design-patterns/state-block.svg"
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "State Pattern",
+          "pros": "Eliminates duplicate switch statements; encapsulates state transitions; highly extensible.",
+          "cons": "Overkill if the state machine has only 2 simple states that rarely change.",
+          "bestFor": "Complex order lifecycles, payment workflows, game AI states, document publishing flows."
+        },
+        {
+          "option": "Enum with Switch Cases",
+          "pros": "Compact and easy to read for tiny state machines with 2-3 states.",
+          "cons": "Violates Open/Closed; state machine logic becomes scattered across all business methods.",
+          "bestFor": "Trivial binary states (e.g. ENABLED / DISABLED)."
+        }
+      ],
+      "interviewTip": "Distinguish State from Strategy: While both rely on composition and have similar UML class diagrams, their intent is completely opposite. In Strategy, the client chooses an algorithm once and usually does not change it. In State, the states transition dynamically and automatically as internal operations occur.",
+      "jsonUrl": "/api/design-patterns/subtopics/behavioral-patterns/state.json"
+    },
+    {
+      "id": "strategy",
+      "topicId": "behavioral-patterns",
+      "topicTitle": "3. Behavioral Patterns",
+      "topicNumber": 3,
+      "subtopicNumber": "3.9",
+      "title": "Strategy Pattern",
+      "subtitle": "Defines a family of algorithms, encapsulates each one, and makes them interchangeable at runtime.",
+      "readingTime": "7 min read",
+      "difficulty": "Foundational",
+      "keyTakeaways": [
+        "Enables selecting an algorithm's implementation dynamically at runtime without modifying the client that uses it.",
+        "Replaces bloated conditional statements (`if-else` blocks based on customer tier or payment method) with clean polymorphism.",
+        "In modern Java 8+, strategies can be passed directly as concise Lambda expressions (`Comparator.comparing(...)`)."
+      ],
+      "architectureDiagram": "+-------------------------------------------------------------------------+\n|                         STRATEGY UML CLASS MODEL                        |\n+-------------------------------------------------------------------------+\n   +-----------------------------+               +-----------------------------+\n   |       CheckoutService       |               |        <<interface>>        |\n   |          (Context)          |  has-a ---->  |       PricingStrategy       |\n   +-----------------------------+               +-----------------------------+\n   | - strategy: PricingStrategy |               | + calculate(cents): long    |\n   | + setStrategy(s: Strategy)  |               +--------------^--------------+\n   | + calculateTotal(): long    |                              |\n   +-----------------------------+               +--------------+--------------+\n                                                 |                             |\n                                  +--------------+--------------+     +--------+--------+\n                                  |    VipDiscountStrategy      |     | BlackFridayStrat|\n                                  +-----------------------------+     +-----------------+\n                                  | + calculate(): 20% off      |     | + calculate():  |\n                                  +-----------------------------+     |   50% off       |\n                                                                      +-----------------+",
+      "diagramImageUrl": "/diagrams/design-patterns/strategy-block.svg",
+      "flowDiagramUrl": "/diagrams/design-patterns/strategy-flow.svg",
+      "sections": [
+        {
+          "heading": "Runtime Algorithm Swapping and Lambda Modernization",
+          "body": "When business logic requires computing shipping rates (FedEx vs UPS vs DHL) or applying discounts (Black Friday vs Student vs VIP), hardcoding algorithms with nested if-else branches creates high cyclomatic complexity. The Strategy pattern isolates each algorithm into a standalone class sharing a common interface.",
+          "bullets": [
+            "Open/Closed Principle: Introduce brand new pricing or routing strategies without touching the context class.",
+            "Functional Programming Bridge: In Java 21, single-method strategy interfaces (`@FunctionalInterface`) can be implemented as lambda expressions, cutting boilerplate to 1 line.",
+            "Testability: Algorithms can be isolated and unit-tested in isolation without mocking the entire context."
+          ],
+          "codeSnippet": {
+            "title": "Modern Functional Strategy Pattern in Java 21",
+            "code": "@FunctionalInterface\npublic interface DiscountStrategy {\n    long applyDiscount(long priceInCents);\n}\n\npublic class OrderCheckout {\n    private DiscountStrategy discountStrategy;\n\n    public OrderCheckout(DiscountStrategy discountStrategy) {\n        this.discountStrategy = discountStrategy;\n    }\n\n    public void setDiscountStrategy(DiscountStrategy strategy) {\n        this.discountStrategy = strategy;\n    }\n\n    public long calculateTotal(long originalPrice) {\n        return discountStrategy.applyDiscount(originalPrice);\n    }\n}\n\n// Usage with Modern Lambdas\npublic class Main {\n    public static void main(String[] args) {\n        OrderCheckout checkout = new OrderCheckout(p -> (long) (p * 0.8)); // 20% off\n        System.out.println(\"VIP Total: \" + checkout.calculateTotal(10000)); // 8000\n\n        checkout.setDiscountStrategy(p -> p - 1500); // $15 flat coupon\n        System.out.println(\"Coupon Total: \" + checkout.calculateTotal(10000)); // 8500\n    }\n}"
+          },
+          "flowDiagramUrl": "/diagrams/design-patterns/strategy-flow.svg",
+          "diagramImageUrl": "/diagrams/design-patterns/strategy-block.svg"
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Strategy Pattern",
+          "pros": "Isolates algorithms; hot-swappable at runtime; completely eliminates if-else chains.",
+          "cons": "Clients must be aware of differences between strategies to select the right one.",
+          "bestFor": "Sorting engines, routing algorithms, payment methods, compression formats."
+        },
+        {
+          "option": "Hardcoded Procedural If-Else",
+          "pros": "No interfaces needed; simple for 1-2 invariant calculations.",
+          "cons": "Violates Open/Closed; editing algorithms requires modifying existing code, risking regressions.",
+          "bestFor": "Fixed, unchanging formula calculations."
+        }
+      ],
+      "interviewTip": "Highlight that in modern Java, Strategy is often combined with Lambdas and Method References: `Collections.sort(list, Comparator.comparing(User::getAge))` is a pure production manifestation of the Strategy pattern.",
+      "jsonUrl": "/api/design-patterns/subtopics/behavioral-patterns/strategy.json"
+    },
+    {
+      "id": "template-method",
+      "topicId": "behavioral-patterns",
+      "topicTitle": "3. Behavioral Patterns",
+      "topicNumber": 3,
+      "subtopicNumber": "3.10",
+      "title": "Template Method Pattern",
+      "subtitle": "Defines the skeleton of an algorithm in an operation, deferring some steps to subclasses without changing the algorithm's structure.",
+      "readingTime": "7 min read",
+      "difficulty": "Foundational",
+      "keyTakeaways": [
+        "Defines an algorithm's invariant steps in a `final` base class method, allowing subclasses to override specific hook steps.",
+        "Enforces the 'Hollywood Principle' ('Don't call us, we'll call you'): the base class calls the subclass methods, never the reverse.",
+        "Underpins build automation pipelines (CI/CD), data miners (parse -> extract -> load), and Spring `JdbcTemplate`."
+      ],
+      "architectureDiagram": "+-------------------------------------------------------------------------+\n|                      TEMPLATE METHOD UML CLASS MODEL                    |\n+-------------------------------------------------------------------------+\n                     +----------------------------------+\n                     |           <<abstract>>           |\n                     |         DataMiner (Base)         |\n                     +----------------------------------+\n                     | + mineData(): void {final}       |  <-- Invariant Skeleton\n                     | # openFile(): void               |\n                     | # extractData(): void {abstract} |  <-- Subclass Hook\n                     | # closeFile(): void              |\n                     +-----------------^----------------+\n                                       |\n             +-------------------------+-------------------------+\n             |                                                   |\n+------------+------------+                         +------------+------------+\n|      PdfDataMiner       |                         |       CsvDataMiner      |\n+-------------------------+                         +-------------------------+\n| # extractData(): PDF    |                         | # extractData(): CSV    |\n+-------------------------+                         +-------------------------+",
+      "diagramImageUrl": "/diagrams/design-patterns/template-method-block.svg",
+      "flowDiagramUrl": "/diagrams/design-patterns/template-method-flow.svg",
+      "sections": [
+        {
+          "heading": "Inversion of Control and Invariant Algorithm Skeletons",
+          "body": "When multiple classes implement the same algorithmic workflow with only small differences in specific steps (e.g. data mining pipelines where opening files and closing files is identical, but data parsing differs), duplicating the algorithm creates severe maintenance hazards. The Template Method marks the skeleton method `final` and leaves specific steps `abstract`.",
+          "bullets": [
+            "DRY (Don't Repeat Yourself): Consolidates duplicate boilerplate workflow code into a single shared superclass.",
+            "Guaranteed Cleanup: Invariant steps like database connection closing, telemetry emission, or transaction commit are guaranteed to run.",
+            "Liskov Substitution Principle: Subclasses preserve the overarching behavior of the superclass while refining details."
+          ],
+          "codeSnippet": {
+            "title": "ETL Pipeline Template Method in Java 21",
+            "code": "public abstract class EtlPipeline {\n    // The Template Method (sealed with final)\n    public final void runPipeline(String source) {\n        connect(source);\n        byte[] rawData = extract();\n        String transformed = transform(rawData);\n        load(transformed);\n        disconnect();\n    }\n\n    private void connect(String source) { System.out.println(\"Connecting to: \" + source); }\n    private void disconnect() { System.out.println(\"Disconnected cleanly.\"); }\n\n    // Abstract hooks for subclasses\n    protected abstract byte[] extract();\n    protected abstract String transform(byte[] rawData);\n    protected abstract void load(String processedData);\n}\n\npublic class S3EtlPipeline extends EtlPipeline {\n    @Override protected byte[] extract() { return \"s3_raw_bytes\".getBytes(); }\n    @Override protected String transform(byte[] raw) { return new String(raw).toUpperCase(); }\n    @Override protected void load(String data) { System.out.println(\"Loaded to Snowflake: \" + data); }\n}"
+          },
+          "flowDiagramUrl": "/diagrams/design-patterns/template-method-flow.svg",
+          "diagramImageUrl": "/diagrams/design-patterns/template-method-block.svg"
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Template Method Pattern",
+          "pros": "Eliminates duplicate workflow logic; guarantees invariant steps run in exact order.",
+          "cons": "Tightly bound by inheritance; subclasses cannot alter the ordering of steps.",
+          "bestFor": "Build systems, ETL pipelines, standard web request lifecycles."
+        },
+        {
+          "option": "Strategy Pattern with Composition",
+          "pros": "More flexible; steps can be swapped independently at runtime without subclassing.",
+          "cons": "Requires instantiating and coordinating multiple strategy objects.",
+          "bestFor": "Workflows where individual steps vary completely independently."
+        }
+      ],
+      "interviewTip": "Be ready to explain the 'Hollywood Principle' ('Don't call us, we'll call you') in the context of Template Method vs Strategy: Template Method uses Inheritance (superclass calls subclass methods); Strategy uses Composition (context calls interface methods).",
+      "jsonUrl": "/api/design-patterns/subtopics/behavioral-patterns/template-method.json"
+    },
+    {
+      "id": "visitor",
+      "topicId": "behavioral-patterns",
+      "topicTitle": "3. Behavioral Patterns",
+      "topicNumber": 3,
+      "subtopicNumber": "3.11",
+      "title": "Visitor Pattern",
+      "subtitle": "Separates an algorithm from the object structure on which it operates, allowing new operations to be added without modifying the structure.",
+      "readingTime": "8 min read",
+      "difficulty": "Advanced",
+      "keyTakeaways": [
+        "Uses 'Double Dispatch' (`element.accept(visitor)` -> `visitor.visit(this)`) to execute the appropriate operation based on both the element type and the visitor type.",
+        "Allows adding new operations (e.g. JSON export, XML export, pricing calculation) across complex object structures without modifying the element classes.",
+        "Heavily used in compilers (AST tree traversal and type checking) and DOM document serializers."
+      ],
+      "architectureDiagram": "+-------------------------------------------------------------------------+\n|                          VISITOR UML CLASS MODEL                        |\n+-------------------------------------------------------------------------+\n   +-----------------------------+               +-----------------------------+\n   |        <<interface>>        |               |        <<interface>>        |\n   |           Element           |               |           Visitor           |\n   +-----------------------------+               +-----------------------------+\n   | + accept(v: Visitor): void  |               | + visit(c: Circle): void    |\n   +--------------^--------------+               | + visit(r: Rectangle): void |\n                  |                              +--------------^--------------+\n   +--------------+--------------+                              |\n   |                             |               +--------------+--------------+\n+--+----------+           +------+-----+   +-----+------+         +------------+----+\n|   Circle    |           |  Rectangle |   |  XmlExport |         | JsonExportVisitor|\n+-------------+           +------------+   +------------+         +-----------------+\n| + accept(v) |           | + accept(v)|   | + visit(c) |         | + visit(c)      |\n|   -> v.visit|           |   -> v.visit   | + visit(r) |         | + visit(r)      |\n+-------------+           +------------+   +------------+         +-----------------+",
+      "diagramImageUrl": "/diagrams/design-patterns/visitor-block.svg",
+      "flowDiagramUrl": "/diagrams/design-patterns/visitor-flow.svg",
+      "sections": [
+        {
+          "heading": "Double Dispatch Mechanics and Clean Separation of Algorithms",
+          "body": "Imagine having a geometric shape tree (Circle, Square). If you need to add export functions (`exportXML`, `exportJSON`, `exportSVG`), adding these methods to Circle and Square pollutes domain classes with serialization logic. Every new export format forces editing every shape class. The Visitor pattern moves these operations into standalone Visitor classes without changing the shapes.",
+          "bullets": [
+            "Open/Closed Principle: You can introduce powerful new operations over complex object graphs without editing element classes.",
+            "Single Responsibility Principle: Consolidates related operations for multiple classes into a single visitor class.",
+            "Double Dispatch Explained: Single dispatch (standard Java) binds methods based only on the runtime type of the receiver. Visitor binds based on BOTH the element and the visitor."
+          ],
+          "codeSnippet": {
+            "title": "Double-Dispatch Compiler AST Visitor in Java 21",
+            "code": "// Element Interface\npublic interface AstNode {\n    void accept(AstVisitor visitor);\n}\n\n// Visitor Interface\npublic interface AstVisitor {\n    void visit(LiteralNode node);\n    void visit(BinaryOpNode node);\n}\n\n// Concrete Elements\npublic record LiteralNode(int value) implements AstNode {\n    @Override public void accept(AstVisitor visitor) {\n        visitor.visit(this); // Double dispatch\n    }\n}\n\npublic record BinaryOpNode(String op, AstNode left, AstNode right) implements AstNode {\n    @Override public void accept(AstVisitor visitor) {\n        visitor.visit(this); // Double dispatch\n    }\n}\n\n// Concrete Visitor: Pretty Printer\npublic class PrettyPrintVisitor implements AstVisitor {\n    @Override public void visit(LiteralNode node) {\n        System.out.print(node.value());\n    }\n\n    @Override public void visit(BinaryOpNode node) {\n        System.out.print(\"(\");\n        node.left().accept(this);\n        System.out.print(\" \" + node.op() + \" \");\n        node.right().accept(this);\n        System.out.print(\")\");\n    }\n}"
+          },
+          "flowDiagramUrl": "/diagrams/design-patterns/visitor-flow.svg",
+          "diagramImageUrl": "/diagrams/design-patterns/visitor-block.svg"
+        }
+      ],
+      "tradeOffs": [
+        {
+          "option": "Visitor Pattern",
+          "pros": "Adding new operations across many classes is trivial; groups related algorithms together.",
+          "cons": "Adding a new Element class forces updating every single Visitor class in the codebase.",
+          "bestFor": "AST compilers, document serializers, static code analysis rules."
+        },
+        {
+          "option": "Direct Methods on Domain Classes",
+          "pros": "Simple when the set of element classes changes frequently.",
+          "cons": "Pollutes domain models with disparate export and rendering logic.",
+          "bestFor": "Rapid prototypes where operations rarely change."
+        }
+      ],
+      "interviewTip": "In interviews, clearly define why Double Dispatch is needed in Java: Java method overloading is resolved statically at compile time, while method overriding is resolved dynamically at runtime. Visitor achieves dynamic dispatch on both arguments.",
+      "jsonUrl": "/api/design-patterns/subtopics/behavioral-patterns/visitor.json"
+    }
+  ]
+}

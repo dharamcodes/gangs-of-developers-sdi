@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import {
   Box,
   Button,
@@ -14,6 +14,8 @@ import {
   Typography,
 } from "@mui/material";
 import AccountTreeOutlinedIcon from "@mui/icons-material/AccountTreeOutlined";
+import AltRouteOutlinedIcon from "@mui/icons-material/AltRouteOutlined";
+import TerminalRoundedIcon from "@mui/icons-material/TerminalRounded";
 import ZoomOutMapIcon from "@mui/icons-material/ZoomOutMap";
 import CloseIcon from "@mui/icons-material/Close";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
@@ -24,6 +26,7 @@ interface ArchitectureDiagramCardProps {
   ui: HandbookUiConfig;
   mode?: "light" | "dark";
   diagramImageUrl?: string;
+  flowDiagramUrl?: string;
   asciiDiagram: string;
   altText: string;
 }
@@ -32,18 +35,28 @@ export default function ArchitectureDiagramCard({
   ui,
   mode = "light",
   diagramImageUrl,
+  flowDiagramUrl,
   asciiDiagram,
   altText,
 }: ArchitectureDiagramCardProps) {
-  const hasVisualImage = Boolean(diagramImageUrl && diagramImageUrl.trim().length > 0);
-  const [viewMode, setViewMode] = useState<"visual" | "ascii">(
-    hasVisualImage ? "visual" : "ascii"
-  );
+  const hasBlockImage = Boolean(diagramImageUrl && diagramImageUrl.trim().length > 0);
+  const hasFlowImage = Boolean(flowDiagramUrl && flowDiagramUrl.trim().length > 0);
+  const hasAscii = Boolean(asciiDiagram && asciiDiagram.trim().length > 0);
+
+  type TabMode = "block" | "flow" | "ascii";
+
+  const defaultTab: TabMode = hasBlockImage
+    ? "block"
+    : hasFlowImage
+    ? "flow"
+    : "ascii";
+
+  const [activeTab, setActiveTab] = useState<TabMode>(defaultTab);
   const [zoomOpen, setZoomOpen] = useState(false);
   const [copied, setCopied] = useState(false);
-  const copyTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  React.useEffect(() => {
+  useEffect(() => {
     return () => {
       if (copyTimerRef.current) {
         clearTimeout(copyTimerRef.current);
@@ -66,12 +79,36 @@ export default function ArchitectureDiagramCard({
 
   const isLight = mode === "light";
 
+  // Determine current active image for zoom
+  const currentImageUrl =
+    activeTab === "block"
+      ? diagramImageUrl
+      : activeTab === "flow"
+      ? flowDiagramUrl
+      : undefined;
+
+  const currentTabHeading =
+    activeTab === "block"
+      ? ui.visualDiagramHeading || "Component Topology & Architecture Blueprint"
+      : activeTab === "flow"
+      ? "Runtime Execution Sequence & Step Pipeline"
+      : "ASCII Terminal Architecture Blueprint";
+
+  const currentTabIcon =
+    activeTab === "block" ? (
+      <AccountTreeOutlinedIcon sx={{ color: isLight ? "#b45309" : "#f59e0b" }} fontSize="small" />
+    ) : activeTab === "flow" ? (
+      <AltRouteOutlinedIcon sx={{ color: isLight ? "#059669" : "#10b981" }} fontSize="small" />
+    ) : (
+      <TerminalRoundedIcon sx={{ color: isLight ? "#0284c7" : "#38bdf8" }} fontSize="small" />
+    );
+
   return (
-    <Box sx={{ mt: 2.5, mb: 2 }}>
+    <Box sx={{ mt: 2.5, mb: 3 }}>
       <Paper
         variant="outlined"
         sx={{
-          borderRadius: 2.5,
+          borderRadius: 2.75,
           overflow: "hidden",
           borderColor: "divider",
           boxShadow: isLight
@@ -87,68 +124,86 @@ export default function ArchitectureDiagramCard({
             alignItems: "center",
             justifyContent: "space-between",
             flexWrap: "wrap",
-            gap: 1,
+            gap: 1.25,
             px: { xs: 1.5, sm: 2.5 },
             py: 1.25,
             bgcolor: isLight ? "#f8fafc" : "#0f172a",
             color: isLight ? "#0f172a" : "#f8fafc",
             borderBottom: isLight
               ? "1px solid #e2e8f0"
-              : "1px solid rgba(255,255,255,0.1)",
+              : "1px solid rgba(255,255,255,0.08)",
           }}
         >
+          {/* Header Title with Dynamic Icon */}
           <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-            <AccountTreeOutlinedIcon
-              sx={{ color: isLight ? "#b45309" : "#f59e0b" }}
-              fontSize="small"
-            />
+            {currentTabIcon}
             <Typography
               variant="subtitle2"
-              sx={{ fontWeight: 750, letterSpacing: "0.01em" }}
+              sx={{
+                fontWeight: 750,
+                letterSpacing: "0.01em",
+                fontSize: { xs: "0.82rem", sm: "0.88rem" },
+              }}
             >
-              {ui.visualDiagramHeading}
+              {currentTabHeading}
             </Typography>
           </Stack>
 
+          {/* Tab Button Controls & Actions */}
           <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-            {hasVisualImage && Boolean(asciiDiagram && asciiDiagram.trim().length > 0) && (
-              <ButtonGroup
-                size="small"
-                sx={{
-                  "& .MuiButton-root": {
-                    textTransform: "none",
-                    fontSize: "0.75rem",
-                    fontWeight: 600,
-                    px: 1.5,
-                    py: 0.35,
-                    color: isLight ? "#475569" : "#cbd5e1",
-                    borderColor: isLight ? "#cbd5e1" : "rgba(255,255,255,0.2)",
-                    "&.active-mode": {
-                      bgcolor: "#f59e0b",
-                      color: "#0f172a",
-                      borderColor: "#f59e0b",
-                      fontWeight: 700,
-                    },
+            <ButtonGroup
+              size="small"
+              sx={{
+                "& .MuiButton-root": {
+                  textTransform: "none",
+                  fontSize: { xs: "0.72rem", sm: "0.76rem" },
+                  fontWeight: 650,
+                  px: { xs: 1, sm: 1.5 },
+                  py: 0.4,
+                  color: isLight ? "#475569" : "#cbd5e1",
+                  borderColor: isLight ? "#cbd5e1" : "rgba(255,255,255,0.2)",
+                  "&.active-tab": {
+                    bgcolor: isLight ? "#b45309" : "#f59e0b",
+                    color: isLight ? "#ffffff" : "#0f172a",
+                    borderColor: isLight ? "#b45309" : "#f59e0b",
+                    fontWeight: 750,
                   },
-                }}
-              >
+                },
+              }}
+            >
+              {hasBlockImage && (
                 <Button
-                  className={viewMode === "visual" ? "active-mode" : ""}
-                  onClick={() => setViewMode("visual")}
+                  className={activeTab === "block" ? "active-tab" : ""}
+                  onClick={() => setActiveTab("block")}
+                  startIcon={<AccountTreeOutlinedIcon sx={{ fontSize: "14px !important" }} />}
                 >
-                  {ui.visualDiagramTabLabel}
+                  Topology
                 </Button>
+              )}
+
+              {hasFlowImage && (
                 <Button
-                  className={viewMode === "ascii" ? "active-mode" : ""}
-                  onClick={() => setViewMode("ascii")}
+                  className={activeTab === "flow" ? "active-tab" : ""}
+                  onClick={() => setActiveTab("flow")}
+                  startIcon={<AltRouteOutlinedIcon sx={{ fontSize: "14px !important" }} />}
                 >
-                  {ui.asciiDiagramTabLabel}
+                  Execution Flow
                 </Button>
-              </ButtonGroup>
-            )}
+              )}
+
+              {hasAscii && (
+                <Button
+                  className={activeTab === "ascii" ? "active-tab" : ""}
+                  onClick={() => setActiveTab("ascii")}
+                  startIcon={<TerminalRoundedIcon sx={{ fontSize: "14px !important" }} />}
+                >
+                  ASCII Art
+                </Button>
+              )}
+            </ButtonGroup>
 
             {/* Copy button for ASCII when in ascii mode */}
-            {viewMode === "ascii" && (
+            {activeTab === "ascii" && (
               <Tooltip title={copied ? "Copied!" : "Copy Blueprint"}>
                 <IconButton
                   size="small"
@@ -177,37 +232,39 @@ export default function ArchitectureDiagramCard({
             )}
 
             {/* Fullscreen Zoom */}
-            <Tooltip title="Fullscreen View">
-              <IconButton
-                size="small"
-                onClick={() => setZoomOpen(true)}
-                sx={{
-                  color: isLight ? "#475569" : "#e2e8f0",
-                  border: isLight
-                    ? "1px solid #cbd5e1"
-                    : "1px solid rgba(255,255,255,0.2)",
-                  borderRadius: 1.5,
-                  p: 0.5,
-                  "&:hover": {
-                    bgcolor: isLight
-                      ? "rgba(15, 23, 42, 0.05)"
-                      : "rgba(255,255,255,0.1)",
-                  },
-                }}
-              >
-                <ZoomOutMapIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
+            {(activeTab === "block" || activeTab === "flow") && (
+              <Tooltip title="Fullscreen View">
+                <IconButton
+                  size="small"
+                  onClick={() => setZoomOpen(true)}
+                  sx={{
+                    color: isLight ? "#475569" : "#e2e8f0",
+                    border: isLight
+                      ? "1px solid #cbd5e1"
+                      : "1px solid rgba(255,255,255,0.2)",
+                    borderRadius: 1.5,
+                    p: 0.5,
+                    "&:hover": {
+                      bgcolor: isLight
+                        ? "rgba(15, 23, 42, 0.05)"
+                        : "rgba(255,255,255,0.1)",
+                    },
+                  }}
+                >
+                  <ZoomOutMapIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
           </Stack>
         </Stack>
 
         {/* Diagram Body */}
-        {viewMode === "visual" && hasVisualImage ? (
+        {activeTab === "block" && hasBlockImage && (
           <Box
             onClick={() => setZoomOpen(true)}
             sx={{
               p: { xs: 1, sm: 2.5 },
-              bgcolor: "#ffffff",
+              bgcolor: isLight ? "#ffffff" : "#070b14",
               cursor: "zoom-in",
               overflowX: "auto",
             }}
@@ -215,19 +272,48 @@ export default function ArchitectureDiagramCard({
             <Box
               component="img"
               src={diagramImageUrl}
-              alt={altText}
+              alt={`${altText} Architecture Topology`}
               loading="lazy"
               decoding="async"
               sx={{
                 width: "100%",
-                minWidth: { xs: 560, sm: "100%" },
+                minWidth: { xs: 580, sm: "100%" },
                 height: "auto",
                 display: "block",
                 borderRadius: 1,
               }}
             />
           </Box>
-        ) : (
+        )}
+
+        {activeTab === "flow" && hasFlowImage && (
+          <Box
+            onClick={() => setZoomOpen(true)}
+            sx={{
+              p: { xs: 1, sm: 2.5 },
+              bgcolor: isLight ? "#ffffff" : "#070b14",
+              cursor: "zoom-in",
+              overflowX: "auto",
+            }}
+          >
+            <Box
+              component="img"
+              src={flowDiagramUrl}
+              alt={`${altText} Runtime Execution Flow`}
+              loading="lazy"
+              decoding="async"
+              sx={{
+                width: "100%",
+                minWidth: { xs: 580, sm: "100%" },
+                height: "auto",
+                display: "block",
+                borderRadius: 1,
+              }}
+            />
+          </Box>
+        )}
+
+        {activeTab === "ascii" && (
           <Box
             sx={{
               p: { xs: 2, sm: 3 },
@@ -278,8 +364,8 @@ export default function ArchitectureDiagramCard({
               : "1px solid rgba(255,255,255,0.1)",
           }}
         >
-          <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
-            {altText} — {ui.visualDiagramHeading}
+          <Typography variant="subtitle1" sx={{ fontWeight: 750 }}>
+            {altText} — {currentTabHeading}
           </Typography>
           <IconButton
             onClick={() => setZoomOpen(false)}
@@ -290,19 +376,14 @@ export default function ArchitectureDiagramCard({
         </Stack>
         <DialogContent
           sx={{
-            bgcolor:
-              viewMode === "visual" && hasVisualImage
-                ? "#ffffff"
-                : isLight
-                ? "#f8fafc"
-                : "#0b1120",
+            bgcolor: isLight ? "#ffffff" : "#070b14",
             p: { xs: 1, sm: 3 },
           }}
         >
-          {viewMode === "visual" && hasVisualImage ? (
+          {currentImageUrl ? (
             <Box
               component="img"
-              src={diagramImageUrl}
+              src={currentImageUrl}
               alt={altText}
               sx={{
                 width: "100%",

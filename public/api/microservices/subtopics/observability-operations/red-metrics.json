@@ -1,0 +1,48 @@
+{
+  "id": "red-metrics",
+  "topicId": "observability-operations",
+  "topicTitle": "6. Observability, Security & Operations",
+  "topicNumber": 6,
+  "subtopicNumber": "6.2",
+  "title": "RED Metrics, Golden Signals & Prometheus",
+  "subtitle": "Rate, Errors, Duration (RED), Google's Four Golden Signals, Prometheus counters, and Grafana SLI/SLO alerting.",
+  "readingTime": "7 min read",
+  "difficulty": "Intermediate",
+  "keyTakeaways": [
+    "Tom Wilkie's **RED Method** defines the three core metrics for microservices: **Rate** (requests per second), **Errors** (failed requests per second), and **Duration** (latency distribution).",
+    "Google's **Four Golden Signals**: Latency, Traffic, Errors, and Saturation (CPU, memory, thread pool exhaustion).",
+    "Instrument endpoints using Prometheus metrics; alert strictly on **SLO Breaches** (e.g. P99 latency > 500ms for 5 minutes) rather than noisy CPU thresholds."
+  ],
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                  THE RED METHOD MONITORING DASHBOARD                    |\n+-------------------------------------------------------------------------+\n  [Rate (Traffic)]       --> http_requests_total [25,400 req/s]\n  [Errors (Failures)]    --> http_requests_total{status=~\"5..\"} [12 req/s (0.04%)]\n  [Duration (Latency)]   --> P50: 18ms | P95: 85ms | P99: 240ms (Histogram)\n---------------------------------------------------------------------------\n  (Alert Triggered only when Error Rate > 1% OR P99 Latency > 500ms)",
+  "diagramImageUrl": "/diagrams/microservices/red-metrics-block.svg",
+  "flowDiagramUrl": "/diagrams/microservices/red-metrics-flow.svg",
+  "sections": [
+    {
+      "heading": "Why You Should Never Alert on CPU Alone",
+      "body": "Many junior teams configure alarms that page on-call engineers whenever CPU crosses 85%. This causes alert fatigue: a database running a scheduled batch job at 90% CPU might be operating completely normally, while an API with 20% CPU could be returning 100% HTTP 500 errors to customers! The RED Method focuses on user-impacting symptoms. If your Rate is high, your Error rate is under 0.01%, and your P99 Duration is within SLA, the system is healthy—regardless of whether CPU is at 40% or 85%.",
+      "bullets": [
+        "Histogram Buckets: Always configure exponential latency buckets (`0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10`) to calculate accurate P95 and P99 percentiles.",
+        "PromQL Error Rate: `sum(rate(http_requests_total{status=~\"5..\"}[5m])) / sum(rate(http_requests_total[5m])) * 100`.",
+        "Multi-Window Burn-Rate Alerts: Google SRE's formula to page on-call only when the 30-day error budget is burning rapidly."
+      ],
+      "diagramImageUrl": "/diagrams/microservices/red-metrics-block.svg",
+      "flowDiagramUrl": "/diagrams/microservices/red-metrics-flow.svg"
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "RED Metrics & SLO Alerting",
+      "pros": "Directly mirrors user experience, eliminates 90% of alert fatigue, actionable on-call pages.",
+      "cons": "Requires tuning histogram buckets and establishing business SLO agreements.",
+      "bestFor": "All customer-facing microservices."
+    },
+    {
+      "option": "Host CPU / RAM Threshold Alerting",
+      "pros": "Simple default cloud metric.",
+      "cons": "High false-positive rate; doesn't detect application errors or hung threads.",
+      "bestFor": "Infrastructure autoscaling triggers only, never on-call paging."
+    }
+  ],
+  "interviewTip": "In operational architecture questions, state: 'I apply the RED method: Rate, Errors, and Duration. We define a Service Level Objective of 99.9% availability with P99 latency under 200ms, instrumenting Prometheus histograms to monitor compliance.'",
+  "jsonUrl": "/api/microservices/subtopics/observability-operations/red-metrics.json"
+}

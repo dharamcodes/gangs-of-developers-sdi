@@ -1,0 +1,327 @@
+ 
+
+const MODULE_6_OPERATIONS = {
+  id: "observability-operations",
+  topicNumber: 6,
+  title: "6. Observability, Security & Operations",
+  description: "Distributed Tracing with OpenTelemetry, RED Metrics, Centralized MDC Logging, Zero-Trust mTLS, and Strangler Fig Migration.",
+  subtopics: [
+    {
+      id: "distributed-tracing",
+      subtopicNumber: "6.1",
+      title: "Distributed Tracing with OpenTelemetry & W3C",
+      subtitle: "W3C TraceContext traceparent headers, span hierarchies, context propagation, and Jaeger / Zipkin visualization.",
+      readingTime: "8 min read",
+      difficulty: "Advanced",
+      accent: "#a855f7",
+      keyTakeaways: [
+        "In a microservices architecture where a single user click traverses 15 services, traditional single-server logs cannot identify which service caused a 3-second delay.",
+        "**Distributed Tracing** assigns a global `TraceID` to the ingress request and passes it across all HTTP/gRPC boundaries via the W3C `traceparent` header.",
+        "Each service creates a local `Span` with start time, duration, and metadata tags; tracing backends (Jaeger, Tempo) stitch them into a visual waterfall diagram."
+      ],
+      ascii: `+-------------------------------------------------------------------------+
+|                  DISTRIBUTED TRACE WATERFALL VISUALIZATION              |
++-------------------------------------------------------------------------+
+[TraceID: 4bf92f3577b34da6a3ce929d0e0e4736]
+---------------------------------------------------------------------------
+[Gateway: GET /checkout]       |==========================================| (1200ms)
+  [Order Svc: CreateOrder]     |=============================|             (800ms)
+    [User Svc: ValidateAuth]   |=======|                                   (150ms)
+    [Payment: ChargeCard]              |===================|               (550ms)
+      [Stripe Gateway: HUNG]                 |=============|               (450ms! BOTTLENECK!)`,
+      blockNodes: [
+        { x: 50, y: 110, w: 260, h: 200, title: 'Edge Gateway (Trace Root)', stroke: '#38bdf8', lines: ['Generates TraceID: 4bf92...', 'Generates Root Span: span-001', 'Injects W3C traceparent header', 'Propagates across all hops'], tag: 'Trace Root' },
+        { x: 370, y: 110, w: 260, h: 200, title: 'Inter-Service Mesh', stroke: '#10b981', lines: ['Order Service (Span: span-002)', 'Payment Service (Span: span-003)', 'Child-of relationships linked', 'Records SQL query & DB spans'], tag: 'Child Spans' },
+        { x: 690, y: 110, w: 260, h: 200, title: 'OpenTelemetry Collector', stroke: '#a855f7', lines: ['OTLP gRPC Export (Port 4317)', 'Jaeger / Grafana Tempo', 'Waterfall timeline rendering', 'Bottleneck latency heatmaps'], tag: 'Collector & UI' }
+      ],
+      blockConns: [
+        { d: 'M 310 210 L 370 210', lx: 340, ly: 200, label: 'traceparent' },
+        { d: 'M 630 210 L 690 210', lx: 660, ly: 200, label: 'OTLP Spans' }
+      ],
+      flowNodes: [
+        { x: 50, y: 150, w: 200, h: 140, step: '1', title: 'Trace Origin', stroke: '#38bdf8', lines: ['Gateway receives HTTP call', 'Extracts or creates TraceID', 'Starts Root Span timer'] },
+        { x: 280, y: 150, w: 210, h: 140, step: '2', title: 'Context Injection', stroke: '#10b981', lines: ['Injects traceparent header', 'Header: 00-4bf92...-001-01', 'Forwards via gRPC metadata'] },
+        { x: 520, y: 150, w: 210, h: 140, step: '3', title: 'Child Span Start', stroke: '#f59e0b', lines: ['Downstream extracts context', 'Creates child span with parentId', 'Captures DB query latency'] },
+        { x: 760, y: 150, w: 200, h: 140, step: '4', title: 'Waterfall Render', stroke: '#a855f7', lines: ['Spans sent to Jaeger async', 'Stitched into visual timeline', 'Pinpoints 450ms Stripe delay!'] }
+      ],
+      flowConns: [
+        { d: 'M 250 210 L 280 210', lx: 265, ly: 200, label: 'Init' },
+        { d: 'M 490 210 L 520 210', lx: 505, ly: 200, label: 'Propagate' },
+        { d: 'M 730 210 L 760 210', lx: 745, ly: 200, label: 'Export' }
+      ],
+      sections: [
+        {
+          heading: "The W3C TraceContext Standard: Anatomy of a Traceparent Header",
+          body: "Prior to the W3C standard, every tracing vendor used proprietary headers (Zipkin used `X-B3-TraceId`, AWS X-Ray used `X-Amzn-Trace-Id`, Jaeger used `uber-trace-id`), creating integration nightmares. The W3C TraceContext standard unified the industry around a single HTTP header: `traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01`. It consists of 4 hyphen-separated fields: Version (00), 16-byte TraceID, 8-byte Parent SpanID, and Trace Flags (01 = sampled).",
+          bullets: [
+            "Sampling Strategies: At 100,000 RPS, recording 100% of traces is cost-prohibitive. Use Probabilistic Sampling (1%) or Tail-Based Sampling (sample 100% of errors and slow calls > 2s).",
+            "Baggage Propagation: Propagate business context (e.g. `tenant_id=enterprise_42`) across the entire distributed call chain.",
+            "OpenTelemetry Auto-Instrumentation: Java and Node.js OpenTelemetry agents automatically instrument HTTP clients, gRPC, JDBC, and Redis without code changes."
+          ],
+          codeSnippet: {
+            title: "Manual Context Propagation with OpenTelemetry Go SDK",
+            code: `func callDownstream(ctx context.Context, url string) (*http.Response, error) {\n    tr := otel.Tracer("order-service")\n    ctx, span := tr.Start(ctx, "callDownstream", trace.WithSpanKind(trace.SpanKindClient))\n    defer span.End()\n\n    req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)\n    // Injects W3C traceparent header into HTTP request\n    otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))\n    return http.DefaultClient.Do(req)\n}`
+          }
+        }
+      ],
+      tradeOffs: [
+        { option: "OpenTelemetry Distributed Tracing", pros: "Vendor-neutral standard, pinpoints exact bottleneck microservice in 1 click, automatic instrumentation libraries.", cons: "Adds slight header serialization overhead; high storage cost if tail-based sampling is not configured.", bestFor: "Mandatory for all microservice architectures with > 3 services." },
+        { option: "Isolated Server Logs", pros: "Simple to write `console.log`.", cons: "Completely impossible to debug distributed latency issues across 10 services.", bestFor: "Single-process monoliths only." }
+      ],
+      interviewTip: "In every system design interview, explicitly mention distributed tracing: 'We will instrument all microservices with OpenTelemetry, propagating the W3C traceparent header to visualize cross-service latency waterfalls in Jaeger.'"
+    },
+    {
+      id: "red-metrics",
+      subtopicNumber: "6.2",
+      title: "RED Metrics, Golden Signals & Prometheus",
+      subtitle: "Rate, Errors, Duration (RED), Google's Four Golden Signals, Prometheus counters, and Grafana SLI/SLO alerting.",
+      readingTime: "7 min read",
+      difficulty: "Intermediate",
+      accent: "#f59e0b",
+      keyTakeaways: [
+        "Tom Wilkie's **RED Method** defines the three core metrics for microservices: **Rate** (requests per second), **Errors** (failed requests per second), and **Duration** (latency distribution).",
+        "Google's **Four Golden Signals**: Latency, Traffic, Errors, and Saturation (CPU, memory, thread pool exhaustion).",
+        "Instrument endpoints using Prometheus metrics; alert strictly on **SLO Breaches** (e.g. P99 latency > 500ms for 5 minutes) rather than noisy CPU thresholds."
+      ],
+      ascii: `+-------------------------------------------------------------------------+
+|                  THE RED METHOD MONITORING DASHBOARD                    |
++-------------------------------------------------------------------------+
+  [Rate (Traffic)]       --> http_requests_total [25,400 req/s]
+  [Errors (Failures)]    --> http_requests_total{status=~"5.."} [12 req/s (0.04%)]
+  [Duration (Latency)]   --> P50: 18ms | P95: 85ms | P99: 240ms (Histogram)
+---------------------------------------------------------------------------
+  (Alert Triggered only when Error Rate > 1% OR P99 Latency > 500ms)`,
+      blockNodes: [
+        { x: 50, y: 110, w: 260, h: 200, title: 'Microservice Metrics Source', stroke: '#38bdf8', lines: ['Spring Actuator / Prometheus Go', 'Exposes /metrics endpoint', 'Tracks Rate, Errors, Duration', 'Histogram buckets: [0.05, 0.1, 0.5, 2]'], tag: 'Instrumentation' },
+        { x: 370, y: 110, w: 260, h: 200, title: 'Prometheus Server', stroke: '#f59e0b', lines: ['Scrapes /metrics every 15s', 'High-compression TSDB', 'Evaluates PromQL alert rules', 'Prometheus Alertmanager'], tag: 'TSDB & Engine' },
+        { x: 690, y: 110, w: 260, h: 200, title: 'Grafana & Alert Sinks', stroke: '#10b981', lines: ['Grafana Live Dashboards', 'SLO Burn-Rate Alerts', 'PagerDuty (High Urgency)', 'Slack #oncall-alerts (Low)'], tag: 'Visualization' }
+      ],
+      blockConns: [
+        { d: 'M 310 210 L 370 210', lx: 340, ly: 200, label: 'Scrape (15s)' },
+        { d: 'M 630 210 L 690 210', lx: 660, ly: 200, label: 'PromQL Alert' }
+      ],
+      flowNodes: [
+        { x: 50, y: 150, w: 200, h: 140, step: '1', title: 'HTTP Execution', stroke: '#38bdf8', lines: ['Request completes in 42ms', 'Status code HTTP 200', 'Interceptor captures stats'] },
+        { x: 280, y: 150, w: 210, h: 140, step: '2', title: 'Increment Metrics', stroke: '#f59e0b', lines: ['Increment requests_total', 'Observe latency into bucket', 'Zero network call (in-memory)'] },
+        { x: 520, y: 150, w: 210, h: 140, step: '3', title: 'Prometheus Scrape', stroke: '#10b981', lines: ['Prometheus pulls /metrics', 'Calculates rate() over 5m', 'Updates P99 quantile'] },
+        { x: 760, y: 150, w: 200, h: 140, step: '4', title: 'SLO Evaluation', stroke: '#a855f7', lines: ['If P99 > 500ms for 5m:', 'Alertmanager pages on-call', 'Dashboard shows impacted pod'] }
+      ],
+      flowConns: [
+        { d: 'M 250 210 L 280 210', lx: 265, ly: 200, label: 'Record' },
+        { d: 'M 490 210 L 520 210', lx: 505, ly: 200, label: 'Scrape' },
+        { d: 'M 730 210 L 760 210', lx: 745, ly: 200, label: 'Alert' }
+      ],
+      sections: [
+        {
+          heading: "Why You Should Never Alert on CPU Alone",
+          body: "Many junior teams configure alarms that page on-call engineers whenever CPU crosses 85%. This causes alert fatigue: a database running a scheduled batch job at 90% CPU might be operating completely normally, while an API with 20% CPU could be returning 100% HTTP 500 errors to customers! The RED Method focuses on user-impacting symptoms. If your Rate is high, your Error rate is under 0.01%, and your P99 Duration is within SLA, the system is healthy—regardless of whether CPU is at 40% or 85%.",
+          bullets: [
+            "Histogram Buckets: Always configure exponential latency buckets (`0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10`) to calculate accurate P95 and P99 percentiles.",
+            "PromQL Error Rate: `sum(rate(http_requests_total{status=~\"5..\"}[5m])) / sum(rate(http_requests_total[5m])) * 100`.",
+            "Multi-Window Burn-Rate Alerts: Google SRE's formula to page on-call only when the 30-day error budget is burning rapidly."
+          ]
+        }
+      ],
+      tradeOffs: [
+        { option: "RED Metrics & SLO Alerting", pros: "Directly mirrors user experience, eliminates 90% of alert fatigue, actionable on-call pages.", cons: "Requires tuning histogram buckets and establishing business SLO agreements.", bestFor: "All customer-facing microservices." },
+        { option: "Host CPU / RAM Threshold Alerting", pros: "Simple default cloud metric.", cons: "High false-positive rate; doesn't detect application errors or hung threads.", bestFor: "Infrastructure autoscaling triggers only, never on-call paging." }
+      ],
+      interviewTip: "In operational architecture questions, state: 'I apply the RED method: Rate, Errors, and Duration. We define a Service Level Objective of 99.9% availability with P99 latency under 200ms, instrumenting Prometheus histograms to monitor compliance.'"
+    },
+    {
+      id: "centralized-logging",
+      subtopicNumber: "6.3",
+      title: "Centralized Logging & Correlation IDs (MDC)",
+      subtitle: "Mapped Diagnostic Context (MDC), structured JSON log schemas, log shippers (FluentBit), and ELK / OpenSearch aggregation.",
+      readingTime: "7 min read",
+      difficulty: "Intermediate",
+      accent: "#38bdf8",
+      keyTakeaways: [
+        "In a microservices ecosystem with 50 containers, SSH-ing into individual servers to grep log files is impossible; logs must be streamed to a centralized index (OpenSearch/ELK).",
+        "Use **Mapped Diagnostic Context (MDC)** to automatically bind `CorrelationId`, `UserId`, and `TraceId` to all log statements on that thread.",
+        "Always output logs in structured **JSON format** with standardized keys (`timestamp`, `level`, `message`, `service`, `trace_id`), enabling instant sub-second filtering."
+      ],
+      ascii: `+-------------------------------------------------------------------------+
+|                  CENTRALIZED STRUCTURED LOGGING PIPELINE                |
++-------------------------------------------------------------------------+
+[App Container] --- stdout (Structured JSON) ---> [FluentBit DaemonSet]
+                                                          |
+                                                          v (Buffer & Ship)
+                                            [Centralized OpenSearch / ELK]
+                                                          |
+                                                          v
+                                            [Kibana: Query trace_id="abc"]
+                                            (All 50 log lines across 6 services!)`,
+      blockNodes: [
+        { x: 50, y: 110, w: 260, h: 200, title: 'App Container (stdout)', stroke: '#38bdf8', lines: ['Writes JSON logs to stdout', 'MDC binds CorrelationId', 'Zero file logging in container', 'Non-blocking logging (Logback)'], tag: 'Microservice' },
+        { x: 370, y: 110, w: 260, h: 200, title: 'FluentBit DaemonSet', stroke: '#10b981', lines: ['Node-level log agent', 'Tails /var/log/pods/*.log', 'Parses JSON & redacts PII', 'Compresses and batches to sink'], tag: 'Log Shipper' },
+        { x: 690, y: 110, w: 260, h: 200, title: 'OpenSearch / Kibana', stroke: '#a855f7', lines: ['Centralized search cluster', 'Indexed by trace_id and user_id', 'Sub-second log aggregation', 'Audit trail compliance'], tag: 'Storage & UI' }
+      ],
+      blockConns: [
+        { d: 'M 310 210 L 370 210', lx: 340, ly: 200, label: 'stdout' },
+        { d: 'M 630 210 L 690 210', lx: 660, ly: 200, label: 'Ship Logs' }
+      ],
+      flowNodes: [
+        { x: 50, y: 150, w: 200, h: 140, step: '1', title: 'HTTP Intercept', stroke: '#38bdf8', lines: ['Request arrives at service', 'Extracts X-Correlation-ID', 'Stores in MDC thread-local'] },
+        { x: 280, y: 150, w: 210, h: 140, step: '2', title: 'Emit JSON Log', stroke: '#10b981', lines: ['Developer calls log.info()', 'Logback outputs JSON with ID', 'Flushed to stdout'] },
+        { x: 520, y: 150, w: 210, h: 140, step: '3', title: 'DaemonSet Shipper', stroke: '#f59e0b', lines: ['FluentBit captures stdout', 'Enriches with K8s pod metadata', 'Streams to OpenSearch cluster'] },
+        { x: 760, y: 150, w: 200, h: 140, step: '4', title: 'Kibana Search', stroke: '#a855f7', lines: ['Engineer searches correlationId', 'Displays unified chronological log', 'Bug identified in 30 seconds'] }
+      ],
+      flowConns: [
+        { d: 'M 250 210 L 280 210', lx: 265, ly: 200, label: 'MDC Bind' },
+        { d: 'M 490 210 L 520 210', lx: 505, ly: 200, label: 'stdout' },
+        { d: 'M 730 210 L 760 210', lx: 745, ly: 200, label: 'Index' }
+      ],
+      sections: [
+        {
+          heading: "Mapped Diagnostic Context (MDC) in Java / Spring Boot",
+          body: "When an engineer writes `log.info(\"Processing payment\")`, that message alone is useless when 5,000 customers are checking out simultaneously. Which customer is it? Which order? In Java, SLF4J provides MDC: a thread-local key-value map. An HTTP filter extracts the `X-Correlation-ID` header upon request entry and puts it into MDC: `MDC.put(\"correlationId\", correlationId)`. From that moment on, every single log statement printed on that thread automatically includes the correlation ID in its JSON output.",
+          bullets: [
+            "PII Redaction: Ensure your log shipper automatically masks credit card numbers (`4111********1111`) and social security numbers before indexing.",
+            "Log Level Dynamic Configuration: Use Spring Boot Actuator `/actuator/loggers` to dynamically change log levels from INFO to DEBUG in production without restarting pods.",
+            "Asynchronous Appenders: Never use synchronous file logging inside the app; use LMAX Disruptor or AsyncAppender to prevent slow disks from blocking HTTP worker threads."
+          ],
+          codeSnippet: {
+            title: "Spring Boot Filter Binding Correlation ID to SLF4J MDC",
+            code: `@Component\npublic class CorrelationIdFilter extends OncePerRequestFilter {\n    @Override\n    protected void doFilterInternal(HttpServletRequest req, HttpServletResponse res, FilterChain chain)\n            throws ServletException, IOException {\n        String corrId = req.getHeader("X-Correlation-ID");\n        if (corrId == null || corrId.isBlank()) {\n            corrId = UUID.randomUUID().toString();\n        }\n        MDC.put("correlationId", corrId);\n        res.setHeader("X-Correlation-ID", corrId);\n        try {\n            chain.doFilter(req, res);\n        } finally {\n            MDC.clear(); // Always clear thread-local to prevent leaks!\n        }\n    }\n}`
+          }
+        }
+      ],
+      tradeOffs: [
+        { option: "Centralized Structured JSON Logging", pros: "Instant searchability across millions of log lines, zero container disk consumption, easy alerting.", cons: "Storage costs can explode if debug logging is left enabled; requires running OpenSearch/ELK.", bestFor: "Standard production microservices." },
+        { option: "Local File Logging (/var/log/app.log)", pros: "Zero external dependencies.", cons: "Logs lost permanently when Kubernetes pods restart; impossible to correlate cross-service errors.", bestFor: "Local developer laptop debugging only." }
+      ],
+      interviewTip: "Explain: 'We log strictly to stdout in structured JSON format. An HTTP filter populates the SLF4J MDC with a Correlation ID, which is propagated across all downstream RPC headers, allowing us to query Kibana by Correlation ID to reconstruct the exact cross-service request journey.'"
+    },
+    {
+      id: "zero-trust-mtls",
+      subtopicNumber: "6.4",
+      title: "Zero-Trust Security, mTLS & JWT Propagation",
+      subtitle: "SPIFFE/SPIRE cryptographic identities, service-to-service mutual TLS, OAuth2 Resource Server, and claims propagation.",
+      readingTime: "8 min read",
+      difficulty: "Staff+",
+      accent: "#ef4444",
+      keyTakeaways: [
+        "In a modern cloud environment, the internal network is not trusted (**Zero-Trust Model**): every inter-service call must be authenticated and encrypted.",
+        "Mutual TLS (**mTLS**) authenticates both the client and server using X.509 cryptographic certificates, encrypting traffic on the wire.",
+        "Combine mTLS (service-to-service identity) with **JWT Token Propagation** (user context and permissions) to enforce fine-grained role-based access control (RBAC)."
+      ],
+      ascii: `+-------------------------------------------------------------------------+
+|                  ZERO-TRUST DUAL SECURITY LAYER (mTLS + JWT)            |
++-------------------------------------------------------------------------+
+[Client User] --- (Bearer JWT: user_id=42, role=admin) ---> [API Gateway]
+                                                                  |
+                  (Layer 1: Mutual TLS Encryption & SPIFFE Identity)
+                  (Layer 2: Forwards Verified JWT Claims Header)
+                                                                  v
+                                                           [Order Service]
+                                                                  |
+                  (Validates: Caller is Gateway AND User is Admin)
+                                                                  v
+                                                           [Payment Service]`,
+      blockNodes: [
+        { x: 50, y: 110, w: 260, h: 200, title: 'API Gateway Bastion', stroke: '#38bdf8', lines: ['Edge OAuth2 Resource Server', 'Validates User JWT signature', 'SPIFFE ID: spiffe://cluster/ns/gw', 'Initiates mTLS handshake'], tag: 'Edge Auth' },
+        { x: 370, y: 110, w: 260, h: 200, title: 'Encrypted Wire Mesh', stroke: '#ef4444', lines: ['Dual-layer security:', '1. mTLS Transport (SPIFFE)', '2. User Context Header (JWT)', 'Protects against packet sniffing'], tag: 'Zero-Trust' },
+        { x: 690, y: 110, w: 260, h: 200, title: 'Downstream Service', stroke: '#10b981', lines: ['Validates caller cert == gw', 'Validates user role == admin', 'RBAC policy enforced', 'Rejects unauthorized calls'], tag: 'Enforcement' }
+      ],
+      blockConns: [
+        { d: 'M 310 210 L 370 210', lx: 340, ly: 200, label: 'mTLS' },
+        { d: 'M 630 210 L 690 210', lx: 660, ly: 200, label: 'JWT Claims' }
+      ],
+      flowNodes: [
+        { x: 50, y: 150, w: 200, h: 140, step: '1', title: 'Edge Token Verify', stroke: '#38bdf8', lines: ['Client presents OAuth2 JWT', 'Gateway verifies RSA signature', 'Extracts subject and roles'] },
+        { x: 280, y: 150, w: 210, h: 140, step: '2', title: 'mTLS Handshake', stroke: '#ef4444', lines: ['Gateway connects to Order Svc', 'Exchanges X.509 certificates', 'Verifies SPIFFE caller identity'] },
+        { x: 520, y: 150, w: 210, h: 140, step: '3', title: 'Inject User Claims', stroke: '#10b981', lines: ['Gateway injects X-User-Id header', 'Injected into encrypted channel', 'Protects against spoofing'] },
+        { x: 760, y: 150, w: 200, h: 140, step: '4', title: 'RBAC Authorization', stroke: '#a855f7', lines: ['Order Svc checks permissions', 'Confirms service & user roles', 'Executes mutation safely'] }
+      ],
+      flowConns: [
+        { d: 'M 250 210 L 280 210', lx: 265, ly: 200, label: 'Verify' },
+        { d: 'M 490 210 L 520 210', lx: 505, ly: 200, label: 'Handshake' },
+        { d: 'M 730 210 L 760 210', lx: 745, ly: 200, label: 'Authorize' }
+      ],
+      sections: [
+        {
+          heading: "The Castle-and-Moat Anti-Pattern vs Zero Trust",
+          body: "The traditional 'Castle-and-Moat' security model assumes that once traffic enters the internal private VPC, everything inside is trusted and can communicate unencrypted via plain HTTP. This is a fatal flaw: an attacker who compromises a single low-security microservice (e.g. an image resize utility) can sniff internal network traffic, intercept unencrypted credit card numbers, and make arbitrary internal RPC calls to billing. Zero Trust mandates that network location implies zero trust: every microservice must authenticate its peers via mTLS and verify user authorizations.",
+          bullets: [
+            "SPIFFE/SPIRE: Gives every pod a cryptographic identity (`spiffe://prod/ns/payments/sa/payment-sa`) backed by short-lived X.509 certificates rotated hourly.",
+            "Token Chaining: Using OAuth2 Token Exchange (RFC 8693) to exchange a client token for a downscoped inter-service delegation token.",
+            "Kubernetes NetworkPolicies: Complement mTLS with Layer 4 firewall rules that block unauthorized Pod-to-Pod TCP connections."
+          ]
+        }
+      ],
+      tradeOffs: [
+        { option: "Zero-Trust mTLS + JWT Propagation", pros: "Defense-in-depth, immune to internal packet sniffing, cryptographically verifiable caller identities.", cons: "Certificate rotation operational overhead; CPU overhead of TLS handshakes (mitigated by session resumption).", bestFor: "Fintech, healthcare, and modern enterprise microservices." },
+        { option: "Perimeter Security Only (Plain HTTP Internally)", pros: "Zero encryption CPU overhead.", cons: "Catastrophic lateral movement risk if any container is breached.", bestFor: "Never recommended in modern cloud environments." }
+      ],
+      interviewTip: "In security rounds, distinguish between service identity and user identity: 'We enforce dual-layer security: Istio mTLS authenticates service identity via SPIFFE certificates, while a signed JWT propagated in the headers carries the authenticated user's context and roles.'"
+    },
+    {
+      id: "strangler-fig",
+      subtopicNumber: "6.5",
+      title: "Strangler Fig Migration Pattern",
+      subtitle: "Decomposing legacy monoliths, edge reverse proxy interception, shadow routing, and incremental phased deprecation.",
+      readingTime: "8 min read",
+      difficulty: "Advanced",
+      accent: "#ec4899",
+      keyTakeaways: [
+        "Never attempt a 'Big-Bang Rewrite' of a large monolithic system; big-bang rewrites almost always fail due to scope creep and moving business targets.",
+        "The **Strangler Fig Pattern** incrementally replaces specific features of the monolith with new microservices behind an intercepting reverse proxy.",
+        "Over time, traffic to the monolith shrinks to zero until the legacy system is safely decommissioned."
+      ],
+      ascii: `+-------------------------------------------------------------------------+
+|                  STRANGLER FIG MIGRATION TIMELINE                       |
++-------------------------------------------------------------------------+
+  [Phase 1: Ingress Interceptor]    [Phase 2: Extract Auth]         [Phase 3: Complete]
+  [Clients]                         [Clients]                       [Clients]
+     |                                 |                               |
+  [Strangler Proxy]                 [Strangler Proxy]               [API Gateway]
+     | (100% Traffic)                  | (10% Auth)  | (90% Legacy)    |
+     v                                 v             v                 v
+  [Legacy Monolith]                 [Auth Svc]  [Monolith]          [Microservices Fleet]
+                                    (New Cloud) (Shrinking)         (Monolith Retired!)`,
+      blockNodes: [
+        { x: 50, y: 110, w: 260, h: 200, title: 'Edge Strangler Proxy', stroke: '#ec4899', lines: ['Cloudflare / NGINX / Envoy', 'Inspects URL paths & headers', 'Canary & Shadow Traffic Splitting', 'Zero client app changes'], tag: 'Reverse Proxy' },
+        { x: 370, y: 80, w: 260, h: 90, title: 'New Microservices', stroke: '#10b981', lines: ['/api/v2/auth (Spring Boot)', '/api/v2/orders (Go)', 'Modern cloud databases'], tag: 'Extracted' },
+        { x: 370, y: 195, w: 260, h: 115, title: 'Legacy Monolith (Shrinking)', stroke: '#ef4444', lines: ['/legacy/* (Remaining modules)', 'Old Oracle Shared DB', 'Gradually deprecated'], tag: 'Legacy' },
+        { x: 690, y: 110, w: 260, h: 200, title: 'Dual-Write / CDC Bridge', stroke: '#f59e0b', lines: ['Debezium / Kafka Connect', 'Syncs Legacy DB & Cloud DB', 'Bi-directional consistency', 'Enables instant rollback!'], tag: 'Safety Bridge' }
+      ],
+      blockConns: [
+        { d: 'M 310 160 L 370 125', lx: 340, ly: 135, label: 'New Route' },
+        { d: 'M 310 220 L 370 240', lx: 340, ly: 220, label: 'Legacy Route' },
+        { d: 'M 630 180 L 690 180', lx: 660, ly: 170, label: 'Sync DBs' }
+      ],
+      flowNodes: [
+        { x: 50, y: 150, w: 200, h: 140, step: '1', title: 'Deploy Proxy', stroke: '#ec4899', lines: ['Deploy reverse proxy at edge', 'All legacy traffic routed 1:1', 'Establish latency baselines'] },
+        { x: 280, y: 150, w: 210, h: 140, step: '2', title: 'Extract First Domain', stroke: '#10b981', lines: ['Build new Auth microservice', 'Deploy to Kubernetes', 'Shadow 10% traffic to test'] },
+        { x: 520, y: 150, w: 210, h: 140, step: '3', title: 'Shift Traffic', stroke: '#38bdf8', lines: ['Proxy redirects /auth traffic', '100% traffic to microservice', 'Monolith auth code unhit'] },
+        { x: 760, y: 150, w: 200, h: 140, step: '4', title: 'Retire Monolith', stroke: '#a855f7', lines: ['Repeat for catalog and billing', 'Delete dead monolith modules', 'Final monolith server shut down'] }
+      ],
+      flowConns: [
+        { d: 'M 250 210 L 280 210', lx: 265, ly: 200, label: 'Proxy' },
+        { d: 'M 490 210 L 520 210', lx: 505, ly: 200, label: 'Shadow' },
+        { d: 'M 730 210 L 760 210', lx: 745, ly: 200, label: 'Decommission' }
+      ],
+      sections: [
+        {
+          heading: "The Three Phased Steps: Transform, Coexist, Eliminate",
+          body: "Named after Australian strangler figs that germinate in the branches of host trees and slowly grow down until they replace the host tree, this pattern breaks legacy modernization into safe, incremental releases. First, deploy a reverse proxy in front of the monolith. Second, implement a single cohesive domain (e.g. Authentication or Notifications) as a modern microservice. Third, configure the proxy to route traffic for that path to the new microservice. Bi-directional database replication bridges the two systems, allowing instant traffic rollback if a bug is discovered.",
+          bullets: [
+            "Dark Launching & Shadow Traffic: Mirror production requests to both the monolith and the new microservice, comparing responses asynchronously to verify correctness.",
+            "Feature Flags: Use LaunchDarkly to dynamically switch users between monolith and microservice routes based on user tier.",
+            "Decommissioning Discipline: Once a module is 100% migrated, immediately delete the dead code inside the monolith to avoid zombie logic."
+          ]
+        }
+      ],
+      tradeOffs: [
+        { option: "Strangler Fig Pattern", pros: "Zero downtime, continuous delivery of business value, instant rollback capability, low risk.", cons: "Requires running both legacy and modern systems simultaneously; complex data synchronization bridge.", bestFor: "Decomposing large production monoliths." },
+        { option: "Big-Bang Rewrite", pros: "Clean greenfield codebase; no temporary sync bridges.", cons: "Extremely high failure rate; takes 2+ years during which business competitors innovate.", bestFor: "Never recommended for business-critical enterprise applications." }
+      ],
+      interviewTip: "When asked 'How would you migrate our 10-year-old monolithic Rails application to microservices?', immediately answer: 'I will use the Strangler Fig pattern behind an Envoy reverse proxy, migrating one bounded context at a time and using dark launching to verify parity before deprecating legacy routes.'"
+    }
+  ]
+};
+
+module.exports = {
+  MODULE_6_OPERATIONS
+};

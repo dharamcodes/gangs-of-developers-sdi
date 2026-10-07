@@ -1,0 +1,52 @@
+{
+  "id": "prototype",
+  "topicId": "creational-patterns",
+  "topicTitle": "1. Creational Patterns",
+  "topicNumber": 1,
+  "subtopicNumber": "1.4",
+  "title": "Prototype Pattern",
+  "subtitle": "Specifies the kinds of objects to create using a prototypical instance, and creates new objects by copying this prototype.",
+  "readingTime": "6 min read",
+  "difficulty": "Intermediate",
+  "keyTakeaways": [
+    "Creates new objects by cloning an existing configured instance, bypassing expensive constructor calls or external database lookups.",
+    "Crucial for high-throughput systems where object construction involves heavy initialization (e.g., parsing XML, loading AI weight matrices, fetching schema metadata).",
+    "Requires deep attention to Deep Copy vs Shallow Copy semantics to prevent shared mutable state bugs."
+  ],
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                        PROTOTYPE UML CLASS MODEL                        |\n+-------------------------------------------------------------------------+\n                  +--------------------------------+\n                  |         <<interface>>          |\n                  |           Prototype            |\n                  +--------------------------------+\n                  | + clone(): Prototype           |\n                  +---------------^----------------+\n                                  |\n              +-------------------+-------------------+\n              |                                       |\n+-------------+--------------+          +-------------+--------------+\n|       NetworkPacket        |          |      DocumentTemplate      |\n+----------------------------+          +----------------------------+\n| - payload: byte[]          |          | - styles: Map<String,Style>|\n| + clone(): NetworkPacket   |          | + clone(): DocumentTemplate|\n+----------------------------+          +----------------------------+",
+  "diagramImageUrl": "/diagrams/design-patterns/prototype-block.svg",
+  "flowDiagramUrl": "/diagrams/design-patterns/prototype-flow.svg",
+  "sections": [
+    {
+      "heading": "High-Performance Object Replication and Deep Copy Safety",
+      "body": "When object initialization involves disk I/O, database queries, or expensive mathematical calculations, repeating that work on every request degrades throughput. The Prototype pattern stores pre-configured instances in an in-memory Prototype Registry. New instances are created by cloning the pre-computed prototype in milliseconds.",
+      "bullets": [
+        "Bypasses Constructor Penalties: Instant memory allocation without re-running compute-heavy initialization routines.",
+        "Dynamic Runtime Composition: You can add and remove prototype templates at runtime without code redeployment.",
+        "Deep Copy Requirement: Never use shallow clones for mutable reference types; always recursively clone child arrays and objects."
+      ],
+      "codeSnippet": {
+        "title": "Thread-Safe Prototype Registry in Java 21",
+        "code": "public interface Prototype<T> {\n    T clone();\n}\n\npublic record ServerConfig(String os, int port, List<String> flags) implements Prototype<ServerConfig> {\n    @Override\n    public ServerConfig clone() {\n        // Deep copy of mutable list\n        return new ServerConfig(this.os, this.port, new ArrayList<>(this.flags));\n    }\n}\n\npublic class PrototypeRegistry {\n    private final Map<String, Prototype<?>> registry = new ConcurrentHashMap<>();\n\n    public void register(String key, Prototype<?> prototype) {\n        registry.put(key, prototype);\n    }\n\n    @SuppressWarnings(\"unchecked\")\n    public <T> T createFromPrototype(String key) {\n        Prototype<?> p = registry.get(key);\n        if (p == null) throw new NoSuchElementException(\"Prototype not found: \" + key);\n        return (T) p.clone();\n    }\n}"
+      },
+      "flowDiagramUrl": "/diagrams/design-patterns/prototype-flow.svg",
+      "diagramImageUrl": "/diagrams/design-patterns/prototype-block.svg"
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Prototype Pattern",
+      "pros": "Massive speedup for expensive-to-initialize objects; dynamic configuration caching.",
+      "cons": "Cloning complex objects with circular references is notoriously difficult to implement bug-free.",
+      "bestFor": "Game development (spawning entities), simulation engines, database query AST cloning."
+    },
+    {
+      "option": "Factory Re-Instantiation",
+      "pros": "Guarantees freshly minted objects from scratch; simple logic without deep-copy headaches.",
+      "cons": "Incurs full initialization latency, I/O cost, and database roundtrips repeatedly.",
+      "bestFor": "Lightweight objects whose constructors execute in nanoseconds."
+    }
+  ],
+  "interviewTip": "Be ready to explain the difference between Shallow Copy (copying references so both objects point to the same memory buffer) and Deep Copy (allocating new memory and recursively copying all data structures). Mention Java's Cloneable interface flaws and why copy constructors are preferred in modern Java.",
+  "jsonUrl": "/api/design-patterns/subtopics/creational-patterns/prototype.json"
+}

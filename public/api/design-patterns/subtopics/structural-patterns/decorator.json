@@ -1,0 +1,52 @@
+{
+  "id": "decorator",
+  "topicId": "structural-patterns",
+  "topicTitle": "2. Structural Patterns",
+  "topicNumber": 2,
+  "subtopicNumber": "2.4",
+  "title": "Decorator Pattern",
+  "subtitle": "Attaches additional responsibilities to an object dynamically, providing a flexible alternative to subclassing for extending functionality.",
+  "readingTime": "8 min read",
+  "difficulty": "Foundational",
+  "keyTakeaways": [
+    "Adds behavior to individual objects dynamically at runtime without affecting other instances of the same class.",
+    "Follows the Open/Closed Principle: extend functionality via wrapper layers without modifying existing classes.",
+    "Found throughout Java I/O (`new BufferedReader(new InputStreamReader(new FileInputStream(file)))`) and HTTP middleware filter chains."
+  ],
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                        DECORATOR UML CLASS MODEL                        |\n+-------------------------------------------------------------------------+\n                      +-----------------------------+\n                      |        <<interface>>        |\n                      |          DataSource         |\n                      +-----------------------------+\n                      | + writeData(data): void     |\n                      | + readData(): String        |\n                      +--------------^--------------+\n                                     |\n             +-----------------------+-----------------------+\n             |                                               |\n+------------+------------+                     +------------+------------+\n|     FileDataSource      |                     |   DataSourceDecorator   |\n+-------------------------+                     +-------------------------+\n| + writeData(): [Disk]   |                     | - wrappee: DataSource   |\n+-------------------------+                     | + writeData(): delegate |\n                                                +------------^------------+\n                                                             |\n                                      +----------------------+----------------------+\n                                      |                                             |\n                         +------------+------------+                   +------------+------------+\n                         |   EncryptionDecorator   |                   |   CompressionDecorator  |\n                         +-------------------------+                   +-------------------------+\n                         | + writeData(): encrypt  |                   | + writeData(): compress |\n                         +-------------------------+                   +-------------------------+",
+  "diagramImageUrl": "/diagrams/design-patterns/decorator-block.svg",
+  "flowDiagramUrl": "/diagrams/design-patterns/decorator-flow.svg",
+  "sections": [
+    {
+      "heading": "Dynamic Composition Over Static Subclassing",
+      "body": "Subclassing creates rigid compile-time behavior: if you have a Logger, and you need TimestampLogging, FileLogging, and SlackLogging, creating subclasses for all permutations requires `TimestampSlackLogger`, `TimestampFileLogger`, etc. Decorator replaces this with nested wrappers that can be stacked arbitrarily in any order at runtime.",
+      "bullets": [
+        "Single Responsibility Principle: Each decorator class focuses exclusively on one orthogonal concern (caching, logging, encryption, metrics).",
+        "Transparent Wrapping: Since decorators implement the exact same interface as the wrapped object, the caller cannot tell them apart.",
+        "Dynamic Assembly: Decorator chains can be assembled conditionally depending on feature flags or configuration files."
+      ],
+      "codeSnippet": {
+        "title": "Resilient HTTP Client Pipeline using Decorators in Java 21",
+        "code": "public interface HttpExecution {\n    String send(String request);\n}\n\n// Base Concrete Component\npublic class SimpleHttpClient implements HttpExecution {\n    @Override public String send(String request) {\n        return \"200 OK: payload for \" + request;\n    }\n}\n\n// Abstract Decorator\npublic abstract class HttpDecorator implements HttpExecution {\n    protected final HttpExecution inner;\n    protected HttpDecorator(HttpExecution inner) { this.inner = inner; }\n}\n\n// Concrete Decorator 1: Metrics\npublic class MetricsHttpDecorator extends HttpDecorator {\n    public MetricsHttpDecorator(HttpExecution inner) { super(inner); }\n    @Override public String send(String request) {\n        long start = System.currentTimeMillis();\n        try {\n            return inner.send(request);\n        } finally {\n            System.out.println(\"Execution latency: \" + (System.currentTimeMillis() - start) + \"ms\");\n        }\n    }\n}\n\n// Concrete Decorator 2: Retries\npublic class RetryHttpDecorator extends HttpDecorator {\n    public RetryHttpDecorator(HttpExecution inner) { super(inner); }\n    @Override public String send(String request) {\n        for (int i = 0; i < 3; i++) {\n            try { return inner.send(request); }\n            catch (Exception e) { System.out.println(\"Retry attempt \" + (i + 1)); }\n        }\n        throw new RuntimeException(\"All retries exhausted\");\n    }\n}"
+      },
+      "flowDiagramUrl": "/diagrams/design-patterns/decorator-flow.svg",
+      "diagramImageUrl": "/diagrams/design-patterns/decorator-block.svg"
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Decorator Pattern",
+      "pros": "High flexibility, dynamic configuration, eliminates subclass combinatorial explosion.",
+      "cons": "Debugging deep nested wrappers with stack traces can be tricky; order of decorators matters.",
+      "bestFor": "Stream processing, HTTP middleware pipelines, caching & logging wrappers, UI widget overlays."
+    },
+    {
+      "option": "Subclassing / Inheritance",
+      "pros": "Straightforward for fixed static variations with zero runtime configuration.",
+      "cons": "Rigid compile-time binding; cannot combine independent behaviors without duplicating code.",
+      "bestFor": "Extending classes where behaviors are not composable or stackable."
+    }
+  ],
+  "interviewTip": "In interviews, cite `java.io.BufferedReader` and `java.io.InputStream` as the definitive standard library example of the Decorator pattern. Point out that Decorator differs from Proxy because Proxy *controls access* to an object without changing behavior, whereas Decorator *enhances behavior*.",
+  "jsonUrl": "/api/design-patterns/subtopics/structural-patterns/decorator.json"
+}

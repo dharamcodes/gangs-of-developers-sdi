@@ -1,0 +1,48 @@
+{
+  "id": "kafka-partitions",
+  "topicId": "event-driven-messaging",
+  "topicTitle": "5. Event-Driven Architecture & Messaging",
+  "topicNumber": 5,
+  "subtopicNumber": "5.2",
+  "title": "Apache Kafka Partitioning & Consumer Groups",
+  "subtitle": "Partition keys, topic parallelism, consumer group rebalancing, and consumer lag monitoring.",
+  "readingTime": "8 min read",
+  "difficulty": "Advanced",
+  "keyTakeaways": [
+    "A Kafka topic is divided into **Partitions**: the fundamental unit of parallelism and storage in Apache Kafka.",
+    "Kafka guarantees strict message ordering **only within a single partition**, never across different partitions.",
+    "A **Consumer Group** coordinates multiple workers: each partition is consumed by exactly one consumer within the group."
+  ],
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                 KAFKA PARTITIONS & CONSUMER GROUP TOPOLOGY              |\n+-------------------------------------------------------------------------+\n  [Kafka Topic: orders (4 Partitions)]       [Consumer Group: order-workers]\n  +-----------------------------------+      +-------------------------------+\n  | Partition 0 (hash(key) == 0) ----+-----> | Consumer Instance 1           |\n  | Partition 1 (hash(key) == 1) ----+-----> | Consumer Instance 2           |\n  | Partition 2 (hash(key) == 2) ----+-----> | Consumer Instance 3           |\n  | Partition 3 (hash(key) == 3) ----+-----> | Consumer Instance 4           |\n  +-----------------------------------+      +-------------------------------+\n(Adding a 5th consumer will leave it IDLE; max parallel consumers = # of partitions!)",
+  "diagramImageUrl": "/diagrams/microservices/kafka-partitions-block.svg",
+  "flowDiagramUrl": "/diagrams/microservices/kafka-partitions-flow.svg",
+  "sections": [
+    {
+      "heading": "How Consumer Group Rebalancing Works",
+      "body": "When a consumer crashes or a new consumer joins the group, Kafka initiates a Group Rebalance to redistribute partition assignments across the remaining active consumers. During eager rebalancing, all consumers stop processing (a 'stop-the-world' pause), which can create temporary latency spikes. Modern Kafka uses Cooperative Sticky Rebalancing (KIP-429), allowing consumers that don't need partition reassignment to continue processing messages without interruption.",
+      "bullets": [
+        "Partition Count Heuristic: Set partition count to $N = \\max(P, C)$ where $P$ is target producer throughput / single partition write throughput, and $C$ is consumer processing throughput.",
+        "Consumer Lag Alerting: Monitor `records-lag-max`. A growing consumer lag indicates downstream worker starvation or slow database writes.",
+        "Null Keys: If you publish without a key, Kafka uses sticky round-robin partitioning, spreading data evenly but offering zero ordering guarantees."
+      ],
+      "diagramImageUrl": "/diagrams/microservices/kafka-partitions-block.svg",
+      "flowDiagramUrl": "/diagrams/microservices/kafka-partitions-flow.svg"
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Kafka Partitioning",
+      "pros": "Horizontal linear scalability, massive sequential disk throughput (1M+ events/s), guaranteed ordering per key.",
+      "cons": "Cannot increase partitions dynamically without breaking partition key hash ordering.",
+      "bestFor": "High-throughput stream processing, event sourcing, telemetry."
+    },
+    {
+      "option": "Standard Message Queues (RabbitMQ / SQS)",
+      "pros": "Simple setup, fine-grained message acknowledgment per message.",
+      "cons": "Lower throughput; difficult to achieve strict ordered streaming at scale.",
+      "bestFor": "Simple background task dispatch and job queues."
+    }
+  ],
+  "interviewTip": "If asked 'How do you scale Kafka consumption?', state: 'The maximum concurrency of a consumer group equals the number of partitions in the topic. If a topic has 10 partitions, running 12 consumer instances will leave 2 instances idle. To increase consumer throughput, we must increase partition count or process messages concurrently within each consumer.'",
+  "jsonUrl": "/api/microservices/subtopics/event-driven-messaging/kafka-partitions.json"
+}

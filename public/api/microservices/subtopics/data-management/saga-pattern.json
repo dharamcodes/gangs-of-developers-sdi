@@ -1,0 +1,52 @@
+{
+  "id": "saga-pattern",
+  "topicId": "data-management",
+  "topicTitle": "3. Distributed Data & Consistency",
+  "topicNumber": 3,
+  "subtopicNumber": "3.2",
+  "title": "Distributed Saga Pattern",
+  "subtitle": "Managing multi-service distributed transactions via local commits and compensating rollbacks.",
+  "readingTime": "9 min read",
+  "difficulty": "Staff+",
+  "keyTakeaways": [
+    "Two-Phase Commit (2PC) does not scale across microservices; a **Saga** coordinates multi-service transactions via a sequence of local ACID transactions paired with compensating actions.",
+    "Choose **Choreography** (event-driven) for simple 2–3 step workflows, and **Orchestration** (central coordinator or Temporal) for complex multi-step financial flows.",
+    "Sagas lack ACID **Isolation**: use **Semantic Locks** (e.g. `PENDING` state) to prevent concurrent dirty reads and lost updates."
+  ],
+  "architectureDiagram": "+-------------------------------------------------------------------------+\n|                    ORCHESTRATED SAGA EXECUTION & ROLLBACK               |\n+-------------------------------------------------------------------------+\n       [Order Saga Orchestrator]\n                   |\n  1. ReserveStock  |===========> [Inventory Svc] (Local Commit: OK)\n                   |\n  2. ChargePayment |===========> [Payment Svc]   (FAIL: Card Declined!)\n                   |\n  3. Compensate!   |===========> [Inventory Svc] (Undo: Release Stock!)\n                   v\n       [Order Marked CANCELLED]",
+  "diagramImageUrl": "/diagrams/microservices/saga-pattern-block.svg",
+  "flowDiagramUrl": "/diagrams/microservices/saga-pattern-flow.svg",
+  "sections": [
+    {
+      "heading": "Choreography vs Orchestration & Handling Lack of Isolation",
+      "body": "A Saga replaces blocking distributed two-phase commit (2PC) with local ACID transactions that commit immediately. In Choreography, services react to each other's domain events; in Orchestration, a state machine directs each participant explicitly. Because local transactions commit immediately before the whole saga finishes, intermediate state is visible to concurrent transactions (Lack of Isolation). To counter this, apply Semantic Locks: mark rows with `PENDING` status so concurrent users know an operation is in-flight.",
+      "bullets": [
+        "Compensatable Transactions: Steps that precede the pivot and have a clean inverse operation.",
+        "Pivot Transaction: The go/no-go commitment point (e.g. charging the credit card). If it succeeds, the saga must run to completion.",
+        "Retriable Transactions: Steps after the pivot (e.g. sending confirmation email) that are guaranteed to eventually succeed through retries."
+      ],
+      "codeSnippet": {
+        "title": "Idempotent Compensating Transaction in Spring Boot",
+        "code": "@Transactional\npublic void compensateInventoryReservation(UUID orderId) {\n    if (compensationHistoryRepository.existsByOrderId(orderId)) {\n        return; // Idempotency check: already compensated\n    }\n    inventoryRepository.releaseReservedStock(orderId);\n    compensationHistoryRepository.save(new CompensationRecord(orderId, Instant.now()));\n}"
+      },
+      "diagramImageUrl": "/diagrams/microservices/saga-pattern-block.svg",
+      "flowDiagramUrl": "/diagrams/microservices/saga-pattern-flow.svg"
+    }
+  ],
+  "tradeOffs": [
+    {
+      "option": "Orchestrated Saga",
+      "pros": "Centralized state visibility, easy to understand workflow, straightforward error handling.",
+      "cons": "Orchestrator can become a hub of business logic; extra coordinator infrastructure (Temporal).",
+      "bestFor": "Complex workflows with > 3 participants and financial rollbacks."
+    },
+    {
+      "option": "Choreographed Saga",
+      "pros": "Decentralized, loosely coupled, simple to set up for small flows.",
+      "cons": "Risk of cyclic event storms; difficult to trace the global state of a distributed transaction.",
+      "bestFor": "Simple 2-step async workflows (e.g. Order Placed -> Send Email)."
+    }
+  ],
+  "interviewTip": "Never say 'We will use 2PC / XA transactions across microservices.' State: 'I will implement a Saga pattern with compensating transactions. We will use an Orchestrator to track state transitions and ensure all compensations are strictly idempotent.'",
+  "jsonUrl": "/api/microservices/subtopics/data-management/saga-pattern.json"
+}
