@@ -52,7 +52,7 @@ npm run lint
 npx tsc --noEmit
 ```
 
-### Deployed on [https://www.gangsofdevelopers.com/]([http://localhost:3000](https://www.gangsofdevelopers.com/))
+### Deployed on [https://www.gangsofdevelopers.com/](https://www.gangsofdevelopers.com/)
 
 ## Directory Structure
 
